@@ -58,14 +58,14 @@ async def main(total_processes, process_index):
 
     task_statuses = await asyncio.gather(*(process_task_set(task_set, ai_obj=ai_obj, db_obj=db_obj) for task_set in my_tasks))
     for j, task_status in enumerate(task_statuses):
-        logger.info(f"Process {process_index} | Batch {i//10} | Task {j} status: {task_status}")
+        logger.info(f"Process {process_index} | Task {j} status: {task_status}")
 
 if __name__ == "__main__":
     if len(sys.argv) == 3:
         total_processes = int(sys.argv[1])
         process_index = int(sys.argv[2])
     else:
-        print("Usage: python c_setup_mayil_ingestion.py <total_processes> <process_index>")
+        print(f"Usage: {sys.argv[0]} <total_processes> <process_index>")
         total_processes = 1
         process_index = 0
     asyncio.run(main(total_processes, process_index))
