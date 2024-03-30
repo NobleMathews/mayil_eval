@@ -1,0 +1,208 @@
+{
+    "id": "django__django-15671",
+    "repo_name": "testbed/django__django__4.1",
+    "task_id": 7640771007238251607,
+    "title": "Allow overriding FormSet's error messages for too few and too many forms.",
+    "body": "Description\n\t\nMoving the messages to default_error_messages enables overriding them via the error_messages argument when instantiating the FormSet.\nI would prefer being able to override them via inlineformset_factory, but that is for another day.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.1.git",
+    "requested_commit": "",
+    "mayil_response": "To implement the feature of allowing overriding FormSet's error messages for too few and too many forms, you can follow these steps:\n\n- Modify the `BaseFormSet` class to include a `default_error_messages` dictionary that contains the default error messages for too few and too many forms.\n- Update the `clean` method of the `BaseFormSet` class to use the messages from `default_error_messages` when raising `ValidationError`.\n- Allow passing an `error_messages` argument to the `BaseFormSet` initializer and merge it with the `default_error_messages` to override the defaults.\n\nHere's a high-level overview of the changes to be made in `django/forms/formsets.py`:\n\n```python\nclass BaseFormSet:\n    default_error_messages = {\n        'too_few_forms': _(\"The number of forms submitted is less than the minimum allowed.\"),\n        'too_many_forms': _(\"The number of forms submitted is more than the maximum allowed.\"),\n    }\n\n    def __init__(self, *args, **kwargs):\n        self.error_messages = kwargs.pop('error_messages', {})\n        self.default_error_messages.update(self.error_messages)\n        super(BaseFormSet, self).__init__(*args, **kwargs)\n\n    def clean(self):\n        # ... existing code ...\n\n        # Example of using the error message in validation\n        if total_forms < self.min_num:\n            raise ValidationError(\n                self.get_error_message('too_few_forms'),\n                code='too_few_forms'\n            )\n        elif total_forms > self.max_num:\n            raise ValidationError(\n                self.get_error_message('too_many_forms'),\n                code='too_many_forms'\n            )\n\n    def get_error_message(self, message_id):\n        return self.default_error_messages.get(message_id)\n```\n\nTo allow overriding via `inlineformset_factory`, you would need to modify the factory function to accept `error_messages` and pass them to the `BaseFormSet`:\n\n```python\nfrom django.forms.models import inlineformset_factory\n\n# Modify the inlineformset_factory to accept error_messages\nCustomInlineFormSet = inlineformset_factory(\n    ParentModel,\n    ChildModel,\n    formset=BaseInlineFormSet,\n    error_messages={\n        'too_few_forms': _(\"Your custom error message for too few forms.\"),\n        'too_many_forms': _(\"Your custom error message for too many forms.\"),\n    }\n)\n```\n\nThis is a high-level overview, and the actual implementation may require additional adjustments depending on the rest of the codebase and how the formsets are used within the application.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [forms](https://github.com/testbed/django__django__4.1/tree//django/forms)- [Lines 1 - 49](https://github.com/testbed/django__django__4.1/blob//django/forms/formsets.py#L1-L49)\n\n This snippet defines the ManagementForm class within formsets.py, which is likely where the default error messages for form counts would be defined or used. Modifying this class could enable overriding the error messages as described in the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [forms](https://github.com/testbed/django__django__4.1/tree//django/forms)- [Lines 1079 - 1079](https://github.com/testbed/django__django__4.1/blob//django/forms/models.py#L1079-L1079)\n\n This snippet indicates the existence of the BaseInlineFormSet class in models.py, which could be relevant if the error messages are related to inline formsets and need to be overridden in a similar manner to formsets.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__4.1/tree//django/contrib) \u2192 [admin](https://github.com/testbed/django__django__4.1/tree//django/contrib/admin)- [Lines 302 - 302](https://github.com/testbed/django__django__4.1/blob//django/contrib/admin/helpers.py#L302-L302)\n\n This snippet shows the InlineAdminFormSet class in helpers.py, which might be involved in rendering formsets in the admin interface. Changes here could be necessary if the admin interface needs to support overriding error messages.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000368,
+        "snippet_processor": 0.05754,
+        "issue_star_creation": 0.017099999999999997,
+        "issue_star_solver": 0.05033,
+        "bouncer": 0.02452
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711718624.931725,
+        "relevant_snippets": [
+            {
+                "code": "from django.core.exceptions import ValidationError\nfrom django.forms import Form\nfrom django.forms.fields import BooleanField, IntegerField\nfrom django.forms.renderers import get_default_renderer\nfrom django.forms.utils import ErrorList, RenderableFormMixin\nfrom django.forms.widgets import CheckboxInput, HiddenInput, NumberInput\nfrom django.utils.functional import cached_property\nfrom django.utils.translation import gettext_lazy as _\nfrom django.utils.translation import ngettext_lazy\n\n__all__ = (\"BaseFormSet\", \"formset_factory\", \"all_valid\")\n\n# special field names\nTOTAL_FORM_COUNT = \"TOTAL_FORMS\"\nINITIAL_FORM_COUNT = \"INITIAL_FORMS\"\nMIN_NUM_FORM_COUNT = \"MIN_NUM_FORMS\"\nMAX_NUM_FORM_COUNT = \"MAX_NUM_FORMS\"\nORDERING_FIELD_NAME = \"ORDER\"\nDELETION_FIELD_NAME = \"DELETE\"\n\n# default minimum number of forms in a formset\nDEFAULT_MIN_NUM = 0\n\n# default maximum number of forms in a formset, to prevent memory exhaustion\nDEFAULT_MAX_NUM = 1000\n\n\nclass ManagementForm(Form):\n    \"\"\"\n    Keep track of how many form instances are displayed on the page. If adding\n    new forms via JavaScript, you should increment the count field of this form\n    as well.\n    \"\"\"\n\n    TOTAL_FORMS = IntegerField(widget=HiddenInput)\n    INITIAL_FORMS = IntegerField(widget=HiddenInput)\n    # MIN_NUM_FORM_COUNT and MAX_NUM_FORM_COUNT are output with the rest of the\n    # management form, but only for the convenience of client-side code. The\n    # POST value of them returned from the client is not checked.\n    MIN_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)\n    MAX_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)\n\n    def clean(self):\n        cleaned_data = super().clean()\n        # When the management form is invalid, we don't know how many forms\n        # were submitted.\n        cleaned_data.setdefault(TOTAL_FORM_COUNT, 0)\n        cleaned_data.setdefault(INITIAL_FORM_COUNT, 0)\n        return cleaned_data",
+                "filename": "django/forms/formsets.py",
+                "start_index": 0,
+                "end_index": 1927,
+                "start_line": 1,
+                "end_line": 49,
+                "max_line": 577,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "def get_unique_error_message(self, unique_check):\n        if len(unique_check) == 1:\n            return gettext(\"Please correct the duplicate data for %(field)s.\") % {\n                \"field\": unique_check[0],\n            }\n        else:\n            return gettext(\n                \"Please correct the duplicate data for %(field)s, which must be unique.\"\n            ) % {\n                \"field\": get_text_list(unique_check, _(\"and\")),\n            }\n\n    def get_date_error_message(self, date_check):\n        return gettext(\n            \"Please correct the duplicate data for %(field_name)s \"\n            \"which must be unique for the %(lookup)s in %(date_field)s.\"\n        ) % {\n            \"field_name\": date_check[2],\n            \"date_field\": date_check[3],\n            \"lookup\": str(date_check[1]),\n        }\n\n    def get_form_error(self):\n        return gettext(\"Please correct the duplicate values below.\")\n\n    def save_existing_objects(self, commit=True):\n        self.changed_objects = []\n        self.deleted_objects = []\n        if not self.initial_forms:\n            return []\n\n        saved_instances = []\n        forms_to_delete = self.deleted_forms\n        for form in self.initial_forms:\n            obj = form.instance\n            # If the pk is None, it means either:\n            # 1. The object is an unexpected empty model, created by invalid\n            #    POST data such as an object outside the formset's queryset.\n            # 2. The object was already deleted from the database.\n            if obj.pk is None:\n                continue\n            if form in forms_to_delete:\n                self.deleted_objects.append(obj)\n                self.delete_existing(obj, commit=commit)\n            elif form.has_changed():\n                self.changed_objects.append((obj, form.changed_data))\n                saved_instances.append(self.save_existing(form, obj, commit=commit))\n                if not commit:\n                    self.saved_forms.append(form)\n        return saved_instances\n\n    def save_new_objects(self, commit=True):\n        self.new_objects = []\n        for form in self.extra_forms:\n            if not form.has_changed():\n                continue\n            # If someone has marked an add form for deletion, don't save the\n            # object.\n            if self.can_delete and self._should_delete_form(form):\n                continue\n            self.new_objects.append(self.save_new(form, commit=commit))\n            if not commit:\n                self.saved_forms.append(form)\n        return self.new_objects",
+                "filename": "django/forms/models.py",
+                "start_index": 32895,
+                "end_index": 35455,
+                "start_line": 892,
+                "end_line": 955,
+                "max_line": 1674,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "# ModelFormSets ##############################################################",
+                "filename": "django/forms/models.py",
+                "start_index": 23474,
+                "end_index": 23552,
+                "start_line": 653,
+                "end_line": 653,
+                "max_line": 1674,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "/* Setup plugin defaults */\n    $.fn.formset.defaults = {\n        prefix: \"form\", // The form prefix for your django formset\n        addText: \"add another\", // Text for the add link\n        deleteText: \"remove\", // Text for the delete link\n        addCssClass: \"add-row\", // CSS class applied to the add link\n        deleteCssClass: \"delete-row\", // CSS class applied to the delete link\n        emptyCssClass: \"empty-row\", // CSS class applied to the empty row\n        formCssClass: \"dynamic-form\", // CSS class applied to each form in a formset\n        added: null, // Function called each time a new form is added\n        removed: null, // Function called each time a form is deleted\n        addButton: null // Existing add button to use\n    };\n\n\n    // Tabular inlines ---------------------------------------------------------",
+                "filename": "django/contrib/admin/static/admin/js/inlines.js",
+                "start_index": 8788,
+                "end_index": 9617,
+                "start_line": 198,
+                "end_line": 213,
+                "max_line": 359,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "class BaseInlineFormSet(BaseModelFormSet):",
+                "filename": "django/forms/models.py",
+                "start_index": 39503,
+                "end_index": 39545,
+                "start_line": 1079,
+                "end_line": 1079,
+                "max_line": 1674,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "from django.contrib.messages.api import *  # NOQA\nfrom django.contrib.messages.constants import *  # NOQA",
+                "filename": "django/contrib/messages/__init__.py",
+                "start_index": 0,
+                "end_index": 105,
+                "start_line": 1,
+                "end_line": 2,
+                "max_line": 2,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "class IntegerRangeField(BaseRangeField):\n    default_error_messages = {\"invalid\": _(\"Enter two whole numbers.\")}\n    base_field = forms.IntegerField\n    range_type = NumericRange\n\n\nclass DecimalRangeField(BaseRangeField):\n    default_error_messages = {\"invalid\": _(\"Enter two numbers.\")}\n    base_field = forms.DecimalField\n    range_type = NumericRange\n\n\nclass DateTimeRangeField(BaseRangeField):\n    default_error_messages = {\"invalid\": _(\"Enter two valid date/times.\")}\n    base_field = forms.DateTimeField\n    range_type = DateTimeTZRange\n\n\nclass DateRangeField(BaseRangeField):\n    default_error_messages = {\"invalid\": _(\"Enter two valid dates.\")}\n    base_field = forms.DateField\n    range_type = DateRange",
+                "filename": "django/contrib/postgres/forms/ranges.py",
+                "start_index": 2939,
+                "end_index": 3651,
+                "start_line": 98,
+                "end_line": 119,
+                "max_line": 119,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "class InlineAdminFormSet:",
+                "filename": "django/contrib/admin/helpers.py",
+                "start_index": 9694,
+                "end_index": 9719,
+                "start_line": 302,
+                "end_line": 302,
+                "max_line": 552,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "def fields(self):\n        fk = getattr(self.formset, \"fk\", None)\n        empty_form = self.formset.empty_form\n        meta_labels = empty_form._meta.labels or {}\n        meta_help_texts = empty_form._meta.help_texts or {}\n        for i, field_name in enumerate(flatten_fieldsets(self.fieldsets)):\n            if fk and fk.name == field_name:\n                continue\n            if not self.has_change_permission or field_name in self.readonly_fields:\n                form_field = empty_form.fields.get(field_name)\n                widget_is_hidden = False\n                if form_field is not None:\n                    widget_is_hidden = form_field.widget.is_hidden\n                yield {\n                    \"name\": field_name,\n                    \"label\": meta_labels.get(field_name)\n                    or label_for_field(\n                        field_name,\n                        self.opts.model,\n                        self.opts,\n                        form=empty_form,\n                    ),\n                    \"widget\": {\"is_hidden\": widget_is_hidden},\n                    \"required\": False,\n                    \"help_text\": meta_help_texts.get(field_name)\n                    or help_text_for_field(field_name, self.opts.model),\n                }\n            else:\n                form_field = empty_form.fields[field_name]\n                label = form_field.label\n                if label is None:\n                    label = label_for_field(\n                        field_name, self.opts.model, self.opts, form=empty_form\n                    )\n                yield {\n                    \"name\": field_name,\n                    \"label\": label,\n                    \"widget\": form_field.widget,\n                    \"required\": form_field.required,\n                    \"help_text\": form_field.help_text,\n                }\n\n    def inline_formset_data(self):\n        verbose_name = self.opts.verbose_name\n        return json.dumps(\n            {\n                \"name\": \"#%s\" % self.formset.prefix,\n                \"options\": {\n                    \"prefix\": self.formset.prefix,\n                    \"addText\": gettext(\"Add another %(verbose_name)s\")\n                    % {\n                        \"verbose_name\": capfirst(verbose_name),\n                    },\n                    \"deleteText\": gettext(\"Remove\"),\n                },\n            }\n        )\n\n    @property\n    def forms(self):\n        return self.formset.forms\n\n    def non_form_errors(self):\n        return self.formset.non_form_errors()\n\n    @property\n    def is_bound(self):\n        return self.formset.is_bound\n\n    @property\n    def total_form_count(self):\n        return self.formset.total_form_count\n\n    @property\n    def media(self):\n        media = self.opts.media + self.formset.media\n        for fs in self:\n            media += fs.media\n        return media",
+                "filename": "django/contrib/admin/helpers.py",
+                "start_index": 12252,
+                "end_index": 15100,
+                "start_line": 84,
+                "end_line": 457,
+                "max_line": 552,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "mpty_strings_allowed = False\n    default_error",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 41767,
+                "end_index": 41813,
+                "start_line": 1149,
+                "end_line": 2709,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            }
+        ],
+        "classification": "feature request",
+        "snippet_processor_task": {
+            "django/forms/formsets.py": [
+                {
+                    "chunk": {
+                        "code": "from django.core.exceptions import ValidationError\nfrom django.forms import Form\nfrom django.forms.fields import BooleanField, IntegerField\nfrom django.forms.renderers import get_default_renderer\nfrom django.forms.utils import ErrorList, RenderableFormMixin\nfrom django.forms.widgets import CheckboxInput, HiddenInput, NumberInput\nfrom django.utils.functional import cached_property\nfrom django.utils.translation import gettext_lazy as _\nfrom django.utils.translation import ngettext_lazy\n\n__all__ = (\"BaseFormSet\", \"formset_factory\", \"all_valid\")\n\n# special field names\nTOTAL_FORM_COUNT = \"TOTAL_FORMS\"\nINITIAL_FORM_COUNT = \"INITIAL_FORMS\"\nMIN_NUM_FORM_COUNT = \"MIN_NUM_FORMS\"\nMAX_NUM_FORM_COUNT = \"MAX_NUM_FORMS\"\nORDERING_FIELD_NAME = \"ORDER\"\nDELETION_FIELD_NAME = \"DELETE\"\n\n# default minimum number of forms in a formset\nDEFAULT_MIN_NUM = 0\n\n# default maximum number of forms in a formset, to prevent memory exhaustion\nDEFAULT_MAX_NUM = 1000\n\n\nclass ManagementForm(Form):\n    \"\"\"\n    Keep track of how many form instances are displayed on the page. If adding\n    new forms via JavaScript, you should increment the count field of this form\n    as well.\n    \"\"\"\n\n    TOTAL_FORMS = IntegerField(widget=HiddenInput)\n    INITIAL_FORMS = IntegerField(widget=HiddenInput)\n    # MIN_NUM_FORM_COUNT and MAX_NUM_FORM_COUNT are output with the rest of the\n    # management form, but only for the convenience of client-side code. The\n    # POST value of them returned from the client is not checked.\n    MIN_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)\n    MAX_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)\n\n    def clean(self):\n        cleaned_data = super().clean()\n        # When the management form is invalid, we don't know how many forms\n        # were submitted.\n        cleaned_data.setdefault(TOTAL_FORM_COUNT, 0)\n        cleaned_data.setdefault(INITIAL_FORM_COUNT, 0)\n        return cleaned_data",
+                        "filename": "django/forms/formsets.py",
+                        "start_index": 0,
+                        "end_index": 1927,
+                        "start_line": 1,
+                        "end_line": 49,
+                        "max_line": 577,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the ManagementForm class within formsets.py, which is likely where the default error messages for form counts would be defined or used. Modifying this class could enable overriding the error messages as described in the issue."
+                }
+            ],
+            "django/forms/models.py": [
+                {
+                    "chunk": {
+                        "code": "class BaseInlineFormSet(BaseModelFormSet):",
+                        "filename": "django/forms/models.py",
+                        "start_index": 39503,
+                        "end_index": 39545,
+                        "start_line": 1079,
+                        "end_line": 1079,
+                        "max_line": 1674,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet indicates the existence of the BaseInlineFormSet class in models.py, which could be relevant if the error messages are related to inline formsets and need to be overridden in a similar manner to formsets."
+                }
+            ],
+            "django/contrib/admin/helpers.py": [
+                {
+                    "chunk": {
+                        "code": "class InlineAdminFormSet:",
+                        "filename": "django/contrib/admin/helpers.py",
+                        "start_index": 9694,
+                        "end_index": 9719,
+                        "start_line": 302,
+                        "end_line": 302,
+                        "max_line": 552,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the InlineAdminFormSet class in helpers.py, which might be involved in rendering formsets in the admin interface. Changes here could be necessary if the admin interface needs to support overriding error messages."
+                }
+            ]
+        },
+        "solution_task": "To implement the feature of allowing overriding FormSet's error messages for too few and too many forms, you can follow these steps:\n\n- Modify the `BaseFormSet` class to include a `default_error_messages` dictionary that contains the default error messages for too few and too many forms.\n- Update the `clean` method of the `BaseFormSet` class to use the messages from `default_error_messages` when raising `ValidationError`.\n- Allow passing an `error_messages` argument to the `BaseFormSet` initializer and merge it with the `default_error_messages` to override the defaults.\n\nHere's a high-level overview of the changes to be made in `django/forms/formsets.py`:\n\n```python\nclass BaseFormSet:\n    default_error_messages = {\n        'too_few_forms': _(\"The number of forms submitted is less than the minimum allowed.\"),\n        'too_many_forms': _(\"The number of forms submitted is more than the maximum allowed.\"),\n    }\n\n    def __init__(self, *args, **kwargs):\n        self.error_messages = kwargs.pop('error_messages', {})\n        self.default_error_messages.update(self.error_messages)\n        super(BaseFormSet, self).__init__(*args, **kwargs)\n\n    def clean(self):\n        # ... existing code ...\n\n        # Example of using the error message in validation\n        if total_forms < self.min_num:\n            raise ValidationError(\n                self.get_error_message('too_few_forms'),\n                code='too_few_forms'\n            )\n        elif total_forms > self.max_num:\n            raise ValidationError(\n                self.get_error_message('too_many_forms'),\n                code='too_many_forms'\n            )\n\n    def get_error_message(self, message_id):\n        return self.default_error_messages.get(message_id)\n```\n\nTo allow overriding via `inlineformset_factory`, you would need to modify the factory function to accept `error_messages` and pass them to the `BaseFormSet`:\n\n```python\nfrom django.forms.models import inlineformset_factory\n\n# Modify the inlineformset_factory to accept error_messages\nCustomInlineFormSet = inlineformset_factory(\n    ParentModel,\n    ChildModel,\n    formset=BaseInlineFormSet,\n    error_messages={\n        'too_few_forms': _(\"Your custom error message for too few forms.\"),\n        'too_many_forms': _(\"Your custom error message for too many forms.\"),\n    }\n)\n```\n\nThis is a high-level overview, and the actual implementation may require additional adjustments depending on the rest of the codebase and how the formsets are used within the application.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant suggestions that can directly lead to the successful implementation or improvement of the requested feature.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable plan for implementing the feature request to override FormSet's error messages for too few and too many forms. It includes specific steps to modify the BaseFormSet class, update the clean method, and allow passing an error_messages argument. The code snippets are relevant and provide a clear guide for developers to follow. The RESPONSE also addresses the possibility of overriding via inlineformset_factory, which is mentioned as a preference in the PROMPT, by modifying the factory function to accept error_messages. The inclusion of code snippets from the Django repository with explanations of their relevance to the feature request adds significant value to the RESPONSE.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711718959.464873,
+        "result": "To implement the feature of allowing overriding FormSet's error messages for too few and too many forms, you can follow these steps:\n\n- Modify the `BaseFormSet` class to include a `default_error_messages` dictionary that contains the default error messages for too few and too many forms.\n- Update the `clean` method of the `BaseFormSet` class to use the messages from `default_error_messages` when raising `ValidationError`.\n- Allow passing an `error_messages` argument to the `BaseFormSet` initializer and merge it with the `default_error_messages` to override the defaults.\n\nHere's a high-level overview of the changes to be made in `django/forms/formsets.py`:\n\n```python\nclass BaseFormSet:\n    default_error_messages = {\n        'too_few_forms': _(\"The number of forms submitted is less than the minimum allowed.\"),\n        'too_many_forms': _(\"The number of forms submitted is more than the maximum allowed.\"),\n    }\n\n    def __init__(self, *args, **kwargs):\n        self.error_messages = kwargs.pop('error_messages', {})\n        self.default_error_messages.update(self.error_messages)\n        super(BaseFormSet, self).__init__(*args, **kwargs)\n\n    def clean(self):\n        # ... existing code ...\n\n        # Example of using the error message in validation\n        if total_forms < self.min_num:\n            raise ValidationError(\n                self.get_error_message('too_few_forms'),\n                code='too_few_forms'\n            )\n        elif total_forms > self.max_num:\n            raise ValidationError(\n                self.get_error_message('too_many_forms'),\n                code='too_many_forms'\n            )\n\n    def get_error_message(self, message_id):\n        return self.default_error_messages.get(message_id)\n```\n\nTo allow overriding via `inlineformset_factory`, you would need to modify the factory function to accept `error_messages` and pass them to the `BaseFormSet`:\n\n```python\nfrom django.forms.models import inlineformset_factory\n\n# Modify the inlineformset_factory to accept error_messages\nCustomInlineFormSet = inlineformset_factory(\n    ParentModel,\n    ChildModel,\n    formset=BaseInlineFormSet,\n    error_messages={\n        'too_few_forms': _(\"Your custom error message for too few forms.\"),\n        'too_many_forms': _(\"Your custom error message for too many forms.\"),\n    }\n)\n```\n\nThis is a high-level overview, and the actual implementation may require additional adjustments depending on the rest of the codebase and how the formsets are used within the application.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [forms](https://github.com/testbed/django__django__4.1/tree//django/forms)- [Lines 1 - 49](https://github.com/testbed/django__django__4.1/blob//django/forms/formsets.py#L1-L49)\n\n This snippet defines the ManagementForm class within formsets.py, which is likely where the default error messages for form counts would be defined or used. Modifying this class could enable overriding the error messages as described in the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [forms](https://github.com/testbed/django__django__4.1/tree//django/forms)- [Lines 1079 - 1079](https://github.com/testbed/django__django__4.1/blob//django/forms/models.py#L1079-L1079)\n\n This snippet indicates the existence of the BaseInlineFormSet class in models.py, which could be relevant if the error messages are related to inline formsets and need to be overridden in a similar manner to formsets.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__4.1/tree//django/contrib) \u2192 [admin](https://github.com/testbed/django__django__4.1/tree//django/contrib/admin)- [Lines 302 - 302](https://github.com/testbed/django__django__4.1/blob//django/contrib/admin/helpers.py#L302-L302)\n\n This snippet shows the InlineAdminFormSet class in helpers.py, which might be involved in rendering formsets in the admin interface. Changes here could be necessary if the admin interface needs to support overriding error messages."
+    }
+}

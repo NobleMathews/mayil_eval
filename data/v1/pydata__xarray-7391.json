@@ -1,0 +1,189 @@
+{
+    "id": "pydata__xarray-7391",
+    "repo_name": "testbed/pydata__xarray__2022.09",
+    "task_id": 1131613124171123841,
+    "title": "`Dataset` binary ops ignore `keep_attrs` option",
+    "body": "### What is your issue?\r\n\r\nWhen doing arithmetic operations on two Dataset operands,\r\nthe `keep_attrs=True` option is ignored and therefore attributes  not kept.\r\n\r\n\r\nMinimal example:\r\n\r\n```python\r\nimport xarray as xr\r\n\r\nds1 = xr.Dataset(\r\n    data_vars={\"a\": 1, \"b\": 1},\r\n    attrs={'my_attr': 'value'}\r\n)\r\nds2 = ds1.copy(deep=True)\r\n\r\nwith xr.set_options(keep_attrs=True):\r\n    print(ds1 + ds2)\r\n```\r\nThis is not true for DataArrays/Variables which do take `keep_attrs` into account.\r\n\r\n### Proposed fix/improvement\r\nDatasets to behave the same as DataArray/Variables, and keep attributes during binary operations\r\nwhen `keep_attrs=True` option is set. \r\n\r\nPR is inbound.\r\n\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/pydata__xarray__2022.09.git",
+    "requested_commit": "",
+    "mayil_response": "- The issue is that the `keep_attrs` option is not being respected in `Dataset` binary operations.\n- The relevant code snippet handling binary operations for `Dataset` is in `xarray/core/dataset.py` in the `_binary_op` method.\n- The `_binary_op` method calls `_calculate_binary_op` but does not pass the `keep_attrs` parameter to it.\n- The `keep_attrs` parameter should be passed to `_calculate_binary_op` and handled appropriately within that method to ensure attributes are preserved according to the `keep_attrs` value.\n\nTo fix the issue:\n- Modify the `_binary_op` method in `xarray/core/dataset.py` to pass the `keep_attrs` parameter to `_calculate_binary_op`.\n- Ensure that `_calculate_binary_op` and any other methods it calls properly handle the `keep_attrs` parameter to preserve attributes when `keep_attrs=True`.\n\n### Code snippets to check\n\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__2022.09/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__2022.09/tree//xarray/core)- [Lines 7449 - 7504](https://github.com/testbed/pydata__xarray__2022.09/blob//xarray/core/dataset.py#L7449-L7504)\n\n This snippet contains the '_binary_op' method where the 'keep_attrs' option is handled for binary operations on Datasets. The issue describes that attributes are not kept during binary operations despite 'keep_attrs=True', which directly relates to this part of the code. \n\n\n   - [Lines 7464 - 7554](https://github.com/testbed/pydata__xarray__2022.09/blob//xarray/core/dataset.py#L7464-L7554)\n\n This snippet includes the '_calculate_binary_op' method which is likely involved in the binary operations for Datasets. Since the issue is about attributes not being kept during such operations, this method may need to be reviewed and possibly modified to address the issue.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0017299999999999998,
+        "snippet_processor": 0.06601,
+        "issue_star_creation": 0.0274,
+        "issue_star_solver": 0.08095000000000001,
+        "bouncer": 0.03254
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711751597.6727328,
+        "relevant_snippets": [
+            {
+                "code": "self: T_Dataset, f, *args, **kwargs) -> T_Dataset:\n        variables = {}\n        keep_attrs = kwargs.pop(\"keep_attrs\", None)\n        if keep_attrs is None:\n            keep_attrs = _get_keep_attrs(default=True)\n        for k, v in self._variables.items():\n            if k in self._coord_names:\n                variables[k] = v\n            else:\n                variables[k] = f(v, *args, **kwargs)\n                if keep_attrs:\n                    variables[k].attrs = v._attrs\n        attrs = self._attrs if keep_attrs else None\n        return self._replace_with_new_dims(variables, attrs=attrs)\n\n    def _binary_op(self, other, f, reflexive=False, join=None) -> Dataset:\n        from xarray.core.dataarray import DataArray\n        from xarray.core.groupby import GroupBy\n\n        if isinstance(other, GroupBy):\n            return NotImplemented\n        align_type = OPTIONS[\"arithmetic_join\"] if join is None else join\n        if isinstance(other, (DataArray, Dataset)):\n            self, other = align(self, other, join=align_type, copy=False)  # type: ignore[assignment]\n        g = f if not reflexive else lambda x, y: f(y, x)\n        ds = self._calculate_binary_op(g, other, join=align_type)\n        keep_attrs = _get_keep_attrs(default=False)\n        if keep_attrs:\n            ds.attrs = self.attrs\n        return ds\n\n    def _inplace_binary_op(self: T_Dataset, other, f) -> T_Dataset:\n        from xarray.core.dataarray import DataArray\n        from xarray.core.groupby import GroupBy\n\n        if isinstance(other, GroupBy):\n            raise TypeError(\n                \"in-place operations between a Dataset and \"\n                \"a grouped object are not permitted\"\n            )\n        # we don't actually modify arrays in-place with in-place Dataset\n        # arithmetic -- this lets us automatically align things\n        if isinstance(other, (DataArray, Dataset)):\n            other = other.reindex_like(self, copy=False)\n        g = ops.inplace_to_noninplace_op(f)\n        ds = self._calculate_binary_op(g, other, inplace=True)\n        self._replace_with_new_dims(\n            ds._variables,\n            ds._coord_names,\n            attrs=ds._attrs,\n            indexes=ds._indexes,\n            inplace=True,\n        )\n        return self\n\n    def _calculate",
+                "filename": "xarray/core/dataset.py",
+                "start_index": 280067,
+                "end_index": 282344,
+                "start_line": 7449,
+                "end_line": 7504,
+                "max_line": 10260,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            },
+            {
+                "code": "# keep the attributes of x, the second parameter, by default to\n    # be consistent with the `where` method of `DataArray` and `Dataset`\n    # rebuild the attrs from x at each level of the output, which could be\n    # Dataset, DataArray, or Variable, and also handle coords\n    if keep_attrs is True and hasattr(result, \"attrs\"):\n        if isinstance(y, Dataset) and not isinstance(x, Dataset):\n            # handle special case where x gets promoted to Dataset\n            result.attrs = {}\n            if getattr(x, \"name\", None) in result.data_vars:\n                result[x.name].attrs = getattr(x, \"attrs\", {})\n        else:\n            # otherwise, fill in global attrs and variable attrs (if they exist)\n            result.attrs = getattr(x, \"attrs\", {})\n            for v in getattr(result, \"data_vars\", []):\n                result[v].attrs = getattr(getattr(x, v, None), \"attrs\", {})\n        for c in getattr(result, \"coords\", []):\n            # always fill coord attrs of x\n            result[c].attrs = getattr(getattr(x, c, None), \"attrs\", {})\n\n    return result",
+                "filename": "xarray/core/computation.py",
+                "start_index": 66001,
+                "end_index": 67076,
+                "start_line": 1873,
+                "end_line": 1892,
+                "max_line": 2165,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            },
+            {
+                "code": "_binary_op(\n        self, f, other, join=\"inner\", inplace: bool = False\n    ) -> Dataset:\n        def apply_over_both(lhs_data_vars, rhs_data_vars, lhs_vars, rhs_vars):\n            if inplace and set(lhs_data_vars) != set(rhs_data_vars):\n                raise ValueError(\n                    \"datasets must have the same data variables \"\n                    f\"for in-place arithmetic operations: {list(lhs_data_vars)}, {list(rhs_data_vars)}\"\n                )\n\n            dest_vars = {}\n\n            for k in lhs_data_vars:\n                if k in rhs_data_vars:\n                    dest_vars[k] = f(lhs_vars[k], rhs_vars[k])\n                elif join in [\"left\", \"outer\"]:\n                    dest_vars[k] = f(lhs_vars[k], np.nan)\n            for k in rhs_data_vars:\n                if k not in dest_vars and join in [\"right\", \"outer\"]:\n                    dest_vars[k] = f(rhs_vars[k], np.nan)\n            return dest_vars\n\n        if utils.is_dict_like(other) and not isinstance(other, Dataset):\n            # can't use our shortcut of doing the binary operation with\n            # Variable objects, so apply over our data vars instead.\n            new_data_vars = apply_over_both(\n                self.data_vars, other, self.data_vars, other\n            )\n            return type(self)(new_data_vars)\n\n        other_coords: Coordinates | None = getattr(other, \"coords\", None)\n        ds = self.coords.merge(other_coords)\n\n        if isinstance(other, Dataset):\n            new_vars = apply_over_both(\n                self.data_vars, other.data_vars, self.variables, other.variables\n            )\n        else:\n            other_variable = getattr(other, \"variable\", other)\n            new_vars = {k: f(self.variables[k], other_variable) for k in self.data_vars}\n        ds._variables.update(new_vars)\n        ds._dims = calculate_dimensions(ds._variables)\n        return ds\n\n    def _copy_attrs_from(self, other):\n        self.attrs = other.attrs\n        for v in other.variables:\n            if v in self.variables:\n                self.variables[v].attrs = other.variables[v].attrs\n\n    def diff(",
+                "filename": "xarray/core/dataset.py",
+                "start_index": 282344,
+                "end_index": 284447,
+                "start_line": 7464,
+                "end_line": 7554,
+                "max_line": 10260,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            },
+            {
+                "code": "f _unary_op(self: T_DataArray, f: Callable, *args, **kwargs) -> T_DataArray:\n        keep_attrs = kwargs.pop(\"keep_attrs\", None)\n        if keep_attrs is None:\n            keep_attrs = _get_keep_attrs(default=True)\n        with warnings.catch_warnings():\n            warnings.filterwarnings(\"ignore\", r\"All-NaN (slice|axis) encountered\")\n            warnings.filterwarnings(\n                \"ignore\", r\"Mean of empty slice\", category=RuntimeWarning\n            )\n            with np.errstate(all=\"ignore\"):\n                da = self.__array_wrap__(f(self.variable.data, *args, **kwargs))\n            if keep_attrs:\n                da.attrs = self.attrs\n            return da\n\n    def _binary_op(\n        self: T_DataArray,\n        other: Any,\n        f: Callable,\n        reflexive: bool = False,\n    ) -> T_DataArray:\n        from xarray.core.groupby import GroupBy\n\n        if isinstance(other, (Dataset, GroupBy)):\n            return NotImplemented\n        if isinstance(other, DataArray):\n            align_type = OPTIONS[\"arithmetic_join\"]\n            self, other = align(self, other, join=align_type, copy=False)  # type: ignore\n        other_variable = getattr(other, \"variable\", other)\n        other_coords = getattr(other, \"coords\", None)\n\n        variable = (\n            f(self.variable, other_variable)\n            if not reflexive\n            else f(other_variable, self.variable)\n        )\n        coords, indexes = self.coords._merge_raw(other_coords, reflexive)\n        name = self._result_name(other)\n\n        return self._replace(variable, coords, name, indexes=indexes)\n\n    def _inplace_binary_op(self: T_DataArray, other: Any, f: Callable) -> T_DataArray:\n        from xarray.core.groupby import GroupBy\n\n        if isinstance(other, GroupBy):\n            raise TypeError(\n                \"in-place operations between a DataArray and \"\n                \"a grouped object are not permitted\"\n            )\n        # n.b. we can't align other to self (with other.reindex_like(self))\n        # because `other` may be converted into floats, which would cause\n        # in-place arithmetic to fail unpredictably. Instead, we simply\n        # don't support automatic alignment with in-place arithmetic.\n        other_coords = getattr(other, \"coords\", None)\n        other_variable = getattr(other, \"variable\", other)\n        try:\n            with self.coords._merge_inplace(other_coords):\n                f(self.variable, other_variable)\n        except MergeError as exc:\n            raise MergeError(\n                \"Automatic alignment is not supported for in-place operations.\\n\"\n                \"Consider aligning the indices manually or using a not-in-place operation.\\n\"\n                \"See https://github.com/pydata/xarray/issues/3910 for more explanations.\"\n            ) from exc\n        return self\n\n    def _copy_attrs_from(self, other: DataArray | Dataset | Variable) -> None:\n        self.attrs = other.attrs\n\n    plot = utils.UncachedAccessor(DataArrayPlotAccessor)\n\n    de",
+                "filename": "xarray/core/dataarray.py",
+                "start_index": 166257,
+                "end_index": 169258,
+                "start_line": 4624,
+                "end_line": 7068,
+                "max_line": 7135,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            },
+            {
+                "code": "self,\n        dim: Dims = None,\n        *,\n        keep_attrs: bool | None = None,\n        **kwargs: Any,\n    ) -> Dataset:\n        \"\"\"",
+                "filename": "xarray/core/_aggregations.py",
+                "start_index": 978,
+                "end_index": 1113,
+                "start_line": 25,
+                "end_line": 8145,
+                "max_line": 8152,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            },
+            {
+                "code": "self,\n        dim: Dims = None,\n        *,\n        keep_attrs: bool | None = None,\n        **kwargs: Any,\n    ) -> Dataset:\n        \"\"\"",
+                "filename": "xarray/core/_aggregations.py",
+                "start_index": 978,
+                "end_index": 1113,
+                "start_line": 25,
+                "end_line": 8145,
+                "max_line": 8152,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            },
+            {
+                "code": "self,\n        dim: Dims = None,\n        *,\n        keep_attrs: bool | None = None,\n        **kwargs: Any,\n    ) -> Dataset:\n        \"\"\"",
+                "filename": "xarray/core/_aggregations.py",
+                "start_index": 978,
+                "end_index": 1113,
+                "start_line": 25,
+                "end_line": 8145,
+                "max_line": 8152,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            },
+            {
+                "code": "def identical(self, other: Dataset) -> bool:\n        \"\"\"Like equals, but also checks all dataset attributes and the\n        attributes on all variables and coordinates.\n\n        Example\n        -------\n\n        >>> a = xr.Dataset(\n        ...     {\"Width\": (\"X\", [1, 2, 3])},\n        ...     coords={\"X\": [1, 2, 3]},\n        ...     attrs={\"units\": \"m\"},\n        ... )\n        >>> b = xr.Dataset(\n        ...     {\"Width\": (\"X\", [1, 2, 3])},\n        ...     coords={\"X\": [1, 2, 3]},\n        ...     attrs={\"units\": \"m\"},\n        ... )\n        >>> c = xr.Dataset(\n        ...     {\"Width\": (\"X\", [1, 2, 3])},\n        ...     coords={\"X\": [1, 2, 3]},\n        ...     attrs={\"units\": \"ft\"},\n        ... )\n        >>> a\n        <xarray.Dataset>\n        Dimensions:  (X: 3)\n        Coordinates:\n          * X        (X) int64 1 2 3\n        Data variables:\n            Width    (X) int64 1 2 3\n        Attributes:\n            units:    m\n\n        >>> b\n        <xarray.Dataset>\n        Dimensions:  (X: 3)\n        Coordinates:\n          * X        (X) int64 1 2 3\n        Data variables:\n            Width    (X) int64 1 2 3\n        Attributes:\n            units:    m\n\n        >>> c\n        <xarray.Dataset>\n        Dimensions:  (X: 3)\n        Coordinates:\n          * X        (X) int64 1 2 3\n        Data variables:\n            Width    (X) int64 1 2 3\n        Attributes:\n            units:    ft\n\n        >>> a.equals(b)\n        True\n\n        >>> a.identical(b)\n        True\n\n        >>> a.equals(c)\n        True\n\n        >>> a.identical(c)\n        False\n\n        See Also\n        --------\n        Dataset.broadcast_equals\n        Dataset.equals\n        \"\"\"\n        try:\n            return utils.dict_equiv(self.attrs, other.attrs) and self._all_compat(\n                other, \"identical\"\n            )\n        except (TypeError, AttributeError):\n            return False\n\n    @property\n    def indexes(self) -> Indexes[pd.Index]:\n        \"\"\"Mapping of pandas.Index objects used for label based indexing.\n\n        Raises an error if this Dataset has indexes that cannot be coerced\n        to pandas.Index objects.\n\n        See Also\n        --------\n        Dataset.xindexes\n\n        \"\"\"\n        return self.xindexes.to_pandas_indexes()\n\n    @property\n    def xindexes(self) -> Indexes[Index]:\n        \"\"\"Mapping of :py:class:`~xarray.indexes.Index` objects\n        used for label based indexing.\n        \"\"\"\n        return Indexes(self._indexes, {k: self._variables[k] for k in self._indexes})\n\n    @property\n    def coords(self) -> DatasetCoordinates:\n        \"\"\"Mapping of :py:class:`~xarray.DataArray` objects corresponding to\n        coordinate variables.\n\n        See Also\n        --------\n        Coordinates\n        \"\"\"\n        return DatasetCoordinates(self)\n\n    @property\n    def data_vars(self) -> DataVariables:\n        \"\"\"Dictionary of DataArray objects corresponding to data variables\"\"\"\n        return DataVariables(self)",
+                "filename": "xarray/core/dataset.py",
+                "start_index": 62516,
+                "end_index": 65451,
+                "start_line": 1833,
+                "end_line": 1944,
+                "max_line": 10260,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            },
+            {
+                "code": "from xarray.core.dataarray import DataArray\n\n        other = other.to_dataset() if isinstance(other, DataArray) else other\n        merge_result = dataset_merge_method(\n            self,\n            other,\n            overwrite_vars=overwrite_vars,\n            compat=compat,\n            join=join,\n            fill_value=fill_value,\n            combine_attrs=combine_attrs,\n        )\n        return self._replace(**merge_result._asdict())",
+                "filename": "xarray/core/dataset.py",
+                "start_index": 212041,
+                "end_index": 212479,
+                "start_line": 121,
+                "end_line": 5639,
+                "max_line": 10260,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            },
+            {
+                "code": "def dataset_merge_method(\n    dataset: Dataset,\n    other: CoercibleMapping,\n    overwrite_vars: Hashable | Iterable[Hashable],\n    compat: CompatOptions,\n    join: JoinOptions,\n    fill_value: Any,\n    combine_attrs: CombineAttrsOptions,\n) -> _MergeResult:\n    \"\"\"Guts of the Dataset.merge method.\"\"\"\n    # we are locked into supporting overwrite_vars for the Dataset.merge\n    # method due for backwards compatibility\n    # TODO: consider deprecating it?\n\n    if not isinstance(overwrite_vars, str) and isinstance(overwrite_vars, Iterable):\n        overwrite_vars = set(overwrite_vars)\n    else:\n        overwrite_vars = {overwrite_vars}\n\n    if not overwrite_vars:\n        objs = [dataset, other]\n        priority_arg = None\n    elif overwrite_vars == set(other):\n        objs = [dataset, other]\n        priority_arg = 1\n    else:\n        other_overwrite: dict[Hashable, CoercibleValue] = {}\n        other_no_overwrite: dict[Hashable, CoercibleValue] = {}\n        for k, v in other.items():\n            if k in overwrite_vars:\n                other_overwrite[k] = v\n            else:\n                other_no_overwrite[k] = v\n        objs = [dataset, other_no_overwrite, other_overwrite]\n        priority_arg = 2\n\n    return merge_core(\n        objs,\n        compat,\n        join,\n        priority_arg=priority_arg,\n        fill_value=fill_value,\n        combine_attrs=combine_attrs,\n    )\n\n\ndef dataset_update_method(dataset: Dataset, other: CoercibleMapping) -> _MergeResult:\n    \"\"\"Guts of the Dataset.update method.\n\n    This drops a duplicated coordinates from `other` if `other` is not an\n    `xarray.Dataset`, e.g., if it's a dict with DataArray values (GH2068,\n    GH2180).\n    \"\"\"\n    from xarray.core.dataarray import DataArray\n    from xarray.core.dataset import Dataset\n\n    if not isinstance(other, Dataset):\n        other = dict(other)\n        for key, value in other.items():\n            if isinstance(value, DataArray):\n                # drop conflicting coordinates\n                coord_names = [\n                    c\n                    for c in value.coords\n                    if c not in value.dims and c in dataset.coords\n                ]\n                if coord_names:\n                    other[key] = value.drop_vars(coord_names)\n\n    return merge_core(\n        [dataset, other],\n        priority_arg=1,\n        indexes=dataset.xindexes,\n        combine_attrs=\"override\",\n    )",
+                "filename": "xarray/core/merge.py",
+                "start_index": 36571,
+                "end_index": 38979,
+                "start_line": 1002,
+                "end_line": 1076,
+                "max_line": 1076,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.09",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "xarray/core/dataset.py": [
+                {
+                    "chunk": {
+                        "code": "self: T_Dataset, f, *args, **kwargs) -> T_Dataset:\n        variables = {}\n        keep_attrs = kwargs.pop(\"keep_attrs\", None)\n        if keep_attrs is None:\n            keep_attrs = _get_keep_attrs(default=True)\n        for k, v in self._variables.items():\n            if k in self._coord_names:\n                variables[k] = v\n            else:\n                variables[k] = f(v, *args, **kwargs)\n                if keep_attrs:\n                    variables[k].attrs = v._attrs\n        attrs = self._attrs if keep_attrs else None\n        return self._replace_with_new_dims(variables, attrs=attrs)\n\n    def _binary_op(self, other, f, reflexive=False, join=None) -> Dataset:\n        from xarray.core.dataarray import DataArray\n        from xarray.core.groupby import GroupBy\n\n        if isinstance(other, GroupBy):\n            return NotImplemented\n        align_type = OPTIONS[\"arithmetic_join\"] if join is None else join\n        if isinstance(other, (DataArray, Dataset)):\n            self, other = align(self, other, join=align_type, copy=False)  # type: ignore[assignment]\n        g = f if not reflexive else lambda x, y: f(y, x)\n        ds = self._calculate_binary_op(g, other, join=align_type)\n        keep_attrs = _get_keep_attrs(default=False)\n        if keep_attrs:\n            ds.attrs = self.attrs\n        return ds\n\n    def _inplace_binary_op(self: T_Dataset, other, f) -> T_Dataset:\n        from xarray.core.dataarray import DataArray\n        from xarray.core.groupby import GroupBy\n\n        if isinstance(other, GroupBy):\n            raise TypeError(\n                \"in-place operations between a Dataset and \"\n                \"a grouped object are not permitted\"\n            )\n        # we don't actually modify arrays in-place with in-place Dataset\n        # arithmetic -- this lets us automatically align things\n        if isinstance(other, (DataArray, Dataset)):\n            other = other.reindex_like(self, copy=False)\n        g = ops.inplace_to_noninplace_op(f)\n        ds = self._calculate_binary_op(g, other, inplace=True)\n        self._replace_with_new_dims(\n            ds._variables,\n            ds._coord_names,\n            attrs=ds._attrs,\n            indexes=ds._indexes,\n            inplace=True,\n        )\n        return self\n\n    def _calculate",
+                        "filename": "xarray/core/dataset.py",
+                        "start_index": 280067,
+                        "end_index": 282344,
+                        "start_line": 7449,
+                        "end_line": 7504,
+                        "max_line": 10260,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pydata__xarray__2022.09",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the '_binary_op' method where the 'keep_attrs' option is handled for binary operations on Datasets. The issue describes that attributes are not kept during binary operations despite 'keep_attrs=True', which directly relates to this part of the code."
+                },
+                {
+                    "chunk": {
+                        "code": "_binary_op(\n        self, f, other, join=\"inner\", inplace: bool = False\n    ) -> Dataset:\n        def apply_over_both(lhs_data_vars, rhs_data_vars, lhs_vars, rhs_vars):\n            if inplace and set(lhs_data_vars) != set(rhs_data_vars):\n                raise ValueError(\n                    \"datasets must have the same data variables \"\n                    f\"for in-place arithmetic operations: {list(lhs_data_vars)}, {list(rhs_data_vars)}\"\n                )\n\n            dest_vars = {}\n\n            for k in lhs_data_vars:\n                if k in rhs_data_vars:\n                    dest_vars[k] = f(lhs_vars[k], rhs_vars[k])\n                elif join in [\"left\", \"outer\"]:\n                    dest_vars[k] = f(lhs_vars[k], np.nan)\n            for k in rhs_data_vars:\n                if k not in dest_vars and join in [\"right\", \"outer\"]:\n                    dest_vars[k] = f(rhs_vars[k], np.nan)\n            return dest_vars\n\n        if utils.is_dict_like(other) and not isinstance(other, Dataset):\n            # can't use our shortcut of doing the binary operation with\n            # Variable objects, so apply over our data vars instead.\n            new_data_vars = apply_over_both(\n                self.data_vars, other, self.data_vars, other\n            )\n            return type(self)(new_data_vars)\n\n        other_coords: Coordinates | None = getattr(other, \"coords\", None)\n        ds = self.coords.merge(other_coords)\n\n        if isinstance(other, Dataset):\n            new_vars = apply_over_both(\n                self.data_vars, other.data_vars, self.variables, other.variables\n            )\n        else:\n            other_variable = getattr(other, \"variable\", other)\n            new_vars = {k: f(self.variables[k], other_variable) for k in self.data_vars}\n        ds._variables.update(new_vars)\n        ds._dims = calculate_dimensions(ds._variables)\n        return ds\n\n    def _copy_attrs_from(self, other):\n        self.attrs = other.attrs\n        for v in other.variables:\n            if v in self.variables:\n                self.variables[v].attrs = other.variables[v].attrs\n\n    def diff(",
+                        "filename": "xarray/core/dataset.py",
+                        "start_index": 282344,
+                        "end_index": 284447,
+                        "start_line": 7464,
+                        "end_line": 7554,
+                        "max_line": 10260,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pydata__xarray__2022.09",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the '_calculate_binary_op' method which is likely involved in the binary operations for Datasets. Since the issue is about attributes not being kept during such operations, this method may need to be reviewed and possibly modified to address the issue."
+                }
+            ]
+        },
+        "solution_task": "- The issue is that the `keep_attrs` option is not being respected in `Dataset` binary operations.\n- The relevant code snippet handling binary operations for `Dataset` is in `xarray/core/dataset.py` in the `_binary_op` method.\n- The `_binary_op` method calls `_calculate_binary_op` but does not pass the `keep_attrs` parameter to it.\n- The `keep_attrs` parameter should be passed to `_calculate_binary_op` and handled appropriately within that method to ensure attributes are preserved according to the `keep_attrs` value.\n\nTo fix the issue:\n- Modify the `_binary_op` method in `xarray/core/dataset.py` to pass the `keep_attrs` parameter to `_calculate_binary_op`.\n- Ensure that `_calculate_binary_op` and any other methods it calls properly handle the `keep_attrs` parameter to preserve attributes when `keep_attrs=True`.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "RESPONSES that are highly relevant, offering clear and comprehensive guidance or solutions for the described bug, should score between 7 and 9.",
+            "supporting_evidence": "The response provides a clear and detailed explanation of the issue with the `keep_attrs` option in `Dataset` binary operations. It identifies the specific methods within the `xarray` library that are likely responsible for the bug and provides actionable steps to address the issue. The response also includes references to the relevant code snippets, which is highly useful for someone looking to fix the bug. The only reason it does not score a 10 is that it does not provide the exact code changes needed to fix the issue, but it does give a clear direction on what needs to be done.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711751727.711356,
+        "result": "- The issue is that the `keep_attrs` option is not being respected in `Dataset` binary operations.\n- The relevant code snippet handling binary operations for `Dataset` is in `xarray/core/dataset.py` in the `_binary_op` method.\n- The `_binary_op` method calls `_calculate_binary_op` but does not pass the `keep_attrs` parameter to it.\n- The `keep_attrs` parameter should be passed to `_calculate_binary_op` and handled appropriately within that method to ensure attributes are preserved according to the `keep_attrs` value.\n\nTo fix the issue:\n- Modify the `_binary_op` method in `xarray/core/dataset.py` to pass the `keep_attrs` parameter to `_calculate_binary_op`.\n- Ensure that `_calculate_binary_op` and any other methods it calls properly handle the `keep_attrs` parameter to preserve attributes when `keep_attrs=True`.\n\n### Code snippets to check\n\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__2022.09/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__2022.09/tree//xarray/core)- [Lines 7449 - 7504](https://github.com/testbed/pydata__xarray__2022.09/blob//xarray/core/dataset.py#L7449-L7504)\n\n This snippet contains the '_binary_op' method where the 'keep_attrs' option is handled for binary operations on Datasets. The issue describes that attributes are not kept during binary operations despite 'keep_attrs=True', which directly relates to this part of the code. \n\n\n   - [Lines 7464 - 7554](https://github.com/testbed/pydata__xarray__2022.09/blob//xarray/core/dataset.py#L7464-L7554)\n\n This snippet includes the '_calculate_binary_op' method which is likely involved in the binary operations for Datasets. Since the issue is about attributes not being kept during such operations, this method may need to be reviewed and possibly modified to address the issue."
+    }
+}

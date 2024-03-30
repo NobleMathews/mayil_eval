@@ -1,0 +1,208 @@
+{
+    "id": "django__django-16631",
+    "repo_name": "testbed/django__django__5.0",
+    "task_id": 2088876351104431127,
+    "title": "SECRET_KEY_FALLBACKS is not used for sessions",
+    "body": "Description\n\t\nI recently rotated my secret key, made the old one available in SECRET_KEY_FALLBACKS and I'm pretty sure everyone on our site is logged out now.\nI think the docs for \u200bSECRET_KEY_FALLBACKS may be incorrect when stating the following:\nIn order to rotate your secret keys, set a new SECRET_KEY and move the previous value to the beginning of SECRET_KEY_FALLBACKS. Then remove the old values from the end of the SECRET_KEY_FALLBACKS when you are ready to expire the sessions, password reset tokens, and so on, that make use of them.\nWhen looking at the Django source code, I see that the \u200bsalted_hmac function uses the SECRET_KEY by default and the \u200bAbstractBaseUser.get_session_auth_hash method does not call salted_hmac with a value for the secret keyword argument.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__5.0.git",
+    "requested_commit": "",
+    "mayil_response": "- Update the `CustomUser.get_session_auth_hash` method in `models.py` to use `SECRET_KEY_FALLBACKS` when generating the session authentication hash.\n- Modify the `get_session_auth_hash` method to iterate over `SECRET_KEY_FALLBACKS` and generate a hash for each key.\n- Ensure that the `update_session_auth_hash` function in `django/contrib/auth/__init__.py` checks against all hashes generated from `SECRET_KEY_FALLBACKS`.\n\n```python\n# models.py\nfrom django.conf import settings\n\nclass CustomUser(AbstractBaseUser):\n    def get_session_auth_hash(self):\n        # Generate the primary session auth hash with the current SECRET_KEY\n        primary_hash = super().get_session_auth_hash()\n        # Generate session auth hashes for each fallback key\n        fallback_hashes = list(self.get_session_auth_fallback_hash())\n        # Return a tuple of the primary hash and all fallback hashes\n        return (primary_hash, fallback_hashes)\n```\n\n- Update the `update_session_auth_hash` function to handle a tuple of hashes.\n\n```python\n# django/contrib/auth/__init__.py\ndef update_session_auth_hash(request, user):\n    \"\"\"\n    Updating a user's password logs out all sessions for the user.\n    This version has been modified to handle a tuple of hashes.\n    \"\"\"\n    request.session.cycle_key()\n    if hasattr(user, \"get_session_auth_hash\") and request.user == user:\n        # Unpack the tuple of primary hash and fallback hashes\n        primary_hash, fallback_hashes = user.get_session_auth_hash()\n        # Store the primary hash in the session\n        request.session[HASH_SESSION_KEY] = primary_hash\n        # Optionally, store fallback hashes in the session as well\n        # This step depends on how the session verification logic is implemented\n        # and may require additional changes elsewhere in the codebase\n```\n\n- Ensure that the session verification logic (not provided in the snippets) checks the session hash against both the primary hash and the fallback hashes.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__5.0/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__5.0/tree//django/contrib/auth)- [Lines 153 - 179](https://github.com/testbed/django__django__5.0/blob//django/contrib/auth/base_user.py#L153-L179)\n\n This snippet contains the implementation of get_session_auth_fallback_hash which is directly related to the use of SECRET_KEY_FALLBACKS for session authentication.\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [utils](https://github.com/testbed/django__django__5.0/tree//django/utils)- [Lines 1 - 76](https://github.com/testbed/django__django__5.0/blob//django/utils/crypto.py#L1-L76)\n\n This snippet includes the salted_hmac function which is mentioned in the issue description as not being called with the secret keyword argument, which is crucial for the SECRET_KEY_FALLBACKS mechanism.\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__5.0/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__5.0/tree//django/contrib/auth)- [Lines 256 - 272](https://github.com/testbed/django__django__5.0/blob//django/contrib/auth/__init__.py#L256-L272)\n\n This snippet shows the update_session_auth_hash function which is responsible for updating the session hash when a user's password is changed. It may be relevant to understand how session hashes are managed during password changes.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000425,
+        "snippet_processor": 0.04505000000000001,
+        "issue_star_creation": 0.029089999999999998,
+        "issue_star_solver": 0.05791,
+        "bouncer": 0.024120000000000003
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711705848.570601,
+        "relevant_snippets": [
+            {
+                "code": "def get_session_auth_fallback_hash(self):\n        for fallback_secret in settings.SECRET_KEY_FALLBACKS:\n            yield self._get_session_auth_hash(secret=fallback_secret)\n\n    def _get_session_auth_hash(self, secret=None):\n        key_salt = \"django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash\"\n        return salted_hmac(\n            key_salt,\n            self.password,\n            secret=secret,\n            algorithm=\"sha256\",\n        ).hexdigest()\n\n    @classmethod\n    def get_email_field_name(cls):\n        try:\n            return cls.EMAIL_FIELD\n        except AttributeError:\n            return \"email\"\n\n    @classmethod\n    def normalize_username(cls, username):\n        return (\n            unicodedata.normalize(\"NFKC\", username)\n            if isinstance(username, str)\n            else username\n        )",
+                "filename": "django/contrib/auth/base_user.py",
+                "start_index": 4675,
+                "end_index": 5511,
+                "start_line": 153,
+                "end_line": 179,
+                "max_line": 179,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "import inspect\nimport re\n\nfrom asgiref.sync import sync_to_async\n\nfrom django.apps import apps as django_apps\nfrom django.conf import settings\nfrom django.core.exceptions import ImproperlyConfigured, PermissionDenied\nfrom django.middleware.csrf import rotate_token\nfrom django.utils.crypto import constant_time_compare\nfrom django.utils.module_loading import import_string\nfrom django.views.decorators.debug import sensitive_variables\n\nfrom .signals import user_logged_in, user_logged_out, user_login_failed\n\nSESSION_KEY = \"_auth_user_id\"\nBACKEND_SESSION_KEY = \"_auth_user_backend\"\nHASH_SESSION_KEY = \"_auth_user_hash\"\nREDIRECT_FIELD_NAME = \"next\"\n\n\ndef load_backend(path):\n    return import_string(path)()\n\n\ndef _get_backends(return_tuples=False):\n    backends = []\n    for backend_path in settings.AUTHENTICATION_BACKENDS:\n        backend = load_backend(backend_path)\n        backends.append((backend, backend_path) if return_tuples else backend)\n    if not backends:\n        raise ImproperlyConfigured(\n            \"No authentication backends have been defined. Does \"\n            \"AUTHENTICATION_BACKENDS contain anything?\"\n        )\n    return backends\n\n\ndef get_backends():\n    return _get_backends(return_tuples=False)\n\n\n@sensitive_variables(\"credentials\")\ndef _clean_credentials(credentials):\n    \"\"\"\n    Clean a dictionary of credentials of potentially sensitive info before\n    sending to less secure functions.\n\n    Not comprehensive - intended for user_login_failed signal\n    \"\"\"\n    SENSITIVE_CREDENTIALS = re.compile(\"api|token|key|secret|password|signature\", re.I)\n    CLEANSED_SUBSTITUTE = \"********************\"\n    for key in credentials:\n        if SENSITIVE_CREDENTIALS.search(key):\n            credentials[key] = CLEANSED_SUBSTITUTE\n    return credentials\n\n\ndef _get_user_session_key(request):\n    # This value in the session is always serialized to a string, so we need\n    # to convert it back to Python whenever we access it.\n    return get_user_model()._meta.pk.to_python(request.session[SESSION_KEY])",
+                "filename": "django/contrib/auth/__init__.py",
+                "start_index": 0,
+                "end_index": 2027,
+                "start_line": 1,
+                "end_line": 62,
+                "max_line": 272,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.contrib.sessions.backends.base import SessionBase\nfrom django.core import signing\n\n\nclass SessionStore(SessionBase):\n    def load(self):\n        \"\"\"\n        Load the data from the key itself instead of fetching from some\n        external data store. Opposite of _get_session_key(), raise BadSignature\n        if signature fails.\n        \"\"\"\n        try:\n            return signing.loads(\n                self.session_key,\n                serializer=self.serializer,\n                # This doesn't handle non-default expiry dates, see #19201\n                max_age=self.get_session_cookie_age(),\n                salt=\"django.contrib.sessions.backends.signed_cookies\",\n            )\n        except Exception:\n            # BadSignature, ValueError, or unpickling exceptions. If any of\n            # these happen, reset the session.\n            self.create()\n        return {}\n\n    def create(self):\n        \"\"\"\n        To create a new key, set the modified flag so that the cookie is set\n        on the client for the current request.\n        \"\"\"\n        self.modified = True\n\n    def save(self, must_create=False):\n        \"\"\"\n        To save, get the session key as a securely signed string and then set\n        the modified flag so that the cookie is set on the client for the\n        current request.\n        \"\"\"\n        self._session_key = self._get_session_key()\n        self.modified = True\n\n    def exists(self, session_key=None):\n        \"\"\"\n        This method makes sense when you're talking to a shared resource, but\n        it doesn't matter when you're storing the information in the client's\n        cookie.\n        \"\"\"\n        return False\n\n    def delete(self, session_key=None):\n        \"\"\"\n        To delete, clear the session key and the underlying data structure\n        and set the modified flag so that the cookie is set on the client for\n        the current request.\n        \"\"\"\n        self._session_key = \"\"\n        self._session_cache = {}\n        self.modified = True\n\n    def cycle_key(self):\n        \"\"\"\n        Keep the same data but with a new key. Call save() and it will\n        automatically save a cookie with a new key at the end of the request.\n        \"\"\"\n        self.save()\n\n    def _get_session_key(self):\n        \"\"\"\n        Instead of generating a random string, generate a secure url-safe\n        base64-encoded string of data as our session key.\n        \"\"\"\n        return signing.dumps(\n            self._session,\n            compress=True,\n            salt=\"django.contrib.sessions.backends.signed_cookies\",\n            serializer=self.serializer,\n        )\n\n    @classmethod\n    def clear_expired(cls):\n        pass",
+                "filename": "django/contrib/sessions/backends/signed_cookies.py",
+                "start_index": 0,
+                "end_index": 2675,
+                "start_line": 1,
+                "end_line": 81,
+                "max_line": 81,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "import logging\nimport string\nfrom datetime import datetime, timedelta\n\nfrom django.conf import settings\nfrom django.core import signing\nfrom django.utils import timezone\nfrom django.utils.crypto import get_random_string\nfrom django.utils.module_loading import import_string\n\n# session_key should not be case sensitive because some backends can store it\n# on case insensitive file systems.\nVALID_KEY_CHARS = string.ascii_lowercase + string.digits\n\n\nclass CreateError(Exception):\n    \"\"\"\n    Used internally as a consistent exception type to catch from save (see the\n    docstring for SessionBase.save() for details).\n    \"\"\"\n\n    pass\n\n\nclass UpdateError(Exception):\n    \"\"\"\n    Occurs if Django tries to update a session that was deleted.\n    \"\"\"\n\n    pass",
+                "filename": "django/contrib/sessions/backends/base.py",
+                "start_index": 0,
+                "end_index": 756,
+                "start_line": 1,
+                "end_line": 270,
+                "max_line": 365,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.core.exceptions import BadRequest, SuspiciousOperation\n\n\nclass InvalidSessionKey(SuspiciousOperation):\n    \"\"\"Invalid characters in session key\"\"\"\n\n    pass\n\n\nclass SuspiciousSession(SuspiciousOperation):\n    \"\"\"The session may be tampered with\"\"\"\n\n    pass\n\n\nclass SessionInterrupted(BadRequest):\n    \"\"\"The session was interrupted.\"\"\"\n\n    pass",
+                "filename": "django/contrib/sessions/exceptions.py",
+                "start_index": 0,
+                "end_index": 358,
+                "start_line": 1,
+                "end_line": 19,
+                "max_line": 19,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nDjango's standard crypto functions and utilities.\n\"\"\"\nimport hashlib\nimport hmac\nimport secrets\n\nfrom django.conf import settings\nfrom django.utils.encoding import force_bytes\n\n\nclass InvalidAlgorithm(ValueError):\n    \"\"\"Algorithm is not supported by hashlib.\"\"\"\n\n    pass\n\n\ndef salted_hmac(key_salt, value, secret=None, *, algorithm=\"sha1\"):\n    \"\"\"\n    Return the HMAC of 'value', using a key generated from key_salt and a\n    secret (which defaults to settings.SECRET_KEY). Default algorithm is SHA1,\n    but any algorithm name supported by hashlib can be passed.\n\n    A different key_salt should be passed in for every application of HMAC.\n    \"\"\"\n    if secret is None:\n        secret = settings.SECRET_KEY\n\n    key_salt = force_bytes(key_salt)\n    secret = force_bytes(secret)\n    try:\n        hasher = getattr(hashlib, algorithm)\n    except AttributeError as e:\n        raise InvalidAlgorithm(\n            \"%r is not an algorithm accepted by the hashlib module.\" % algorithm\n        ) from e\n    # We need to generate a derived key from our base key.  We can do this by\n    # passing the key_salt and our base key through a pseudo-random function.\n    key = hasher(key_salt + secret).digest()\n    # If len(key_salt + secret) > block size of the hash algorithm, the above\n    # line is redundant and could be replaced by key = key_salt + secret, since\n    # the hmac module does the same thing for keys longer than the block size.\n    # However, we need to ensure that we *always* do this.\n    return hmac.new(key, msg=force_bytes(value), digestmod=hasher)\n\n\nRANDOM_STRING_CHARS = \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"\n\n\ndef get_random_string(length, allowed_chars=RANDOM_STRING_CHARS):\n    \"\"\"\n    Return a securely generated random string.\n\n    The bit length of the returned value can be calculated with the formula:\n        log_2(len(allowed_chars)^length)\n\n    For example, with default `allowed_chars` (26+26+10), this gives:\n      * length: 12, bit length =~ 71 bits\n      * length: 22, bit length =~ 131 bits\n    \"\"\"\n    return \"\".join(secrets.choice(allowed_chars) for i in range(length))\n\n\ndef constant_time_compare(val1, val2):\n    \"\"\"Return True if the two strings are equal, False otherwise.\"\"\"\n    return secrets.compare_digest(force_bytes(val1), force_bytes(val2))\n\n\ndef pbkdf2(password, salt, iterations, dklen=0, digest=None):\n    \"\"\"Return the hash of password using pbkdf2.\"\"\"\n    if digest is None:\n        digest = hashlib.sha256\n    dklen = dklen or None\n    password = force_bytes(password)\n    salt = force_bytes(salt)\n    return hashlib.pbkdf2_hmac(digest().name, password, salt, iterations, dklen)",
+                "filename": "django/utils/crypto.py",
+                "start_index": 0,
+                "end_index": 2660,
+                "start_line": 1,
+                "end_line": 76,
+                "max_line": 76,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "# A string like \"example.com\", or None for standard domain cookie.\nSESSION_COOKIE_DOMAIN = None\n# Whether the session cookie should be secure (https:// only).\nSESSION_COOKIE_SECURE = False\n# The path of the session cookie.\nSESSION_COOKIE_PATH = \"/\"\n# Whether to use the HttpOnly flag.\nSESSION_COOKIE_HTTPONLY = True\n# Whether to set the flag restricting cookie leaks on cross-site requests.\n# This can be 'Lax', 'Strict', 'None', or False to disable the flag.\nSESSION_COOKIE_SAMESITE = \"Lax\"\n# Whether to save the session data on every request.\nSESSION_SAVE_EVERY_REQUEST = False\n# Whether a user's session cookie expires when the web browser is closed.\nSESSION_EXPIRE_AT_BROWSER_CLOSE = False\n# The module to store session data\nSESSION_ENGINE = \"django.contrib.sessions.backends.db\"\n# Directory to store session files if using the file session module. If None,\n# the backend will use a sensible default.\nSESSION_FILE_PATH = None\n# class to serialize session data\nSESSION_SERIALIZER = \"django.contrib.sessions.serializers.JSONSerializer\"\n\n#########\n# CACHE #\n#########\n\n# The cache backends to use.\nCACHES = {\n    \"default\": {\n        \"BACKEND\": \"django.core.cache.backends.locmem.LocMemCache\",\n    }\n}\nCACHE_MIDDLEWARE_KEY_PREFIX = \"\"\nCACHE_MIDDLEWARE_SECONDS = 600\nCACHE_MIDDLEWARE_ALIAS = \"default\"\n\n##################\n# AUTHENTICATION #\n##################\n\nAUTH_USER_MODEL = \"auth.User\"\n\nAUTHENTICATION_BACKENDS = [\"django.contrib.auth.backends.ModelBackend\"]\n\nLOGIN_URL = \"/accounts/login/\"\n\nLOGIN_REDIRECT_URL = \"/accounts/profile/\"\n\nLOGOUT_REDIRECT_URL = None\n\n# The number of seconds a password reset link is valid for (default: 3 days).\nPASSWORD_RESET_TIMEOUT = 60 * 60 * 24 * 3\n\n# the first hasher in this list is the preferred algorithm.  any\n# password using different algorithms will be converted automatically\n# upon login\nPASSWORD_HASHERS = [\n    \"django.contrib.auth.hashers.PBKDF2PasswordHasher\",\n    \"django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher\",\n    \"django.contrib.auth.hashers.Argon2PasswordHasher\",\n    \"django.contrib.auth.hashers.BCryptSHA256PasswordHasher\",\n    \"django.contrib.auth.hashers.ScryptPasswordHasher\",\n]\n\nAUTH_PASSWORD_VALIDATORS = []\n\n###########\n# SIGNING #\n###########\n\nSIGNING_BACKEND = \"django.core.signing.TimestampSigner\"\n\n########\n# CSRF #\n########\n\n# Dotted path to callable to be used as view when a request is\n# rejected by the CSRF middleware.\nCSRF_FAILURE_VIEW = \"django.views.csrf.csrf_failure\"\n\n# Settings for CSRF cookie.\nCSRF_COOKIE_NAME = \"csrftoken\"\nCSRF_COOKIE_AGE = 60 * 60 * 24 * 7 * 52\nCSRF_COOKIE_DOMAIN = None\nCSRF_COOKIE_PATH = \"/\"\nCSRF_COOKIE_SECURE = False\nCSRF_COOKIE_HTTPONLY = False\nCSRF_COOKIE_SAMESITE = \"Lax\"\nCSRF_HEADER_NAME = \"HTTP_X_CSRFTOKEN\"\nCSRF_TRUSTED_ORIGINS = []\nCSRF_USE_SESSIONS = False\n\n############\n# MESSAGES #\n############\n\n# Class to use as messages backend\nMESSAGE_STORAGE = \"django.contrib.messages.storage.fallback.FallbackStorage\"",
+                "filename": "django/conf/global_settings.py",
+                "start_index": 17386,
+                "end_index": 20317,
+                "start_line": 482,
+                "end_line": 580,
+                "max_line": 667,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "# List of compiled regular expression objects representing URLs that need not\n# be reported by BrokenLinkEmailsMiddleware. Here are a few examples:\n#    import re\n#    IGNORABLE_404_URLS = [\n#        re.compile(r'^/apple-touch-icon.*\\.png$'),\n#        re.compile(r'^/favicon.ico$'),\n#        re.compile(r'^/robots.txt$'),\n#        re.compile(r'^/phpmyadmin/'),\n#        re.compile(r'\\.(cgi|php|pl)$'),\n#    ]\nIGNORABLE_404_URLS = []\n\n# A secret key for this particular Django installation. Used in secret-key\n# hashing algorithms. Set this in your settings, or Django will complain\n# loudly.\nSECRET_KEY = \"\"\n\n# List of secret keys used to verify the validity of signatures. This allows\n# secret key rotation.\nSECRET_KEY_FALLBACKS = []\n\n# Default file storage mechanism that holds media.\nDEFAULT_FILE_STORAGE = \"django.core.files.storage.FileSystemStorage\"\n\nSTORAGES = {\n    \"default\": {\n        \"BACKEND\": \"django.core.files.storage.FileSystemStorage\",\n    },\n    \"staticfiles\": {\n        \"BACKEND\": \"django.contrib.staticfiles.storage.StaticFilesStorage\",\n    },\n}\n\n# Absolute filesystem path to the directory that will hold user-uploaded files.\n# Example: \"/var/www/example.com/media/\"\nMEDIA_ROOT = \"\"\n\n# URL that handles the media served from MEDIA_ROOT.\n# Examples: \"http://example.com/media/\", \"http://media.example.com/\"\nMEDIA_URL = \"\"\n\n# Absolute path to the directory static files should be collected to.\n# Example: \"/var/www/example.com/static/\"\nSTATIC_ROOT = None\n\n# URL that handles the static files served from STATIC_ROOT.\n# Example: \"http://example.com/static/\", \"http://static.example.com/\"\nSTATIC_URL = None\n\n# List of upload handler classes to be applied in order.\nFILE_UPLOAD_HANDLERS = [\n    \"django.core.files.uploadhandler.MemoryFileUploadHandler\",\n    \"django.core.files.uploadhandler.TemporaryFileUploadHandler\",\n]\n\n# Maximum size, in bytes, of a request before it will be streamed to the\n# file system instead of into memory.\nFILE_UPLOAD_MAX_MEMORY_SIZE = 2621440  # i.e. 2.5 MB\n\n# Maximum size in bytes of request data (excluding file uploads) that will be\n# read before a SuspiciousOperation (RequestDataTooBig) is raised.\nDATA_UPLOAD_MAX_MEMORY_SIZE = 2621440  # i.e. 2.5 MB\n\n# Maximum number of GET/POST parameters that will be read before a\n# SuspiciousOperation (TooManyFieldsSent) is raised.\nDATA_UPLOAD_MAX_NUMBER_FIELDS = 1000\n\n# Maximum number of files encoded in a multipart upload that will be read\n# before a SuspiciousOperation (TooManyFilesSent) is raised.\nDATA_UPLOAD_MAX_NUMBER_FILES = 100\n\n# Directory in which upload streamed files will be temporarily saved. A value of\n# `None` will make Django use the operating system's default temporary directory\n# (i.e. \"/tmp\" on *nix systems).\nFILE_UPLOAD_TEMP_DIR = None\n\n# The numeric mode to set newly-uploaded files to. The value should be a mode\n# you'd pass directly to os.chmod; see\n# https://docs.python.org/library/os.html#files-and-directories.\nFILE_UPLOAD_PERMISSIONS = 0o644",
+                "filename": "django/conf/global_settings.py",
+                "start_index": 8468,
+                "end_index": 11437,
+                "start_line": 249,
+                "end_line": 328,
+                "max_line": 667,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "def update_session_auth_hash(request, user):\n    \"\"\"\n    Updating a user's password logs out all sessions for the user.\n\n    Take the current request and the updated user object from which the new\n    session hash will be derived and update the session hash appropriately to\n    prevent a password change from logging out the session from which the\n    password was changed.\n    \"\"\"\n    request.session.cycle_key()\n    if hasattr(user, \"get_session_auth_hash\") and request.user == user:\n        request.session[HASH_SESSION_KEY] = user.get_session_auth_hash()\n\n\nasync def aupdate_session_auth_hash(request, user):\n    \"\"\"See update_session_auth_hash().\"\"\"\n    return await sync_to_async(update_session_auth_hash)(request, user)",
+                "filename": "django/contrib/auth/__init__.py",
+                "start_index": 8737,
+                "end_index": 9464,
+                "start_line": 256,
+                "end_line": 272,
+                "max_line": 272,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "import django.contrib.sessions.models\nfrom django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = []\n\n    operations = [\n        migrations.CreateModel(\n            name=\"Session\",\n            fields=[\n                (\n                    \"session_key\",\n                    models.CharField(\n                        max_length=40,\n                        serialize=False,\n                        verbose_name=\"session key\",\n                        primary_key=True,\n                    ),\n                ),\n                (\"session_data\", models.TextField(verbose_name=\"session data\")),\n                (\n                    \"expire_date\",\n                    models.DateTimeField(verbose_name=\"expire date\", db_index=True),\n                ),\n            ],\n            options={\n                \"abstract\": False,\n                \"db_table\": \"django_session\",\n                \"verbose_name\": \"session\",\n                \"verbose_name_plural\": \"sessions\",\n            },\n            managers=[\n                (\"objects\", django.contrib.sessions.models.SessionManager()),\n            ],\n        ),\n    ]",
+                "filename": "django/contrib/sessions/migrations/0001_initial.py",
+                "start_index": 0,
+                "end_index": 1147,
+                "start_line": 1,
+                "end_line": 37,
+                "max_line": 37,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/contrib/auth/base_user.py": [
+                {
+                    "chunk": {
+                        "code": "def get_session_auth_fallback_hash(self):\n        for fallback_secret in settings.SECRET_KEY_FALLBACKS:\n            yield self._get_session_auth_hash(secret=fallback_secret)\n\n    def _get_session_auth_hash(self, secret=None):\n        key_salt = \"django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash\"\n        return salted_hmac(\n            key_salt,\n            self.password,\n            secret=secret,\n            algorithm=\"sha256\",\n        ).hexdigest()\n\n    @classmethod\n    def get_email_field_name(cls):\n        try:\n            return cls.EMAIL_FIELD\n        except AttributeError:\n            return \"email\"\n\n    @classmethod\n    def normalize_username(cls, username):\n        return (\n            unicodedata.normalize(\"NFKC\", username)\n            if isinstance(username, str)\n            else username\n        )",
+                        "filename": "django/contrib/auth/base_user.py",
+                        "start_index": 4675,
+                        "end_index": 5511,
+                        "start_line": 153,
+                        "end_line": 179,
+                        "max_line": 179,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__5.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the implementation of get_session_auth_fallback_hash which is directly related to the use of SECRET_KEY_FALLBACKS for session authentication."
+                }
+            ],
+            "django/utils/crypto.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nDjango's standard crypto functions and utilities.\n\"\"\"\nimport hashlib\nimport hmac\nimport secrets\n\nfrom django.conf import settings\nfrom django.utils.encoding import force_bytes\n\n\nclass InvalidAlgorithm(ValueError):\n    \"\"\"Algorithm is not supported by hashlib.\"\"\"\n\n    pass\n\n\ndef salted_hmac(key_salt, value, secret=None, *, algorithm=\"sha1\"):\n    \"\"\"\n    Return the HMAC of 'value', using a key generated from key_salt and a\n    secret (which defaults to settings.SECRET_KEY). Default algorithm is SHA1,\n    but any algorithm name supported by hashlib can be passed.\n\n    A different key_salt should be passed in for every application of HMAC.\n    \"\"\"\n    if secret is None:\n        secret = settings.SECRET_KEY\n\n    key_salt = force_bytes(key_salt)\n    secret = force_bytes(secret)\n    try:\n        hasher = getattr(hashlib, algorithm)\n    except AttributeError as e:\n        raise InvalidAlgorithm(\n            \"%r is not an algorithm accepted by the hashlib module.\" % algorithm\n        ) from e\n    # We need to generate a derived key from our base key.  We can do this by\n    # passing the key_salt and our base key through a pseudo-random function.\n    key = hasher(key_salt + secret).digest()\n    # If len(key_salt + secret) > block size of the hash algorithm, the above\n    # line is redundant and could be replaced by key = key_salt + secret, since\n    # the hmac module does the same thing for keys longer than the block size.\n    # However, we need to ensure that we *always* do this.\n    return hmac.new(key, msg=force_bytes(value), digestmod=hasher)\n\n\nRANDOM_STRING_CHARS = \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"\n\n\ndef get_random_string(length, allowed_chars=RANDOM_STRING_CHARS):\n    \"\"\"\n    Return a securely generated random string.\n\n    The bit length of the returned value can be calculated with the formula:\n        log_2(len(allowed_chars)^length)\n\n    For example, with default `allowed_chars` (26+26+10), this gives:\n      * length: 12, bit length =~ 71 bits\n      * length: 22, bit length =~ 131 bits\n    \"\"\"\n    return \"\".join(secrets.choice(allowed_chars) for i in range(length))\n\n\ndef constant_time_compare(val1, val2):\n    \"\"\"Return True if the two strings are equal, False otherwise.\"\"\"\n    return secrets.compare_digest(force_bytes(val1), force_bytes(val2))\n\n\ndef pbkdf2(password, salt, iterations, dklen=0, digest=None):\n    \"\"\"Return the hash of password using pbkdf2.\"\"\"\n    if digest is None:\n        digest = hashlib.sha256\n    dklen = dklen or None\n    password = force_bytes(password)\n    salt = force_bytes(salt)\n    return hashlib.pbkdf2_hmac(digest().name, password, salt, iterations, dklen)",
+                        "filename": "django/utils/crypto.py",
+                        "start_index": 0,
+                        "end_index": 2660,
+                        "start_line": 1,
+                        "end_line": 76,
+                        "max_line": 76,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__5.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the salted_hmac function which is mentioned in the issue description as not being called with the secret keyword argument, which is crucial for the SECRET_KEY_FALLBACKS mechanism."
+                }
+            ],
+            "django/contrib/auth/__init__.py": [
+                {
+                    "chunk": {
+                        "code": "def update_session_auth_hash(request, user):\n    \"\"\"\n    Updating a user's password logs out all sessions for the user.\n\n    Take the current request and the updated user object from which the new\n    session hash will be derived and update the session hash appropriately to\n    prevent a password change from logging out the session from which the\n    password was changed.\n    \"\"\"\n    request.session.cycle_key()\n    if hasattr(user, \"get_session_auth_hash\") and request.user == user:\n        request.session[HASH_SESSION_KEY] = user.get_session_auth_hash()\n\n\nasync def aupdate_session_auth_hash(request, user):\n    \"\"\"See update_session_auth_hash().\"\"\"\n    return await sync_to_async(update_session_auth_hash)(request, user)",
+                        "filename": "django/contrib/auth/__init__.py",
+                        "start_index": 8737,
+                        "end_index": 9464,
+                        "start_line": 256,
+                        "end_line": 272,
+                        "max_line": 272,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__5.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the update_session_auth_hash function which is responsible for updating the session hash when a user's password is changed. It may be relevant to understand how session hashes are managed during password changes."
+                }
+            ]
+        },
+        "solution_task": "- Update the `CustomUser.get_session_auth_hash` method in `models.py` to use `SECRET_KEY_FALLBACKS` when generating the session authentication hash.\n- Modify the `get_session_auth_hash` method to iterate over `SECRET_KEY_FALLBACKS` and generate a hash for each key.\n- Ensure that the `update_session_auth_hash` function in `django/contrib/auth/__init__.py` checks against all hashes generated from `SECRET_KEY_FALLBACKS`.\n\n```python\n# models.py\nfrom django.conf import settings\n\nclass CustomUser(AbstractBaseUser):\n    def get_session_auth_hash(self):\n        # Generate the primary session auth hash with the current SECRET_KEY\n        primary_hash = super().get_session_auth_hash()\n        # Generate session auth hashes for each fallback key\n        fallback_hashes = list(self.get_session_auth_fallback_hash())\n        # Return a tuple of the primary hash and all fallback hashes\n        return (primary_hash, fallback_hashes)\n```\n\n- Update the `update_session_auth_hash` function to handle a tuple of hashes.\n\n```python\n# django/contrib/auth/__init__.py\ndef update_session_auth_hash(request, user):\n    \"\"\"\n    Updating a user's password logs out all sessions for the user.\n    This version has been modified to handle a tuple of hashes.\n    \"\"\"\n    request.session.cycle_key()\n    if hasattr(user, \"get_session_auth_hash\") and request.user == user:\n        # Unpack the tuple of primary hash and fallback hashes\n        primary_hash, fallback_hashes = user.get_session_auth_hash()\n        # Store the primary hash in the session\n        request.session[HASH_SESSION_KEY] = primary_hash\n        # Optionally, store fallback hashes in the session as well\n        # This step depends on how the session verification logic is implemented\n        # and may require additional changes elsewhere in the codebase\n```\n\n- Ensure that the session verification logic (not provided in the snippets) checks the session hash against both the primary hash and the fallback hashes.",
+        "bouncer_response": {
+            "score": 8,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable solution to the problem of SECRET_KEY_FALLBACKS not being used for sessions as described in the PROMPT. It suggests updating the 'get_session_auth_hash' method to include fallback hashes and modifying the 'update_session_auth_hash' function to handle a tuple of hashes. This directly addresses the issue of the Django source code not using the SECRET_KEY_FALLBACKS for session authentication. The RESPONSE also includes code snippets that are relevant to the issue and provides a clear direction for implementing the proposed changes. The RESPONSE does not address all aspects of the PROMPT, such as the specific implementation of session verification logic, but it provides a substantial foundation for resolving the main issue.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711706019.41012,
+        "result": "- Update the `CustomUser.get_session_auth_hash` method in `models.py` to use `SECRET_KEY_FALLBACKS` when generating the session authentication hash.\n- Modify the `get_session_auth_hash` method to iterate over `SECRET_KEY_FALLBACKS` and generate a hash for each key.\n- Ensure that the `update_session_auth_hash` function in `django/contrib/auth/__init__.py` checks against all hashes generated from `SECRET_KEY_FALLBACKS`.\n\n```python\n# models.py\nfrom django.conf import settings\n\nclass CustomUser(AbstractBaseUser):\n    def get_session_auth_hash(self):\n        # Generate the primary session auth hash with the current SECRET_KEY\n        primary_hash = super().get_session_auth_hash()\n        # Generate session auth hashes for each fallback key\n        fallback_hashes = list(self.get_session_auth_fallback_hash())\n        # Return a tuple of the primary hash and all fallback hashes\n        return (primary_hash, fallback_hashes)\n```\n\n- Update the `update_session_auth_hash` function to handle a tuple of hashes.\n\n```python\n# django/contrib/auth/__init__.py\ndef update_session_auth_hash(request, user):\n    \"\"\"\n    Updating a user's password logs out all sessions for the user.\n    This version has been modified to handle a tuple of hashes.\n    \"\"\"\n    request.session.cycle_key()\n    if hasattr(user, \"get_session_auth_hash\") and request.user == user:\n        # Unpack the tuple of primary hash and fallback hashes\n        primary_hash, fallback_hashes = user.get_session_auth_hash()\n        # Store the primary hash in the session\n        request.session[HASH_SESSION_KEY] = primary_hash\n        # Optionally, store fallback hashes in the session as well\n        # This step depends on how the session verification logic is implemented\n        # and may require additional changes elsewhere in the codebase\n```\n\n- Ensure that the session verification logic (not provided in the snippets) checks the session hash against both the primary hash and the fallback hashes.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__5.0/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__5.0/tree//django/contrib/auth)- [Lines 153 - 179](https://github.com/testbed/django__django__5.0/blob//django/contrib/auth/base_user.py#L153-L179)\n\n This snippet contains the implementation of get_session_auth_fallback_hash which is directly related to the use of SECRET_KEY_FALLBACKS for session authentication.\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [utils](https://github.com/testbed/django__django__5.0/tree//django/utils)- [Lines 1 - 76](https://github.com/testbed/django__django__5.0/blob//django/utils/crypto.py#L1-L76)\n\n This snippet includes the salted_hmac function which is mentioned in the issue description as not being called with the secret keyword argument, which is crucial for the SECRET_KEY_FALLBACKS mechanism.\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__5.0/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__5.0/tree//django/contrib/auth)- [Lines 256 - 272](https://github.com/testbed/django__django__5.0/blob//django/contrib/auth/__init__.py#L256-L272)\n\n This snippet shows the update_session_auth_hash function which is responsible for updating the session hash when a user's password is changed. It may be relevant to understand how session hashes are managed during password changes."
+    }
+}

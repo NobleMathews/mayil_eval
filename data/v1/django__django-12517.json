@@ -1,0 +1,206 @@
+{
+    "id": "django__django-12517",
+    "repo_name": "testbed/django__django__3.1",
+    "task_id": 4564397319751887535,
+    "title": "Inconsistent datetime logging from runserver.",
+    "body": "Description\n\t\nIn Django 1.11 and higher, the runserver logging can sometimes be inconsistent.\n[16/Apr/2018 13:32:35] \"GET /some/local/url HTTP/1.1\" 200 7927\n[2018-04-16 13:32:35,745] - Broken pipe from ('127.0.0.1', 57570)\nThis is because logging from WSGIRequestHandler uses server_time as calculated using BaseHTTPServer.log_date_time_string. On the other hand, WSGIServer uses logging without providing a server_time. This gets \"fixed\" in ServerFormatter.format using self.formatTime(record, self.datefmt), which uses a completely different format.\nCurrently we make this at least consistent by providing the datefmt parameter when constructing the logger, but it would be better if they were coded to be in sync (and configurable?).\n(Looking into it further, it looks like we should be using %(asctime)s instead of %(server_time)s, but would be good if that were the suggested default. In \u200bhttps://docs.djangoproject.com/en/2.0/releases/1.10/#runserver-output-goes-through-logging we see %(server_time)s.)\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.1.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `WSGIRequestHandler.log_message` method to use `%(asctime)s` instead of `%(server_time)s` for consistent datetime formatting.\n- Update the `ServerFormatter` class to use a consistent `datefmt` for both `WSGIRequestHandler` and `WSGIServer`.\n- Ensure that the `ServerFormatter.format` method uses `self.formatTime(record, self.datefmt)` to apply the `datefmt`.\n- In the `runserver` command logging setup, specify the `datefmt` parameter when constructing the logger to match the desired datetime format.\n- If `ServerFormatter` is not explicitly defined in the codebase, create a new formatter class that inherits from `logging.Formatter` and overrides the `format` method to use the consistent datetime format.\n- Replace any hardcoded `server_time` in the logging calls with `asctime` to ensure the logger uses the formatter's datetime format.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.1/tree//django/core) \u2192 [servers](https://github.com/testbed/django__django__3.1/tree//django/core/servers)- [Lines 1 - 83](https://github.com/testbed/django__django__3.1/blob//django/core/servers/basehttp.py#L1-L83)\n\n This file contains the WSGIServer class which is mentioned in the issue as using logging without providing a server_time. Changes here could make the logging consistent. \n\n\n   - [Lines 176 - 252](https://github.com/testbed/django__django__3.1/blob//django/core/servers/basehttp.py#L176-L252)\n\n This file contains the WSGIRequestHandler class which uses server_time for logging. Modifying the log_message method to use a consistent datetime format could resolve the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.1/tree//django/core) \u2192 [management](https://github.com/testbed/django__django__3.1/tree//django/core/management) \u2192 [commands](https://github.com/testbed/django__django__3.1/tree//django/core/management/commands)- [Lines 1 - 186](https://github.com/testbed/django__django__3.1/blob//django/core/management/commands/runserver.py#L1-L186)\n\n This file contains the runserver command implementation and may need to be reviewed to ensure that the logging format is consistent and configurable as mentioned in the issue.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0009895,
+        "snippet_processor": 0.046430000000000006,
+        "issue_star_creation": 0.04236,
+        "issue_star_solver": 0.05262,
+        "bouncer": 0.024470000000000002
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711731397.803581,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"\nHTTP server that implements the Python WSGI protocol (PEP 333, rev 1.21).\n\nBased on wsgiref.simple_server which is part of the standard library since 2.5.\n\nThis is a simple server for use in testing or debugging Django apps. It hasn't\nbeen reviewed for security issues. DON'T USE IT FOR PRODUCTION USE!\n\"\"\"\n\nimport logging\nimport socket\nimport socketserver\nimport sys\nfrom collections import deque\nfrom wsgiref import simple_server\n\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.core.handlers.wsgi import LimitedStream\nfrom django.core.wsgi import get_wsgi_application\nfrom django.db import connections\nfrom django.utils.module_loading import import_string\n\n__all__ = (\"WSGIServer\", \"WSGIRequestHandler\")\n\nlogger = logging.getLogger(\"django.server\")\n\n\ndef get_internal_wsgi_application():\n    \"\"\"\n    Load and return the WSGI application as configured by the user in\n    ``settings.WSGI_APPLICATION``. With the default ``startproject`` layout,\n    this will be the ``application`` object in ``projectname/wsgi.py``.\n\n    This function, and the ``WSGI_APPLICATION`` setting itself, are only useful\n    for Django's internal server (runserver); external WSGI servers should just\n    be configured to point to the correct application object directly.\n\n    If settings.WSGI_APPLICATION is not set (is ``None``), return\n    whatever ``django.core.wsgi.get_wsgi_application`` returns.\n    \"\"\"\n    from django.conf import settings\n\n    app_path = getattr(settings, \"WSGI_APPLICATION\")\n    if app_path is None:\n        return get_wsgi_application()\n\n    try:\n        return import_string(app_path)\n    except ImportError as err:\n        raise ImproperlyConfigured(\n            \"WSGI application '%s' could not be loaded; \"\n            \"Error importing module.\" % app_path\n        ) from err\n\n\ndef is_broken_pipe_error():\n    exc_type, _, _ = sys.exc_info()\n    return issubclass(\n        exc_type,\n        (\n            BrokenPipeError,\n            ConnectionAbortedError,\n            ConnectionResetError,\n        ),\n    )\n\n\nclass WSGIServer(simple_server.WSGIServer):\n    \"\"\"BaseHTTPServer that implements the Python WSGI protocol\"\"\"\n\n    request_queue_size = 10\n\n    def __init__(self, *args, ipv6=False, allow_reuse_address=True, **kwargs):\n        if ipv6:\n            self.address_family = socket.AF_INET6\n        self.allow_reuse_address = allow_reuse_address\n        super().__init__(*args, **kwargs)\n\n    def handle_error(self, request, client_address):\n        if is_broken_pipe_error():\n            logger.info(\"- Broken pipe from %s\", client_address)\n        else:\n            super().handle_error(request, client_address)",
+                "filename": "django/core/servers/basehttp.py",
+                "start_index": 0,
+                "end_index": 2652,
+                "start_line": 1,
+                "end_line": 83,
+                "max_line": 281,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "import errno\nimport os\nimport re\nimport socket\nimport sys\nfrom datetime import datetime\n\nfrom django.conf import settings\nfrom django.core.management.base import BaseCommand, CommandError\nfrom django.core.servers.basehttp import WSGIServer, get_internal_wsgi_application, run\nfrom django.utils import autoreload\nfrom django.utils.regex_helper import _lazy_re_compile\n\nnaiveip_re = _lazy_re_compile(\n    r\"\"\"^(?:\n(?P<addr>\n    (?P<ipv4>\\d{1,3}(?:\\.\\d{1,3}){3}) |         # IPv4 address\n    (?P<ipv6>\\[[a-fA-F0-9:]+\\]) |               # IPv6 address\n    (?P<fqdn>[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*) # FQDN\n):)?(?P<port>\\d+)$\"\"\",\n    re.X,\n)",
+                "filename": "django/core/management/commands/runserver.py",
+                "start_index": 0,
+                "end_index": 637,
+                "start_line": 1,
+                "end_line": 186,
+                "max_line": 186,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "import datetime\nimport logging\nimport os\nimport shutil\nimport tempfile\n\nfrom django.conf import settings\nfrom django.contrib.sessions.backends.base import (\n    VALID_KEY_CHARS,\n    CreateError,\n    SessionBase,\n    UpdateError,\n)\nfrom django.contrib.sessions.exceptions import InvalidSessionKey\nfrom django.core.exceptions import ImproperlyConfigured, SuspiciousOperation",
+                "filename": "django/contrib/sessions/backends/file.py",
+                "start_index": 0,
+                "end_index": 372,
+                "start_line": 1,
+                "end_line": 15,
+                "max_line": 210,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "import logging\n\nfrom django.contrib.sessions.backends.base import CreateError, SessionBase, UpdateError\nfrom django.core.exceptions import SuspiciousOperation\nfrom django.db import DatabaseError, IntegrityError, router, transaction\nfrom django.utils import timezone\nfrom django.utils.functional import cached_property",
+                "filename": "django/contrib/sessions/backends/db.py",
+                "start_index": 0,
+                "end_index": 317,
+                "start_line": 1,
+                "end_line": 7,
+                "max_line": 110,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "import datetime\nimport decimal\nimport functools\nimport logging\nimport time\nfrom contextlib import contextmanager\nfrom hashlib import md5\n\nfrom django.db import NotSupportedError\nfrom django.utils.dateparse import parse_time\n\nlogger = logging.getLogger(\"django.db.backends\")",
+                "filename": "django/db/backends/utils.py",
+                "start_index": 0,
+                "end_index": 273,
+                "start_line": 1,
+                "end_line": 12,
+                "max_line": 320,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "import _thread\nimport copy\nimport datetime\nimport logging\nimport threading\nimport time\nimport warnings\nimport zoneinfo\nfrom collections import deque\nfrom contextlib import contextmanager\n\nfrom django.conf import settings\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.db import DEFAULT_DB_ALIAS, DatabaseError, NotSupportedError\nfrom django.db.backends import utils\nfrom django.db.backends.base.validation import BaseDatabaseValidation\nfrom django.db.backends.signals import connection_created\nfrom django.db.backends.utils import debug_transaction\nfrom django.db.transaction import TransactionManagementError\nfrom django.db.utils import DatabaseErrorWrapper\nfrom django.utils.asyncio import async_unsafe\nfrom django.utils.functional import cached_property\n\nNO_DB_ALIAS = \"__no_db__\"\nRAN_DB_VERSION_CHECK = set()\n\nlogger = logging.getLogger(\"django.db.backends.base\")",
+                "filename": "django/db/backends/base/base.py",
+                "start_index": 0,
+                "end_index": 888,
+                "start_line": 1,
+                "end_line": 27,
+                "max_line": 788,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "class ServerHandler(simple_server.ServerHandler):\n    http_version = \"1.1\"\n\n    def __init__(self, stdin, stdout, stderr, environ, **kwargs):\n        \"\"\"\n        Use a LimitedStream so that unread request data will be ignored at\n        the end of the request. WSGIRequest uses a LimitedStream but it\n        shouldn't discard the data since the upstream servers usually do this.\n        This fix applies only for testserver/runserver.\n        \"\"\"\n        try:\n            content_length = int(environ.get(\"CONTENT_LENGTH\"))\n        except (ValueError, TypeError):\n            content_length = 0\n        super().__init__(\n            LimitedStream(stdin, content_length), stdout, stderr, environ, **kwargs\n        )\n\n    def cleanup_headers(self):\n        super().cleanup_headers()\n        if (\n            self.environ[\"REQUEST_METHOD\"] == \"HEAD\"\n            and \"Content-Length\" in self.headers\n        ):\n            del self.headers[\"Content-Length\"]\n        # HTTP/1.1 requires support for persistent connections. Send 'close' if\n        # the content length is unknown to prevent clients from reusing the\n        # connection.\n        if (\n            self.environ[\"REQUEST_METHOD\"] != \"HEAD\"\n            and \"Content-Length\" not in self.headers\n        ):\n            self.headers[\"Connection\"] = \"close\"\n        # Persistent connections require threading server.\n        elif not isinstance(self.request_handler.server, socketserver.ThreadingMixIn):\n            self.headers[\"Connection\"] = \"close\"\n        # Mark the connection for closing if it's set as such above or if the\n        # application sent the header.\n        if self.headers.get(\"Connection\") == \"close\":\n            self.request_handler.close_connection = True\n\n    def close(self):\n        self.get_stdin().read()\n        super().close()\n\n    def finish_response(self):\n        if self.environ[\"REQUEST_METHOD\"] == \"HEAD\":\n            try:\n                deque(self.result, maxlen=0)  # Consume iterator.\n                # Don't call self.finish_content() as, if the headers have not\n                # been sent and Content-Length isn't set, it'll default to \"0\"\n                # which will prevent omission of the Content-Length header with\n                # HEAD requests as permitted by RFC 9110 Section 9.3.2.\n                # Instead, send the headers, if not sent yet.\n                if not self.headers_sent:\n                    self.send_headers()\n            finally:\n                self.close()\n        else:\n            super().finish_response()",
+                "filename": "django/core/servers/basehttp.py",
+                "start_index": 3688,
+                "end_index": 6224,
+                "start_line": 114,
+                "end_line": 173,
+                "max_line": 281,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "import logging\nimport string\nfrom datetime import datetime, timedelta\n\nfrom django.conf import settings\nfrom django.core import signing\nfrom django.utils import timezone\nfrom django.utils.crypto import get_random_string\nfrom django.utils.module_loading import import_string\n\n# session_key should not be case sensitive because some backends can store it\n# on case insensitive file systems.\nVALID_KEY_CHARS = string.ascii_lowercase + string.digits\n\n\nclass CreateError(Exception):\n    \"\"\"\n    Used internally as a consistent exception type to catch from save (see the\n    docstring for SessionBase.save() for details).\n    \"\"\"\n\n    pass\n\n\nclass UpdateError(Exception):\n    \"\"\"\n    Occurs if Django tries to update a session that was deleted.\n    \"\"\"\n\n    pass",
+                "filename": "django/contrib/sessions/backends/base.py",
+                "start_index": 0,
+                "end_index": 756,
+                "start_line": 1,
+                "end_line": 270,
+                "max_line": 365,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "class WSGIRequestHandler(simple_server.WSGIRequestHandler):\n    protocol_version = \"HTTP/1.1\"\n\n    def address_string(self):\n        # Short-circuit parent method to not call socket.getfqdn\n        return self.client_address[0]\n\n    def log_message(self, format, *args):\n        extra = {\n            \"request\": self.request,\n            \"server_time\": self.log_date_time_string(),\n        }\n        if args[1][0] == \"4\":\n            # 0x16 = Handshake, 0x03 = SSL 3.0 or TLS 1.x\n            if args[0].startswith(\"\\x16\\x03\"):\n                extra[\"status_code\"] = 500\n                logger.error(\n                    \"You're accessing the development server over HTTPS, but \"\n                    \"it only supports HTTP.\",\n                    extra=extra,\n                )\n                return\n\n        if args[1].isdigit() and len(args[1]) == 3:\n            status_code = int(args[1])\n            extra[\"status_code\"] = status_code\n\n            if status_code >= 500:\n                level = logger.error\n            elif status_code >= 400:\n                level = logger.warning\n            else:\n                level = logger.info\n        else:\n            level = logger.info\n\n        level(format, *args, extra=extra)\n\n    def get_environ(self):\n        # Strip all headers with underscores in the name before constructing\n        # the WSGI environ. This prevents header-spoofing based on ambiguity\n        # between underscores and dashes both normalized to underscores in WSGI\n        # env vars. Nginx and Apache 2.4+ both do this as well.\n        for k in self.headers:\n            if \"_\" in k:\n                del self.headers[k]\n\n        return super().get_environ()\n\n    def handle(self):\n        self.close_connection = True\n        self.handle_one_request()\n        while not self.close_connection:\n            self.handle_one_request()\n        try:\n            self.connection.shutdown(socket.SHUT_WR)\n        except (AttributeError, OSError):\n            pass\n\n    def handle_one_request(self):\n        \"\"\"Copy of WSGIRequestHandler.handle() but with different ServerHandler\"\"\"\n        self.raw_requestline = self.rfile.readline(65537)\n        if len(self.raw_requestline) > 65536:\n            self.requestline = \"\"\n            self.request_version = \"\"\n            self.command = \"\"\n            self.send_error(414)\n            return\n\n        if not self.parse_request():  # An error code has been sent, just exit\n            return\n\n        handler = ServerHandler(\n            self.rfile, self.wfile, self.get_stderr(), self.get_environ()\n        )\n        handler.request_handler = self  # backpointer for logging & connection closing\n        handler.run(self.server.get_app())",
+                "filename": "django/core/servers/basehttp.py",
+                "start_index": 6227,
+                "end_index": 8933,
+                "start_line": 176,
+                "end_line": 252,
+                "max_line": 281,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "# This file is distributed under the same license as the Django package.\n#\n# The *_FORMAT strings use the Django date format syntax,\n# see https://docs.djangoproject.com/en/dev/ref/templates/builtins/#date\nDATE_FORMAT = \"d F Y\"\nTIME_FORMAT = \"g:i A\"\n# DATETIME_FORMAT =\n# YEAR_MONTH_FORMAT =\n# MONTH_DAY_FORMAT =\nSHORT_DATE_FORMAT = \"j M Y\"\n# SHORT_DATETIME_FORMAT =\n# FIRST_DAY_OF_WEEK =\n\n# The *_INPUT_FORMATS strings use the Python strftime format syntax,\n# see https://docs.python.org/library/datetime.html#strftime-strptime-behavior\n# DATE_INPUT_FORMATS =\n# TIME_INPUT_FORMATS =\n# DATETIME_INPUT_FORMATS =\n# DECIMAL_SEPARATOR =\n# THOUSAND_SEPARATOR =\n# NUMBER_GROUPING =",
+                "filename": "django/conf/locale/mn/formats.py",
+                "start_index": 0,
+                "end_index": 675,
+                "start_line": 1,
+                "end_line": 21,
+                "max_line": 21,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/core/servers/basehttp.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nHTTP server that implements the Python WSGI protocol (PEP 333, rev 1.21).\n\nBased on wsgiref.simple_server which is part of the standard library since 2.5.\n\nThis is a simple server for use in testing or debugging Django apps. It hasn't\nbeen reviewed for security issues. DON'T USE IT FOR PRODUCTION USE!\n\"\"\"\n\nimport logging\nimport socket\nimport socketserver\nimport sys\nfrom collections import deque\nfrom wsgiref import simple_server\n\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.core.handlers.wsgi import LimitedStream\nfrom django.core.wsgi import get_wsgi_application\nfrom django.db import connections\nfrom django.utils.module_loading import import_string\n\n__all__ = (\"WSGIServer\", \"WSGIRequestHandler\")\n\nlogger = logging.getLogger(\"django.server\")\n\n\ndef get_internal_wsgi_application():\n    \"\"\"\n    Load and return the WSGI application as configured by the user in\n    ``settings.WSGI_APPLICATION``. With the default ``startproject`` layout,\n    this will be the ``application`` object in ``projectname/wsgi.py``.\n\n    This function, and the ``WSGI_APPLICATION`` setting itself, are only useful\n    for Django's internal server (runserver); external WSGI servers should just\n    be configured to point to the correct application object directly.\n\n    If settings.WSGI_APPLICATION is not set (is ``None``), return\n    whatever ``django.core.wsgi.get_wsgi_application`` returns.\n    \"\"\"\n    from django.conf import settings\n\n    app_path = getattr(settings, \"WSGI_APPLICATION\")\n    if app_path is None:\n        return get_wsgi_application()\n\n    try:\n        return import_string(app_path)\n    except ImportError as err:\n        raise ImproperlyConfigured(\n            \"WSGI application '%s' could not be loaded; \"\n            \"Error importing module.\" % app_path\n        ) from err\n\n\ndef is_broken_pipe_error():\n    exc_type, _, _ = sys.exc_info()\n    return issubclass(\n        exc_type,\n        (\n            BrokenPipeError,\n            ConnectionAbortedError,\n            ConnectionResetError,\n        ),\n    )\n\n\nclass WSGIServer(simple_server.WSGIServer):\n    \"\"\"BaseHTTPServer that implements the Python WSGI protocol\"\"\"\n\n    request_queue_size = 10\n\n    def __init__(self, *args, ipv6=False, allow_reuse_address=True, **kwargs):\n        if ipv6:\n            self.address_family = socket.AF_INET6\n        self.allow_reuse_address = allow_reuse_address\n        super().__init__(*args, **kwargs)\n\n    def handle_error(self, request, client_address):\n        if is_broken_pipe_error():\n            logger.info(\"- Broken pipe from %s\", client_address)\n        else:\n            super().handle_error(request, client_address)",
+                        "filename": "django/core/servers/basehttp.py",
+                        "start_index": 0,
+                        "end_index": 2652,
+                        "start_line": 1,
+                        "end_line": 83,
+                        "max_line": 281,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This file contains the WSGIServer class which is mentioned in the issue as using logging without providing a server_time. Changes here could make the logging consistent."
+                },
+                {
+                    "chunk": {
+                        "code": "class WSGIRequestHandler(simple_server.WSGIRequestHandler):\n    protocol_version = \"HTTP/1.1\"\n\n    def address_string(self):\n        # Short-circuit parent method to not call socket.getfqdn\n        return self.client_address[0]\n\n    def log_message(self, format, *args):\n        extra = {\n            \"request\": self.request,\n            \"server_time\": self.log_date_time_string(),\n        }\n        if args[1][0] == \"4\":\n            # 0x16 = Handshake, 0x03 = SSL 3.0 or TLS 1.x\n            if args[0].startswith(\"\\x16\\x03\"):\n                extra[\"status_code\"] = 500\n                logger.error(\n                    \"You're accessing the development server over HTTPS, but \"\n                    \"it only supports HTTP.\",\n                    extra=extra,\n                )\n                return\n\n        if args[1].isdigit() and len(args[1]) == 3:\n            status_code = int(args[1])\n            extra[\"status_code\"] = status_code\n\n            if status_code >= 500:\n                level = logger.error\n            elif status_code >= 400:\n                level = logger.warning\n            else:\n                level = logger.info\n        else:\n            level = logger.info\n\n        level(format, *args, extra=extra)\n\n    def get_environ(self):\n        # Strip all headers with underscores in the name before constructing\n        # the WSGI environ. This prevents header-spoofing based on ambiguity\n        # between underscores and dashes both normalized to underscores in WSGI\n        # env vars. Nginx and Apache 2.4+ both do this as well.\n        for k in self.headers:\n            if \"_\" in k:\n                del self.headers[k]\n\n        return super().get_environ()\n\n    def handle(self):\n        self.close_connection = True\n        self.handle_one_request()\n        while not self.close_connection:\n            self.handle_one_request()\n        try:\n            self.connection.shutdown(socket.SHUT_WR)\n        except (AttributeError, OSError):\n            pass\n\n    def handle_one_request(self):\n        \"\"\"Copy of WSGIRequestHandler.handle() but with different ServerHandler\"\"\"\n        self.raw_requestline = self.rfile.readline(65537)\n        if len(self.raw_requestline) > 65536:\n            self.requestline = \"\"\n            self.request_version = \"\"\n            self.command = \"\"\n            self.send_error(414)\n            return\n\n        if not self.parse_request():  # An error code has been sent, just exit\n            return\n\n        handler = ServerHandler(\n            self.rfile, self.wfile, self.get_stderr(), self.get_environ()\n        )\n        handler.request_handler = self  # backpointer for logging & connection closing\n        handler.run(self.server.get_app())",
+                        "filename": "django/core/servers/basehttp.py",
+                        "start_index": 6227,
+                        "end_index": 8933,
+                        "start_line": 176,
+                        "end_line": 252,
+                        "max_line": 281,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This file contains the WSGIRequestHandler class which uses server_time for logging. Modifying the log_message method to use a consistent datetime format could resolve the issue."
+                }
+            ],
+            "django/core/management/commands/runserver.py": [
+                {
+                    "chunk": {
+                        "code": "import errno\nimport os\nimport re\nimport socket\nimport sys\nfrom datetime import datetime\n\nfrom django.conf import settings\nfrom django.core.management.base import BaseCommand, CommandError\nfrom django.core.servers.basehttp import WSGIServer, get_internal_wsgi_application, run\nfrom django.utils import autoreload\nfrom django.utils.regex_helper import _lazy_re_compile\n\nnaiveip_re = _lazy_re_compile(\n    r\"\"\"^(?:\n(?P<addr>\n    (?P<ipv4>\\d{1,3}(?:\\.\\d{1,3}){3}) |         # IPv4 address\n    (?P<ipv6>\\[[a-fA-F0-9:]+\\]) |               # IPv6 address\n    (?P<fqdn>[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*) # FQDN\n):)?(?P<port>\\d+)$\"\"\",\n    re.X,\n)",
+                        "filename": "django/core/management/commands/runserver.py",
+                        "start_index": 0,
+                        "end_index": 637,
+                        "start_line": 1,
+                        "end_line": 186,
+                        "max_line": 186,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This file contains the runserver command implementation and may need to be reviewed to ensure that the logging format is consistent and configurable as mentioned in the issue."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `WSGIRequestHandler.log_message` method to use `%(asctime)s` instead of `%(server_time)s` for consistent datetime formatting.\n- Update the `ServerFormatter` class to use a consistent `datefmt` for both `WSGIRequestHandler` and `WSGIServer`.\n- Ensure that the `ServerFormatter.format` method uses `self.formatTime(record, self.datefmt)` to apply the `datefmt`.\n- In the `runserver` command logging setup, specify the `datefmt` parameter when constructing the logger to match the desired datetime format.\n- If `ServerFormatter` is not explicitly defined in the codebase, create a new formatter class that inherits from `logging.Formatter` and overrides the `format` method to use the consistent datetime format.\n- Replace any hardcoded `server_time` in the logging calls with `asctime` to ensure the logger uses the formatter's datetime format.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable set of steps to address the inconsistent datetime logging issue described in the PROMPT. It suggests modifying the WSGIRequestHandler.log_message method to use %(asctime)s for consistency, updating the ServerFormatter class to use a consistent datefmt, ensuring the ServerFormatter.format method applies the datefmt, specifying the datefmt parameter when constructing the logger, creating a new formatter class if ServerFormatter is not defined, and replacing hardcoded server_time with asctime. These steps are directly related to the problem and would likely resolve the inconsistency in datetime logging. The RESPONSE also references specific code snippets to check, which is helpful for locating where the changes need to be made. The only reason it does not score a 10 is that it does not explicitly mention making the datetime format configurable, which was a suggestion in the PROMPT.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711731532.8930671,
+        "result": "- Modify the `WSGIRequestHandler.log_message` method to use `%(asctime)s` instead of `%(server_time)s` for consistent datetime formatting.\n- Update the `ServerFormatter` class to use a consistent `datefmt` for both `WSGIRequestHandler` and `WSGIServer`.\n- Ensure that the `ServerFormatter.format` method uses `self.formatTime(record, self.datefmt)` to apply the `datefmt`.\n- In the `runserver` command logging setup, specify the `datefmt` parameter when constructing the logger to match the desired datetime format.\n- If `ServerFormatter` is not explicitly defined in the codebase, create a new formatter class that inherits from `logging.Formatter` and overrides the `format` method to use the consistent datetime format.\n- Replace any hardcoded `server_time` in the logging calls with `asctime` to ensure the logger uses the formatter's datetime format.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.1/tree//django/core) \u2192 [servers](https://github.com/testbed/django__django__3.1/tree//django/core/servers)- [Lines 1 - 83](https://github.com/testbed/django__django__3.1/blob//django/core/servers/basehttp.py#L1-L83)\n\n This file contains the WSGIServer class which is mentioned in the issue as using logging without providing a server_time. Changes here could make the logging consistent. \n\n\n   - [Lines 176 - 252](https://github.com/testbed/django__django__3.1/blob//django/core/servers/basehttp.py#L176-L252)\n\n This file contains the WSGIRequestHandler class which uses server_time for logging. Modifying the log_message method to use a consistent datetime format could resolve the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.1/tree//django/core) \u2192 [management](https://github.com/testbed/django__django__3.1/tree//django/core/management) \u2192 [commands](https://github.com/testbed/django__django__3.1/tree//django/core/management/commands)- [Lines 1 - 186](https://github.com/testbed/django__django__3.1/blob//django/core/management/commands/runserver.py#L1-L186)\n\n This file contains the runserver command implementation and may need to be reviewed to ensure that the logging format is consistent and configurable as mentioned in the issue."
+    }
+}

@@ -1,0 +1,206 @@
+{
+    "id": "django__django-13128",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 5755682180266488785,
+    "title": "make temporal subtraction work without ExpressionWrapper",
+    "body": "Description\n\t\nclass Experiment(models.Model):\n\tstart = models.DateTimeField()\n\tend = models.DateTimeField()\nExperiment.objects.annotate(\n\tdelta=F('end') - F('start') + Value(datetime.timedelta(), output_field=DurationField())\n)\nThis gives:\ndjango.core.exceptions.FieldError: Expression contains mixed types: DateTimeField, DurationField. You must set output_field.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0001885,
+        "snippet_processor": 0.04465,
+        "issue_star_creation": 0.01902,
+        "issue_star_solver": 0.04778,
+        "bouncer": 0.02139
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711727210.213048,
+        "relevant_snippets": [
+            {
+                "code": "class DurationExpression(CombinedExpression):\n    def compile(self, side, compiler, connection):\n        try:\n            output = side.output_field\n        except FieldError:\n            pass\n        else:\n            if output.get_internal_type() == \"DurationField\":\n                sql, params = compiler.compile(side)\n                return connection.ops.format_for_duration_arithmetic(sql), params\n        return compiler.compile(side)\n\n    def as_sql(self, compiler, connection):\n        if connection.features.has_native_duration_field:\n            return super().as_sql(compiler, connection)\n        connection.ops.check_expression_support(self)\n        expressions = []\n        expression_params = []\n        sql, params = self.compile(self.lhs, compiler, connection)\n        expressions.append(sql)\n        expression_params.extend(params)\n        sql, params = self.compile(self.rhs, compiler, connection)\n        expressions.append(sql)\n        expression_params.extend(params)\n        # order of precedence\n        expression_wrapper = \"(%s)\"\n        sql = connection.ops.combine_duration_expression(self.connector, expressions)\n        return expression_wrapper % sql, expression_params\n\n    def as_sqlite(self, compiler, connection, **extra_context):\n        sql, params = self.as_sql(compiler, connection, **extra_context)\n        if self.connector in {Combinable.MUL, Combinable.DIV}:\n            try:\n                lhs_type = self.lhs.output_field.get_internal_type()\n                rhs_type = self.rhs.output_field.get_internal_type()\n            except (AttributeError, FieldError):\n                pass\n            else:\n                allowed_fields = {\n                    \"DecimalField\",\n                    \"DurationField\",\n                    \"FloatField\",\n                    \"IntegerField\",\n                }\n                if lhs_type not in allowed_fields or rhs_type not in allowed_fields:\n                    raise DatabaseError(\n                        f\"Invalid arguments for operator {self.connector}.\"\n                    )\n        return sql, params\n\n\nclass TemporalSubtraction(CombinedExpression):\n    output_field = fields.DurationField()\n\n    def __init__(self, lhs, rhs):\n        super().__init__(lhs, self.SUB, rhs)\n\n    def as_sql(self, compiler, connection):\n        connection.ops.check_expression_support(self)\n        lhs = compiler.compile(self.lhs)\n        rhs = compiler.compile(self.rhs)\n        return connection.ops.subtract_temporals(\n            self.lhs.output_field.get_internal_type(), lhs, rhs\n        )",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 24917,
+                "end_index": 27485,
+                "start_line": 743,
+                "end_line": 1847,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.db.models import DecimalField, DurationField, Func\n\n\nclass IntervalToSeconds(Func):\n    function = \"\"\n    template = \"\"\"\n    EXTRACT(day from %(expressions)s) * 86400 +\n    EXTRACT(hour from %(expressions)s) * 3600 +\n    EXTRACT(minute from %(expressions)s) * 60 +\n    EXTRACT(second from %(expressions)s)\n    \"\"\"\n\n    def __init__(self, expression, *, output_field=None, **extra):\n        super().__init__(\n            expression, output_field=output_field or DecimalField(), **extra\n        )\n\n\nclass SecondsToInterval(Func):\n    function = \"NUMTODSINTERVAL\"\n    template = \"%(function)s(%(expressions)s, 'SECOND')\"\n\n    def __init__(self, expression, *, output_field=None, **extra):\n        super().__init__(\n            expression, output_field=output_field or DurationField(), **extra\n        )",
+                "filename": "django/db/backends/oracle/functions.py",
+                "start_index": 0,
+                "end_index": 811,
+                "start_line": 1,
+                "end_line": 26,
+                "max_line": 26,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    Store timedelta objects.\n\n    Use interval on PostgreSQL, INTERVAL DAY TO SECOND on Oracle, and bigint\n    of microseconds on other databases.\n    \"\"\"\n\n    empty_strings_allowed = False\n    default_error_messages = {\n        \"invalid\": _(\n            \"\u201c%(value)s\u201d value has an invalid format. It must be in \"\n            \"[DD] [[HH:]MM:]ss[.uuuuuu] format.\"\n        )\n    }\n    description = _(\"Duration\")\n\n    def get_internal_type(self):\n        return \"DurationField\"\n\n    def to_python(self, value):\n        if value is None:\n            return value\n        if isinstance(value, datetime.timedelta):\n            return value\n        try:\n            parsed = parse_duration(value)\n        except ValueError:\n            pass\n        else:\n            if parsed is not None:\n                return parsed\n\n        raise exceptions.ValidationError(\n            self.error_messages[\"invalid\"],\n            code=\"invalid\",\n            params={\"value\": value},\n        )\n\n    def get_db_prep_value(self, value, connection, prepared=False):\n        if connection.features.has_native_duration_field:\n            return value\n        if value is None:\n            return None\n        return duration_microseconds(value)\n\n    def get_db_converters(self, connection):\n        converters = []\n        if not connection.features.has_native_duration_field:\n            converters.append(connection.ops.convert_durationfield_value)\n        return converters + super().get_db_converters(connection)\n\n    def value_to_string(self, obj):\n        val = self.value_from_object(obj)\n        return \"\" if val is None else duration_string(val)\n\n    def formfield(self, **kwargs):\n        return super().formfield(\n            **{\n                \"form_class\": forms.DurationField,\n                **kwargs,\n            }\n        )\n\n\nclass EmailField(CharField):\n    default_validators = [validators.validate_email]\n    description = _(\"Email address\")\n\n    def __init__(self, *args, **kwargs):\n        # max_length=254 to be compliant with RFCs 3696 and 5321\n        kwargs.setdefault(\"max_length\", 254)\n        super().__init__(*args, **kwargs)\n\n    def deconstruct(self):\n        name, path, args, kwargs = super().deconstruct()\n        # We do not exclude max_length if it matches default as we want to change\n        # the default in future.\n        return name, path, args, kwargs\n\n    def formfield(self, **kwargs):\n        # As with CharField, this will cause email validation to be performed\n        # twice.\n        return super().formfield(\n            **{\n                \"form_class\": forms.EmailField,\n                **kwargs,\n            }\n        )\n\n\nclass FilePathField(Field):\n    d",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 65299,
+                "end_index": 67990,
+                "start_line": 115,
+                "end_line": 2868,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "{\n        Combinable.SUB: [\n            # Date/DateTimeField.\n            (fields.DateField, fields.DurationField, fields.DateTimeField),\n            (fields.DateTimeField, fields.DurationField, fields.DateTimeField),\n            (fields.DateField, fields.DateField, fields.DurationField),\n            (fields.DateField, fields.DateTimeField, fields.DurationField),\n            (fields.DateTimeField, fields.DateField, fields.DurationField),\n            (fields.DateTimeField, fields.DateTimeField, fields.DurationField),\n            # DurationField.\n            (fields.DurationField, fields.DurationField, fields.DurationField),\n            # TimeField.\n            (fields.TimeField, fields.DurationField, fields.TimeField),\n            (fields.TimeField, fields.TimeField, fields.DurationField),\n        ],\n    },\n]",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 19433,
+                "end_index": 20252,
+                "start_line": 218,
+                "end_line": 1853,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from datetime import datetime\n\nfrom django.conf import settings\nfrom django.db.models.expressions import Func\nfrom django.db.models.fields import (\n    DateField,\n    DateTimeField,\n    DurationField,\n    Field,\n    IntegerField,\n    TimeField,\n)\nfrom django.db.models.lookups import (\n    Transform,\n    YearExact,\n    YearGt,\n    YearGte,\n    YearLt,\n    YearLte,\n)\nfrom django.utils import timezone\n\n\nclass TimezoneMixin:\n    tzinfo = None\n\n    def get_tzname(self):\n        # Timezone conversions must happen to the input datetime *before*\n        # applying a function. 2015-12-31 23:00:00 -02:00 is stored in the\n        # database as 2016-01-01 01:00:00 +00:00. Any results should be\n        # based on the input datetime not the stored datetime.\n        tzname = None\n        if settings.USE_TZ:\n            if self.tzinfo is None:\n                tzname = timezone.get_current_timezone_name()\n            else:\n                tzname = timezone._get_timezone_name(self.tzinfo)\n        return tzname",
+                "filename": "django/db/models/functions/datetime.py",
+                "start_index": 0,
+                "end_index": 1007,
+                "start_line": 1,
+                "end_line": 38,
+                "max_line": 435,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def resolve_expression(\n        self, query=None, allow_joins=True, reuse=None, summarize=False, for_save=False\n    ):\n        copy = super().resolve_expression(\n            query, allow_joins, reuse, summarize, for_save\n        )\n        field = getattr(copy.lhs, \"output_field\", None)\n        if field is None:\n            return copy\n        if not isinstance(field, (DateField, DateTimeField, TimeField, DurationField)):\n            raise ValueError(\n                \"Extract input expression must be DateField, DateTimeField, \"\n                \"TimeField, or DurationField.\"\n            )\n        # Passing dates to functions expecting datetimes is most likely a mistake.\n        if type(field) == DateField and copy.lookup_name in (\n            \"hour\",\n            \"minute\",\n            \"second\",\n        ):\n            raise ValueError(\n                \"Cannot extract time component '%s' from DateField '%s'.\"\n                % (copy.lookup_name, field.name)\n            )\n        if isinstance(field, DurationField) and copy.lookup_name in (\n            \"year\",\n            \"iso_year\",\n            \"month\",\n            \"week\",\n            \"week_day\",\n            \"iso_week_day\",\n            \"quarter\",\n        ):\n            raise ValueError(\n                \"Cannot extract component '%s' from DurationField '%s'.\"\n                % (copy.lookup_name, field.name)\n            )\n        return copy",
+                "filename": "django/db/models/functions/datetime.py",
+                "start_index": 2903,
+                "end_index": 4310,
+                "start_line": 85,
+                "end_line": 339,
+                "max_line": 435,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "name, path, args, kwargs = super().deconstruct()\n        if self.max_digits is not None:\n            kwargs[\"max_digits\"] = self.max_digits\n        if self.decimal_places is not None:\n            kwargs[\"decimal_places\"] = self.decimal_places\n        return name, path, args, kwargs\n\n    def get_internal_type(self):\n        return \"DecimalField\"\n\n    def to_python(self, value):\n        if value is None:\n            return value\n        try:\n            if isinstance(value, float):\n                decimal_value = self.context.create_decimal_from_float(value)\n            else:\n                decimal_value = decimal.Decimal(value)\n        except (decimal.InvalidOperation, TypeError, ValueError):\n            raise exceptions.ValidationError(\n                self.error_messages[\"invalid\"],\n                code=\"invalid\",\n                params={\"value\": value},\n            )\n        if not decimal_value.is_finite():\n            raise exceptions.ValidationError(\n                self.error_messages[\"invalid\"],\n                code=\"invalid\",\n                params={\"value\": value},\n            )\n        return decimal_value\n\n    def get_db_prep_save(self, value, connection):\n        if hasattr(value, \"as_sql\"):\n            return value\n        return connection.ops.adapt_decimalfield_value(\n            self.to_python(value), self.max_digits, self.decimal_places\n        )\n\n    def get_prep_value(self, value):\n        value = super().get_prep_value(value)\n        return self.to_python(value)\n\n    def formfield(self, **kwargs):\n        return super().formfield(\n            **{\n                \"max_digits\": self.max_digits,\n                \"decimal_places\": self.decimal_places,\n                \"form_class\": forms.DecimalField,\n                **kwargs,\n            }\n        )\n\n\nclass DurationField(Field):",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 63469,
+                "end_index": 65294,
+                "start_line": 1302,
+                "end_line": 1835,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "lookup_name = None\n    output_field = IntegerField()\n\n    def __init__(self, expression, lookup_name=None, tzinfo=None, **extra):\n        if self.lookup_name is None:\n            self.lookup_name = lookup_name\n        if self.lookup_name is None:\n            raise ValueError(\"lookup_name must be provided\")\n        self.tzinfo = tzinfo\n        super().__init__(expression, **extra)\n\n    def as_sql(self, compiler, connection):\n        sql, params = compiler.compile(self.lhs)\n        lhs_output_field = self.lhs.output_field\n        if isinstance(lhs_output_field, DateTimeField):\n            tzname = self.get_tzname()\n            sql, params = connection.ops.datetime_extract_sql(\n                self.lookup_name, sql, tuple(params), tzname\n            )\n        elif self.tzinfo is not None:\n            raise ValueError(\"tzinfo can only be used with DateTimeField.\")\n        elif isinstance(lhs_output_field, DateField):\n            sql, params = connection.ops.date_extract_sql(\n                self.lookup_name, sql, tuple(params)\n            )\n        elif isinstance(lhs_output_field, TimeField):\n            sql, params = connection.ops.time_extract_sql(\n                self.lookup_name, sql, tuple(params)\n            )\n        elif isinstance(lhs_output_field, DurationField):\n            if not connection.features.has_native_duration_field:\n                raise ValueError(\n                    \"Extract requires native DurationField database support.\"\n                )\n            sql, params = connection.ops.time_extract_sql(\n                self.lookup_name, sql, tuple(params)\n            )\n        else:\n            # resolve_expression has already validated the output_field so this\n            # assert should never be hit.\n            assert False, \"Tried to Extract from an invalid type.\"\n        return sql, params",
+                "filename": "django/db/models/functions/datetime.py",
+                "start_index": 1055,
+                "end_index": 2897,
+                "start_line": 42,
+                "end_line": 282,
+                "max_line": 435,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "kind = None\n    tzinfo = None\n\n    def __init__(\n        self,\n        expression,\n        output_field=None,\n        tzinfo=None,\n        **extra,\n    ):\n        self.tzinfo = tzinfo\n        super().__init__(expression, output_field=output_field, **extra)\n\n    def as_sql(self, compiler, connection):\n        sql, params = compiler.compile(self.lhs)\n        tzname = None\n        if isinstance(self.lhs.output_field, DateTimeField):\n            tzname = self.get_tzname()\n        elif self.tzinfo is not None:\n            raise ValueError(\"tzinfo can only be used with DateTimeField.\")\n        if isinstance(self.output_field, DateTimeField):\n            sql, params = connection.ops.datetime_trunc_sql(\n                self.kind, sql, tuple(params), tzname\n            )\n        elif isinstance(self.output_field, DateField):\n            sql, params = connection.ops.date_trunc_sql(\n                self.kind, sql, tuple(params), tzname\n            )\n        elif isinstance(self.output_field, TimeField):\n            sql, params = connection.ops.time_trunc_sql(\n                self.kind, sql, tuple(params), tzname\n            )\n        else:\n            raise ValueError(\n                \"Trunc only valid on DateField, TimeField, or DateTimeField.\"\n            )\n        return sql, params",
+                "filename": "django/db/models/functions/datetime.py",
+                "start_index": 7404,
+                "end_index": 8699,
+                "start_line": 246,
+                "end_line": 282,
+                "max_line": 435,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def subtract_temporals(self, internal_type, lhs, rhs):\n        if internal_type == \"DateField\":\n            lhs_sql, lhs_params = lhs\n            rhs_sql, rhs_params = rhs\n            params = (*lhs_params, *rhs_params)\n            return \"(interval '1 day' * (%s - %s))\" % (lhs_sql, rhs_sql), params\n        return super().subtract_temporals(internal_type, lhs, rhs)\n\n    def explain_query_prefix(self, format=None, **options):\n        extra = {}\n        # Normalize options.\n        if options:\n            options = {\n                name.upper(): \"true\" if value else \"false\"\n                for name, value in options.items()\n            }\n            for valid_option in self.explain_options:\n                value = options.pop(valid_option, None)\n                if value is not None:\n                    extra[valid_option] = value\n        prefix = super().explain_query_prefix(format, **options)\n        if format:\n            extra[\"FORMAT\"] = format\n        if extra:\n            prefix += \" (%s)\" % \", \".join(\"%s %s\" % i for i in extra.items())\n        return prefix\n\n    def on_conflict_suffix_sql(self, fields, on_conflict, update_fields, unique_fields):\n        if on_conflict == OnConflict.IGNORE:\n            return \"ON CONFLICT DO NOTHING\"\n        if on_conflict == OnConflict.UPDATE:\n            return \"ON CONFLICT(%s) DO UPDATE SET %s\" % (\n                \", \".join(map(self.quote_name, unique_fields)),\n                \", \".join(\n                    [\n                        f\"{field} = EXCLUDED.{field}\"\n                        for field in map(self.quote_name, update_fields)\n                    ]\n                ),\n            )\n        return super().on_conflict_suffix_sql(\n            fields,\n            on_conflict,\n            update_fields,\n            unique_fields,\n        )\n\n    def prepare_join_on_clause(self, lhs_table, lhs_field, rhs_table, rhs_field):\n        lhs_expr, rhs_expr = super().prepare_join_on_clause(\n            lhs_table, lhs_field, rhs_table, rhs_field\n        )\n\n        if lhs_field.db_type(self.connection) != rhs_field.db_type(self.connection):\n            rhs_expr = Cast(rhs_expr, lhs_field)\n\n        return lhs_expr, rhs_expr",
+                "filename": "django/db/backends/postgresql/operations.py",
+                "start_index": 13667,
+                "end_index": 15858,
+                "start_line": 371,
+                "end_line": 426,
+                "max_line": 426,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/models/expressions.py": [
+                {
+                    "chunk": {
+                        "code": "class DurationExpression(CombinedExpression):\n    def compile(self, side, compiler, connection):\n        try:\n            output = side.output_field\n        except FieldError:\n            pass\n        else:\n            if output.get_internal_type() == \"DurationField\":\n                sql, params = compiler.compile(side)\n                return connection.ops.format_for_duration_arithmetic(sql), params\n        return compiler.compile(side)\n\n    def as_sql(self, compiler, connection):\n        if connection.features.has_native_duration_field:\n            return super().as_sql(compiler, connection)\n        connection.ops.check_expression_support(self)\n        expressions = []\n        expression_params = []\n        sql, params = self.compile(self.lhs, compiler, connection)\n        expressions.append(sql)\n        expression_params.extend(params)\n        sql, params = self.compile(self.rhs, compiler, connection)\n        expressions.append(sql)\n        expression_params.extend(params)\n        # order of precedence\n        expression_wrapper = \"(%s)\"\n        sql = connection.ops.combine_duration_expression(self.connector, expressions)\n        return expression_wrapper % sql, expression_params\n\n    def as_sqlite(self, compiler, connection, **extra_context):\n        sql, params = self.as_sql(compiler, connection, **extra_context)\n        if self.connector in {Combinable.MUL, Combinable.DIV}:\n            try:\n                lhs_type = self.lhs.output_field.get_internal_type()\n                rhs_type = self.rhs.output_field.get_internal_type()\n            except (AttributeError, FieldError):\n                pass\n            else:\n                allowed_fields = {\n                    \"DecimalField\",\n                    \"DurationField\",\n                    \"FloatField\",\n                    \"IntegerField\",\n                }\n                if lhs_type not in allowed_fields or rhs_type not in allowed_fields:\n                    raise DatabaseError(\n                        f\"Invalid arguments for operator {self.connector}.\"\n                    )\n        return sql, params\n\n\nclass TemporalSubtraction(CombinedExpression):\n    output_field = fields.DurationField()\n\n    def __init__(self, lhs, rhs):\n        super().__init__(lhs, self.SUB, rhs)\n\n    def as_sql(self, compiler, connection):\n        connection.ops.check_expression_support(self)\n        lhs = compiler.compile(self.lhs)\n        rhs = compiler.compile(self.rhs)\n        return connection.ops.subtract_temporals(\n            self.lhs.output_field.get_internal_type(), lhs, rhs\n        )",
+                        "filename": "django/db/models/expressions.py",
+                        "start_index": 24917,
+                        "end_index": 27485,
+                        "start_line": 743,
+                        "end_line": 1847,
+                        "max_line": 1890,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the DurationExpression class and its as_sql method, which seems to be directly related to the issue of performing temporal subtraction without an ExpressionWrapper. It may contain the logic that needs to be adjusted to fix the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "{\n        Combinable.SUB: [\n            # Date/DateTimeField.\n            (fields.DateField, fields.DurationField, fields.DateTimeField),\n            (fields.DateTimeField, fields.DurationField, fields.DateTimeField),\n            (fields.DateField, fields.DateField, fields.DurationField),\n            (fields.DateField, fields.DateTimeField, fields.DurationField),\n            (fields.DateTimeField, fields.DateField, fields.DurationField),\n            (fields.DateTimeField, fields.DateTimeField, fields.DurationField),\n            # DurationField.\n            (fields.DurationField, fields.DurationField, fields.DurationField),\n            # TimeField.\n            (fields.TimeField, fields.DurationField, fields.TimeField),\n            (fields.TimeField, fields.TimeField, fields.DurationField),\n        ],\n    },\n]",
+                        "filename": "django/db/models/expressions.py",
+                        "start_index": 19433,
+                        "end_index": 20252,
+                        "start_line": 218,
+                        "end_line": 1853,
+                        "max_line": 1890,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the rules for subtracting different field types, including DateTimeField and DurationField, which are relevant to the issue at hand."
+                }
+            ],
+            "django/db/models/fields/__init__.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    Store timedelta objects.\n\n    Use interval on PostgreSQL, INTERVAL DAY TO SECOND on Oracle, and bigint\n    of microseconds on other databases.\n    \"\"\"\n\n    empty_strings_allowed = False\n    default_error_messages = {\n        \"invalid\": _(\n            \"\u201c%(value)s\u201d value has an invalid format. It must be in \"\n            \"[DD] [[HH:]MM:]ss[.uuuuuu] format.\"\n        )\n    }\n    description = _(\"Duration\")\n\n    def get_internal_type(self):\n        return \"DurationField\"\n\n    def to_python(self, value):\n        if value is None:\n            return value\n        if isinstance(value, datetime.timedelta):\n            return value\n        try:\n            parsed = parse_duration(value)\n        except ValueError:\n            pass\n        else:\n            if parsed is not None:\n                return parsed\n\n        raise exceptions.ValidationError(\n            self.error_messages[\"invalid\"],\n            code=\"invalid\",\n            params={\"value\": value},\n        )\n\n    def get_db_prep_value(self, value, connection, prepared=False):\n        if connection.features.has_native_duration_field:\n            return value\n        if value is None:\n            return None\n        return duration_microseconds(value)\n\n    def get_db_converters(self, connection):\n        converters = []\n        if not connection.features.has_native_duration_field:\n            converters.append(connection.ops.convert_durationfield_value)\n        return converters + super().get_db_converters(connection)\n\n    def value_to_string(self, obj):\n        val = self.value_from_object(obj)\n        return \"\" if val is None else duration_string(val)\n\n    def formfield(self, **kwargs):\n        return super().formfield(\n            **{\n                \"form_class\": forms.DurationField,\n                **kwargs,\n            }\n        )\n\n\nclass EmailField(CharField):\n    default_validators = [validators.validate_email]\n    description = _(\"Email address\")\n\n    def __init__(self, *args, **kwargs):\n        # max_length=254 to be compliant with RFCs 3696 and 5321\n        kwargs.setdefault(\"max_length\", 254)\n        super().__init__(*args, **kwargs)\n\n    def deconstruct(self):\n        name, path, args, kwargs = super().deconstruct()\n        # We do not exclude max_length if it matches default as we want to change\n        # the default in future.\n        return name, path, args, kwargs\n\n    def formfield(self, **kwargs):\n        # As with CharField, this will cause email validation to be performed\n        # twice.\n        return super().formfield(\n            **{\n                \"form_class\": forms.EmailField,\n                **kwargs,\n            }\n        )\n\n\nclass FilePathField(Field):\n    d",
+                        "filename": "django/db/models/fields/__init__.py",
+                        "start_index": 65299,
+                        "end_index": 67990,
+                        "start_line": 115,
+                        "end_line": 2868,
+                        "max_line": 2869,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the DurationField class, including methods for converting to and from Python objects and database values. It may be necessary to understand how DurationField works to solve the issue."
+                }
+            ]
+        },
+        "solution_task": "Based on the provided information, the issue is with the annotation of a calculated duration (`delta`) using `F` expressions and `Value` without specifying the `output_field`. The error message indicates that the `output_field` must be set when there are mixed types involved, specifically `DateTimeField` and `DurationField`.\n\nTo resolve the issue, you should modify the annotation in the queryset to specify the `output_field` for the `Value` function. Here's how you can do it:\n\n```python\nfrom django.db.models import ExpressionWrapper, DurationField\n\nExperiment.objects.annotate(\n    delta=ExpressionWrapper(\n        F('end') - F('start'),\n        output_field=DurationField()\n    )\n)\n```\n\n- Use `ExpressionWrapper` to wrap the expression `F('end') - F('start')`.\n- Set `output_field=DurationField()` to specify the type of the annotated field.",
+        "bouncer_response": {
+            "score": 0,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher. RESPONSES that offer confidently incorrect solutions or irrelevant advice should be scored as 0.",
+            "supporting_evidence": "The RESPONSE fails to address the PROMPT's requirement to make temporal subtraction work without using ExpressionWrapper. Instead, the RESPONSE suggests using ExpressionWrapper, which is the opposite of what the PROMPT is asking for. The additional information provided about code snippets to check is irrelevant to the specific issue described in the PROMPT, as it does not offer a solution that avoids using ExpressionWrapper. Therefore, the RESPONSE does not provide any actionable or relevant guidance to resolve the issue as described.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711727882.287452,
+        "result": ""
+    }
+}

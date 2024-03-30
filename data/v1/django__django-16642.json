@@ -1,0 +1,189 @@
+{
+    "id": "django__django-16642",
+    "repo_name": "testbed/django__django__5.0",
+    "task_id": 7342811404292199701,
+    "title": "Improper guessing of Mime Type for \"br\" and \"Z\" file types",
+    "body": "Description\n\t\nBelow FileResponse will set the content type as text/html, even if the last file extension is \"Z' or \"br\".\nFileResponse(open('test.html.Z', 'rb'))\nFileResponse(open('test.html.br', 'rb'))\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__5.0.git",
+    "requested_commit": "",
+    "mayil_response": "- Update the `set_headers` method in `django/http/response.py` to correctly set the `Content-Type` for `.Z` and `.br` file extensions.\n- Replace the current content type guessing logic with a more accurate mapping for the `.Z` and `.br` extensions.\n- Add the correct MIME types for `.Z` and `.br` to the existing dictionary in the `set_headers` method:\n\n```python\ncontent_type = {\n    \"br\": \"application/brotli\",\n    \"Z\": \"application/x-compress\",\n    # ... other mappings ...\n}.get(encoding, content_type)\n```\n\n- Ensure that the `Content-Type` is set to the correct MIME type based on the file extension, not the encoding. The `encoding` variable in the dictionary lookup seems to be a mistake since it's meant to be the file extension. Replace `encoding` with the variable that holds the file extension, which might be derived from `filename`. If `filename` includes the extension, you can use `os.path.splitext(filename)[1].lstrip('.')` to extract it.\n\n```python\nfile_extension = os.path.splitext(filename)[1].lstrip('.')\ncontent_type = {\n    \"br\": \"application/brotli\",\n    \"Z\": \"application/x-compress\",\n    # ... other mappings ...\n}.get(file_extension, content_type)\n```\n\n- After making these changes, the `Content-Type` header should be set correctly for files with `.Z` and `.br` extensions when using `FileResponse`.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [http](https://github.com/testbed/django__django__5.0/tree//django/http)- [Lines 558 - 610](https://github.com/testbed/django__django__5.0/blob//django/http/response.py#L558-L610)\n\n This snippet contains the logic for setting the Content-Type header based on the file extension, which is where the issue with 'br' and 'Z' file types is occurring. \n\n\n   - [Lines 34 - 556](https://github.com/testbed/django__django__5.0/blob//django/http/response.py#L34-L556)\n\n This snippet initializes the FileResponse class and includes the logic for determining if a content type has been explicitly set, which is relevant to the issue.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000425,
+        "snippet_processor": 0.04505000000000001,
+        "issue_star_creation": 0.029089999999999998,
+        "issue_star_solver": 0.05791,
+        "bouncer": 0.024120000000000003
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711705848.546759,
+        "relevant_snippets": [
+            {
+                "code": "class FileResponse(StreamingHttpResponse):",
+                "filename": "django/http/response.py",
+                "start_index": 18387,
+                "end_index": 18429,
+                "start_line": 531,
+                "end_line": 531,
+                "max_line": 734,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "def set_headers(self, filelike):\n        \"\"\"\n        Set some common response headers (Content-Length, Content-Type, and\n        Content-Disposition) based on the `filelike` response content.\n        \"\"\"\n        filename = getattr(filelike, \"name\", \"\")\n        filename = filename if isinstance(filename, str) else \"\"\n        seekable = hasattr(filelike, \"seek\") and (\n            not hasattr(filelike, \"seekable\") or filelike.seekable()\n        )\n        if hasattr(filelike, \"tell\"):\n            if seekable:\n                initial_position = filelike.tell()\n                filelike.seek(0, io.SEEK_END)\n                self.headers[\"Content-Length\"] = filelike.tell() - initial_position\n                filelike.seek(initial_position)\n            elif hasattr(filelike, \"getbuffer\"):\n                self.headers[\"Content-Length\"] = (\n                    filelike.getbuffer().nbytes - filelike.tell()\n                )\n            elif os.path.exists(filename):\n                self.headers[\"Content-Length\"] = (\n                    os.path.getsize(filename) - filelike.tell()\n                )\n        elif seekable:\n            self.headers[\"Content-Length\"] = sum(\n                iter(lambda: len(filelike.read(self.block_size)), 0)\n            )\n            filelike.seek(-int(self.headers[\"Content-Length\"]), io.SEEK_END)\n\n        filename = os.path.basename(self.filename or filename)\n        if self._no_explicit_content_type:\n            if filename:\n                content_type, encoding = mimetypes.guess_type(filename)\n                # Encoding isn't set to prevent browsers from automatically\n                # uncompressing files.\n                content_type = {\n                    \"br\": \"application/x-brotli\",\n                    \"bzip2\": \"application/x-bzip\",\n                    \"compress\": \"application/x-compress\",\n                    \"gzip\": \"application/gzip\",\n                    \"xz\": \"application/x-xz\",\n                }.get(encoding, content_type)\n                self.headers[\"Content-Type\"] = (\n                    content_type or \"application/octet-stream\"\n                )\n            else:\n                self.headers[\"Content-Type\"] = \"application/octet-stream\"\n\n        if content_disposition := content_disposition_header(\n            self.as_attachment, filename\n        ):\n            self.headers[\"Content-Disposition\"] = content_disposition",
+                "filename": "django/http/response.py",
+                "start_index": 19326,
+                "end_index": 21716,
+                "start_line": 558,
+                "end_line": 610,
+                "max_line": 734,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "import zipfile\nfrom io import BytesIO\n\nfrom django.conf import settings\nfrom django.http import HttpResponse\nfrom django.template import loader\n\n# NumPy supported?\ntry:\n    import numpy\nexcept ImportError:\n    numpy = False\n\n\ndef compress_kml(kml):\n    \"Return compressed KMZ from the given KML string.\"\n    kmz = BytesIO()\n    with zipfile.ZipFile(kmz, \"a\", zipfile.ZIP_DEFLATED) as zf:\n        zf.writestr(\"doc.kml\", kml.encode(settings.DEFAULT_CHARSET))\n    kmz.seek(0)\n    return kmz.read()\n\n\ndef render_to_kml(*args, **kwargs):\n    \"Render the response as KML (using the correct MIME type).\"\n    return HttpResponse(\n        loader.render_to_string(*args, **kwargs),\n        content_type=\"application/vnd.google-earth.kml+xml\",\n    )\n\n\ndef render_to_kmz(*args, **kwargs):\n    \"\"\"\n    Compress the KML content and return as KMZ (using the correct\n    MIME type).\n    \"\"\"\n    return HttpResponse(\n        compress_kml(loader.render_to_string(*args, **kwargs)),\n        content_type=\"application/vnd.google-earth.kmz\",\n    )",
+                "filename": "django/contrib/gis/shortcuts.py",
+                "start_index": 0,
+                "end_index": 1026,
+                "start_line": 1,
+                "end_line": 40,
+                "max_line": 40,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "class ContentFile(File):\n    \"\"\"\n    A File-like object that takes just raw content, rather than an actual file.\n    \"\"\"\n\n    def __init__(self, content, name=None):\n        stream_class = StringIO if isinstance(content, str) else BytesIO\n        super().__init__(stream_class(content), name=name)\n        self.size = len(content)\n\n    def __str__(self):\n        return \"Raw content\"\n\n    def __bool__(self):\n        return True\n\n    def open(self, mode=None):\n        self.seek(0)\n        return self\n\n    def close(self):\n        pass\n\n    def write(self, data):\n        self.__dict__.pop(\"size\", None)  # Clear the computed size.\n        return self.file.write(data)\n\n\ndef endswith_cr(line):\n    \"\"\"Return True if line (a text or bytestring) ends with '\\r'.\"\"\"\n    return line.endswith(\"\\r\" if isinstance(line, str) else b\"\\r\")\n\n\ndef endswith_lf(line):\n    \"\"\"Return True if line (a text or bytestring) ends with '\\n'.\"\"\"\n    return line.endswith(\"\\n\" if isinstance(line, str) else b\"\\n\")\n\n\ndef equals_lf(line):\n    \"\"\"Return True if line (a text or bytestring) equals '\\n'.\"\"\"\n    return line == (\"\\n\" if isinstance(line, str) else b\"\\n\")",
+                "filename": "django/core/files/base.py",
+                "start_index": 3668,
+                "end_index": 4810,
+                "start_line": 121,
+                "end_line": 161,
+                "max_line": 161,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "else:\n                    # If this is neither a FIELD nor a FILE, exhaust the field\n                    # stream. Note: There could be an error here at some point,\n                    # but there will be at least two RAW types (before and\n                    # after the other boundaries). This branch is usually not\n                    # reached at all, because a missing content-disposition\n                    # header will skip the whole boundary.\n                    exhaust(field_stream)",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 13961,
+                "end_index": 14455,
+                "start_line": 234,
+                "end_line": 347,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "class SafeMIMEText(MIMEMixin, MIMEText):\n    def __init__(self, _text, _subtype=\"plain\", _charset=None):\n        self.encoding = _charset\n        MIMEText.__init__(self, _text, _subtype=_subtype, _charset=_charset)\n\n    def __setitem__(self, name, val):\n        name, val = forbid_multi_line_headers(name, val, self.encoding)\n        MIMEText.__setitem__(self, name, val)\n\n    def set_payload(self, payload, charset=None):\n        if charset == \"utf-8\" and not isinstance(charset, Charset.Charset):\n            has_long_lines = any(\n                len(line.encode()) > RFC5322_EMAIL_LINE_LENGTH_LIMIT\n                for line in payload.splitlines()\n            )\n            # Quoted-Printable encoding has the side effect of shortening long\n            # lines, if any (#22561).\n            charset = utf8_charset_qp if has_long_lines else utf8_charset\n        MIMEText.set_payload(self, payload, charset=charset)\n\n\nclass SafeMIMEMultipart(MIMEMixin, MIMEMultipart):\n    def __init__(\n        self, _subtype=\"mixed\", boundary=None, _subparts=None, encoding=None, **_params\n    ):\n        self.encoding = encoding\n        MIMEMultipart.__init__(self, _subtype, boundary, _subparts, **_params)\n\n    def __setitem__(self, name, val):\n        name, val = forbid_multi_line_headers(name, val, self.encoding)\n        MIMEMultipart.__setitem__(self, name, val)",
+                "filename": "django/core/mail/message.py",
+                "start_index": 5210,
+                "end_index": 6566,
+                "start_line": 159,
+                "end_line": 189,
+                "max_line": 495,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    A streaming HTTP response class optimized for files.\n    \"\"\"\n\n    block_size = 4096\n\n    def __init__(self, *args, as_attachment=False, filename=\"\", **kwargs):\n        self.as_attachment = as_attachment\n        self.filename = filename\n        self._no_explicit_content_type = (\n            \"content_type\" not in kwargs or kwargs[\"content_type\"] is None\n        )\n        super().__init__(*args, **kwargs)\n\n    def _set_streaming_content(self, value):\n        if not hasattr(value, \"read\"):\n            self.file_to_stream = None\n            return super()._set_streaming_content(value)\n\n        self.file_to_stream = filelike = value\n        if hasattr(filelike, \"close\"):\n            self._resource_closers.append(filelike.close)\n        value = iter(lambda: filelike.read(self.block_size), b\"\")\n        self.set_headers(filelike)\n        super()._set_streaming_content(value)",
+                "filename": "django/http/response.py",
+                "start_index": 18434,
+                "end_index": 19320,
+                "start_line": 34,
+                "end_line": 556,
+                "max_line": 734,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "class HttpResponseBase:",
+                "filename": "django/http/response.py",
+                "start_index": 3535,
+                "end_index": 3558,
+                "start_line": 102,
+                "end_line": 102,
+                "max_line": 734,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "import os\nfrom io import BytesIO, StringIO, UnsupportedOperation\n\nfrom django.core.files.utils import FileProxyMixin\nfrom django.utils.functional import cached_property",
+                "filename": "django/core/files/base.py",
+                "start_index": 0,
+                "end_index": 168,
+                "start_line": 1,
+                "end_line": 5,
+                "max_line": 161,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.utils.cache import patch_vary_headers\nfrom django.utils.deprecation import MiddlewareMixin\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.text import compress_sequence, compress_string\n\nre_accepts_gzip = _lazy_re_compile(r\"\\bgzip\\b\")\n\n\nclass GZipMiddleware(MiddlewareMixin):\n    \"\"\"\n    Compress content if the browser allows gzip compression.\n    Set the Vary header accordingly, so that caches will base their storage\n    on the Accept-Encoding header.\n    \"\"\"\n\n    max_random_bytes = 100\n\n    def process_response(self, request, response):\n        # It's not worth attempting to compress really short responses.\n        if not response.streaming and len(response.content) < 200:\n            return response\n\n        # Avoid gzipping if we've already got a content-encoding.\n        if response.has_header(\"Content-Encoding\"):\n            return response\n\n        patch_vary_headers(response, (\"Accept-Encoding\",))\n\n        ae = request.META.get(\"HTTP_ACCEPT_ENCODING\", \"\")\n        if not re_accepts_gzip.search(ae):\n            return response\n\n        if response.streaming:\n            if response.is_async:\n                # pull to lexical scope to capture fixed reference in case\n                # streaming_content is set again later.\n                orignal_iterator = response.streaming_content\n\n                async def gzip_wrapper():\n                    async for chunk in orignal_iterator:\n                        yield compress_string(\n                            chunk,\n                            max_random_bytes=self.max_random_bytes,\n                        )\n\n                response.streaming_content = gzip_wrapper()\n            else:\n                response.streaming_content = compress_sequence(\n                    response.streaming_content,\n                    max_random_bytes=self.max_random_bytes,\n                )\n            # Delete the `Content-Length` header for streaming content, because\n            # we won't know the compressed size until we stream it.\n            del response.headers[\"Content-Length\"]\n        else:\n            # Return the compressed content only if it's actually shorter.\n            compressed_content = compress_string(\n                response.content,\n                max_random_bytes=self.max_random_bytes,\n            )\n            if len(compressed_content) >= len(response.content):\n                return response\n            response.content = compressed_content\n            response.headers[\"Content-Length\"] = str(len(response.content))\n\n        # If there is a strong ETag, make it weak to fulfill the requirements\n        # of RFC 9110 Section 8.8.1 while also allowing conditional request\n        # matches on ETags.\n        etag = response.get(\"ETag\")\n        if etag and etag.startswith('\"'):\n            response.headers[\"ETag\"] = \"W/\" + etag\n        response.headers[\"Content-Encoding\"] = \"gzip\"\n\n        return response",
+                "filename": "django/middleware/gzip.py",
+                "start_index": 0,
+                "end_index": 2944,
+                "start_line": 1,
+                "end_line": 74,
+                "max_line": 74,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/http/response.py": [
+                {
+                    "chunk": {
+                        "code": "def set_headers(self, filelike):\n        \"\"\"\n        Set some common response headers (Content-Length, Content-Type, and\n        Content-Disposition) based on the `filelike` response content.\n        \"\"\"\n        filename = getattr(filelike, \"name\", \"\")\n        filename = filename if isinstance(filename, str) else \"\"\n        seekable = hasattr(filelike, \"seek\") and (\n            not hasattr(filelike, \"seekable\") or filelike.seekable()\n        )\n        if hasattr(filelike, \"tell\"):\n            if seekable:\n                initial_position = filelike.tell()\n                filelike.seek(0, io.SEEK_END)\n                self.headers[\"Content-Length\"] = filelike.tell() - initial_position\n                filelike.seek(initial_position)\n            elif hasattr(filelike, \"getbuffer\"):\n                self.headers[\"Content-Length\"] = (\n                    filelike.getbuffer().nbytes - filelike.tell()\n                )\n            elif os.path.exists(filename):\n                self.headers[\"Content-Length\"] = (\n                    os.path.getsize(filename) - filelike.tell()\n                )\n        elif seekable:\n            self.headers[\"Content-Length\"] = sum(\n                iter(lambda: len(filelike.read(self.block_size)), 0)\n            )\n            filelike.seek(-int(self.headers[\"Content-Length\"]), io.SEEK_END)\n\n        filename = os.path.basename(self.filename or filename)\n        if self._no_explicit_content_type:\n            if filename:\n                content_type, encoding = mimetypes.guess_type(filename)\n                # Encoding isn't set to prevent browsers from automatically\n                # uncompressing files.\n                content_type = {\n                    \"br\": \"application/x-brotli\",\n                    \"bzip2\": \"application/x-bzip\",\n                    \"compress\": \"application/x-compress\",\n                    \"gzip\": \"application/gzip\",\n                    \"xz\": \"application/x-xz\",\n                }.get(encoding, content_type)\n                self.headers[\"Content-Type\"] = (\n                    content_type or \"application/octet-stream\"\n                )\n            else:\n                self.headers[\"Content-Type\"] = \"application/octet-stream\"\n\n        if content_disposition := content_disposition_header(\n            self.as_attachment, filename\n        ):\n            self.headers[\"Content-Disposition\"] = content_disposition",
+                        "filename": "django/http/response.py",
+                        "start_index": 19326,
+                        "end_index": 21716,
+                        "start_line": 558,
+                        "end_line": 610,
+                        "max_line": 734,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__5.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the logic for setting the Content-Type header based on the file extension, which is where the issue with 'br' and 'Z' file types is occurring."
+                },
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    A streaming HTTP response class optimized for files.\n    \"\"\"\n\n    block_size = 4096\n\n    def __init__(self, *args, as_attachment=False, filename=\"\", **kwargs):\n        self.as_attachment = as_attachment\n        self.filename = filename\n        self._no_explicit_content_type = (\n            \"content_type\" not in kwargs or kwargs[\"content_type\"] is None\n        )\n        super().__init__(*args, **kwargs)\n\n    def _set_streaming_content(self, value):\n        if not hasattr(value, \"read\"):\n            self.file_to_stream = None\n            return super()._set_streaming_content(value)\n\n        self.file_to_stream = filelike = value\n        if hasattr(filelike, \"close\"):\n            self._resource_closers.append(filelike.close)\n        value = iter(lambda: filelike.read(self.block_size), b\"\")\n        self.set_headers(filelike)\n        super()._set_streaming_content(value)",
+                        "filename": "django/http/response.py",
+                        "start_index": 18434,
+                        "end_index": 19320,
+                        "start_line": 34,
+                        "end_line": 556,
+                        "max_line": 734,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__5.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet initializes the FileResponse class and includes the logic for determining if a content type has been explicitly set, which is relevant to the issue."
+                }
+            ]
+        },
+        "solution_task": "- Update the `set_headers` method in `django/http/response.py` to correctly set the `Content-Type` for `.Z` and `.br` file extensions.\n- Replace the current content type guessing logic with a more accurate mapping for the `.Z` and `.br` extensions.\n- Add the correct MIME types for `.Z` and `.br` to the existing dictionary in the `set_headers` method:\n\n```python\ncontent_type = {\n    \"br\": \"application/brotli\",\n    \"Z\": \"application/x-compress\",\n    # ... other mappings ...\n}.get(encoding, content_type)\n```\n\n- Ensure that the `Content-Type` is set to the correct MIME type based on the file extension, not the encoding. The `encoding` variable in the dictionary lookup seems to be a mistake since it's meant to be the file extension. Replace `encoding` with the variable that holds the file extension, which might be derived from `filename`. If `filename` includes the extension, you can use `os.path.splitext(filename)[1].lstrip('.')` to extract it.\n\n```python\nfile_extension = os.path.splitext(filename)[1].lstrip('.')\ncontent_type = {\n    \"br\": \"application/brotli\",\n    \"Z\": \"application/x-compress\",\n    # ... other mappings ...\n}.get(file_extension, content_type)\n```\n\n- After making these changes, the `Content-Type` header should be set correctly for files with `.Z` and `.br` extensions when using `FileResponse`.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE must provide precise, actionable guidance and directly address all aspects of the described bug to facilitate its resolution to receive a score of 10.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem of incorrect MIME type guessing for '.Z' and '.br' file types in Django's FileResponse. It suggests updating the 'set_headers' method in 'django/http/response.py' to include a correct mapping for these file extensions. The RESPONSE also correctly identifies that the 'encoding' variable should be replaced with the variable that holds the file extension, and it provides a Python code snippet to extract the file extension from the filename. Additionally, the RESPONSE includes the correct MIME types for the file extensions in question. The only reason it does not score a 10 is that it does not explicitly mention testing the changes to ensure they work as expected, which is an important step in the bug resolution process.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711705977.7574542,
+        "result": "- Update the `set_headers` method in `django/http/response.py` to correctly set the `Content-Type` for `.Z` and `.br` file extensions.\n- Replace the current content type guessing logic with a more accurate mapping for the `.Z` and `.br` extensions.\n- Add the correct MIME types for `.Z` and `.br` to the existing dictionary in the `set_headers` method:\n\n```python\ncontent_type = {\n    \"br\": \"application/brotli\",\n    \"Z\": \"application/x-compress\",\n    # ... other mappings ...\n}.get(encoding, content_type)\n```\n\n- Ensure that the `Content-Type` is set to the correct MIME type based on the file extension, not the encoding. The `encoding` variable in the dictionary lookup seems to be a mistake since it's meant to be the file extension. Replace `encoding` with the variable that holds the file extension, which might be derived from `filename`. If `filename` includes the extension, you can use `os.path.splitext(filename)[1].lstrip('.')` to extract it.\n\n```python\nfile_extension = os.path.splitext(filename)[1].lstrip('.')\ncontent_type = {\n    \"br\": \"application/brotli\",\n    \"Z\": \"application/x-compress\",\n    # ... other mappings ...\n}.get(file_extension, content_type)\n```\n\n- After making these changes, the `Content-Type` header should be set correctly for files with `.Z` and `.br` extensions when using `FileResponse`.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [http](https://github.com/testbed/django__django__5.0/tree//django/http)- [Lines 558 - 610](https://github.com/testbed/django__django__5.0/blob//django/http/response.py#L558-L610)\n\n This snippet contains the logic for setting the Content-Type header based on the file extension, which is where the issue with 'br' and 'Z' file types is occurring. \n\n\n   - [Lines 34 - 556](https://github.com/testbed/django__django__5.0/blob//django/http/response.py#L34-L556)\n\n This snippet initializes the FileResponse class and includes the logic for determining if a content type has been explicitly set, which is relevant to the issue."
+    }
+}

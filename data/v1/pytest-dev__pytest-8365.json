@@ -1,0 +1,174 @@
+{
+    "id": "pytest-dev__pytest-8365",
+    "repo_name": "testbed/pytest-dev__pytest__6.3",
+    "task_id": 8465475159401990877,
+    "title": "tmpdir creation fails when the username contains illegal characters for directory names",
+    "body": "`tmpdir`, `tmpdir_factory` and `tmp_path_factory` rely on `getpass.getuser()` for determining the `basetemp` directory. I found that the user name returned by `getpass.getuser()` may return characters that are not allowed for directory names. This may lead to errors while creating the temporary directory.\r\n\r\nThe situation in which I reproduced this issue was while being logged in through an ssh connection into my Windows 10 x64 Enterprise version (1909) using an OpenSSH_for_Windows_7.7p1 server. In this configuration the command `python -c \"import getpass; print(getpass.getuser())\"` returns my domain username e.g. `contoso\\john_doe` instead of `john_doe` as when logged in regularly using a local session.\r\n\r\nWhen trying to create a temp directory in pytest through e.g. `tmpdir_factory.mktemp('foobar')` this fails with the following error message:\r\n```\r\nself = WindowsPath('C:/Users/john_doe/AppData/Local/Temp/pytest-of-contoso/john_doe')\r\nmode = 511, parents = False, exist_ok = True\r\n\r\n    def mkdir(self, mode=0o777, parents=False, exist_ok=False):\r\n        \"\"\"\r\n        Create a new directory at this given path.\r\n        \"\"\"\r\n        if self._closed:\r\n            self._raise_closed()\r\n        try:\r\n>           self._accessor.mkdir(self, mode)\r\nE           FileNotFoundError: [WinError 3] The system cannot find the path specified: 'C:\\\\Users\\\\john_doe\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-contoso\\\\john_doe'\r\n\r\nC:\\Python38\\lib\\pathlib.py:1266: FileNotFoundError\r\n```\r\n\r\nI could also reproduce this without the complicated ssh/windows setup with pytest 6.2.2 using the following commands from a `cmd`:\r\n```bat\r\necho def test_tmpdir(tmpdir):>test_tmp.py\r\necho   pass>>test_tmp.py\r\nset LOGNAME=contoso\\john_doe\r\npy.test test_tmp.py\r\n```\r\n\r\nThanks for having a look at this!\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/pytest-dev__pytest__6.3.git",
+    "requested_commit": "",
+    "mayil_response": "- Verify that the username returned by `getpass.getuser()` does not contain characters invalid for a Windows directory name. Sanitize if necessary before using it to create a directory.\n- Ensure that the `mkdir` method in `pathlib.py` is called with the correct parameters, and that it can handle any special characters in the path.\n- If the `tmpdir`, `tmpdir_factory`, or `tmp_path_factory` are creating directories with the username, implement a check to sanitize or replace invalid characters in the username.\n- Check the environment variable `LOGNAME` for validity as it might be used as a fallback for `getpass.getuser()` in some cases.\n- If the issue is reproducible with SSH logins, consider using an alternative method to obtain a valid username that is compatible with Windows directory naming conventions.\n- If the `pytest-of-<username>` directory is being created, ensure that the `<username>` placeholder is being replaced with a sanitized username.\n- If the error occurs during a test that uses the `tmpdir` fixture, review the test setup to ensure that the directory creation is not using an invalid path.\n- If the `mktemp` method in `tmpdir_factory` is involved, review its implementation to ensure that it properly handles usernames with special characters and does not create invalid paths.\n\n### Code snippets to check\n\n-  \u2192 [src](https://github.com/testbed/pytest-dev__pytest__6.3/tree//src)- [Lines 1 - 10](https://github.com/testbed/pytest-dev__pytest__6.3/blob//src/py.py#L1-L10)\n\n The snippet is from 'src/py.py' which is related to the handling of 'py' library modules. Since the issue is about directory creation and 'py.path' is a module that deals with filesystem paths, it's possible that the issue might be related to the code in this file.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000784,
+        "snippet_processor": 0.050530000000000005,
+        "issue_star_creation": 0.03726,
+        "issue_star_solver": 0.03486,
+        "bouncer": 0.04079
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711734564.874374,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"\nThis script is part of the pytest release process which is triggered manually in the Actions\ntab of the repository.\n\nThe user will need to enter the base branch to start the release from (for example\n``6.1.x`` or ``main``) and if it should be a major release.\n\nThe appropriate version will be obtained based on the given branch automatically.\n\nAfter that, it will create a release using the `release` tox environment, and push a new PR.\n\n**Token**: currently the token from the GitHub Actions is used, pushed with\n`pytest bot <pytestbot@gmail.com>` commit author.\n\"\"\"\nimport argparse\nimport re\nfrom pathlib import Path\nfrom subprocess import check_call\nfrom subprocess import check_output\nfrom subprocess import run\n\nfrom colorama import Fore\nfrom colorama import init\nfrom github3.repos import Repository\n\n\nclass InvalidFeatureRelease(Exception):\n    pass\n\n\nSLUG = \"pytest-dev/pytest\"\n\nPR_BODY = \"\"\"\\\nCreated automatically from manual trigger.\n\nOnce all builds pass and it has been **approved** by one or more maintainers, the build\ncan be released by pushing a tag `{version}` to this repository.\n\"\"\"\n\n\ndef login(token: str) -> Repository:\n    import github3\n\n    github = github3.login(token=token)\n    owner, repo = SLUG.split(\"/\")\n    return github.repository(owner, repo)",
+                "filename": "scripts/prepare-release-pr.py",
+                "start_index": 0,
+                "end_index": 1281,
+                "start_line": 1,
+                "end_line": 46,
+                "max_line": 174,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "import json\nfrom pathlib import Path\n\nimport requests\n\nissues_url = \"https://api.github.com/repos/pytest-dev/pytest/issues\"\n\n\ndef get_issues():\n    issues = []\n    url = issues_url\n    while 1:\n        get_data = {\"state\": \"all\"}\n        r = requests.get(url, params=get_data)\n        data = r.json()\n        if r.status_code == 403:\n            # API request limit exceeded\n            print(data[\"message\"])\n            exit(1)\n        issues.extend(data)\n\n        # Look for next page\n        links = requests.utils.parse_header_links(r.headers[\"Link\"])\n        another_page = False\n        for link in links:\n            if link[\"rel\"] == \"next\":\n                url = link[\"url\"]\n                another_page = True\n        if not another_page:\n            return issues\n\n\ndef main(args):\n    cachefile = Path(args.cache)\n    if not cachefile.exists() or args.refresh:\n        issues = get_issues()\n        cachefile.write_text(json.dumps(issues), \"utf-8\")\n    else:\n        issues = json.loads(cachefile.read_text(\"utf-8\"))\n\n    open_issues = [x for x in issues if x[\"state\"] == \"open\"]\n\n    open_issues.sort(key=lambda x: x[\"number\"])\n    report(open_issues)\n\n\ndef _get_kind(issue):\n    labels = [label[\"name\"] for label in issue[\"labels\"]]\n    for key in (\"bug\", \"enhancement\", \"proposal\"):\n        if key in labels:\n            return key\n    return \"issue\"\n\n\ndef report(issues):\n    for issue in issues:\n        title = issue[\"title\"]\n        # body = issue[\"body\"]\n        kind = _get_kind(issue)\n        status = issue[\"state\"]\n        number = issue[\"number\"]\n        link = \"https://github.com/pytest-dev/pytest/issues/%s/\" % number\n        print(\"----\")\n        print(status, kind, link)\n        print(title)\n        # print()\n        # lines = body.split(\"\\n\")\n        # print(\"\\n\".join(lines[:3]))\n        # if len(lines) > 3 or len(body) > 240:\n        #    print(\"...\")\n    print(\"\\n\\nFound %s open issues\" % len(issues))\n\n\nif __name__ == \"__main__\":\n    import argparse\n\n    parser = argparse.ArgumentParser(\"process bitbucket issues\")\n    parser.add_argument(\n        \"--refresh\", action=\"store_true\", help=\"invalidate cache, refresh issues\"\n    )\n    parser.add_argument(\n        \"--cache\", action=\"store\", default=\"issues.json\", help=\"cache file\"\n    )\n    args = parser.parse_args()\n    main(args)",
+                "filename": "extra/get_issues.py",
+                "start_index": 0,
+                "end_index": 2321,
+                "start_line": 1,
+                "end_line": 85,
+                "max_line": 85,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "import sys\nfrom subprocess import call\n\n\ndef main():\n    \"\"\"\n    Platform agnostic wrapper script for towncrier.\n    Fixes the issue (#7251) where windows users are unable to natively run tox -e docs to build pytest docs.\n    \"\"\"\n    with open(\n        \"doc/en/_changelog_towncrier_draft.rst\", \"w\", encoding=\"utf-8\"\n    ) as draft_file:\n        return call((\"towncrier\", \"--draft\"), stdout=draft_file)\n\n\nif __name__ == \"__main__\":\n    sys.exit(main())",
+                "filename": "scripts/towncrier-draft-to-file.py",
+                "start_index": 0,
+                "end_index": 451,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 17,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "rtd:\n  project: pytest",
+                "filename": ".github/config.yml",
+                "start_index": 0,
+                "end_index": 22,
+                "start_line": 1,
+                "end_line": 2,
+                "max_line": 2,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "blank_issues_enabled: false\ncontact_links:\n  - name: \u2753 Support Question\n    url: https://github.com/pytest-dev/pytest/discussions\n    about: Use GitHub's new Discussions feature for questions",
+                "filename": ".github/ISSUE_TEMPLATE/config.yml",
+                "start_index": 0,
+                "end_index": 191,
+                "start_line": 1,
+                "end_line": 5,
+                "max_line": 5,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "# shim for pylib going away\n# if pylib is installed this file will get skipped\n# (`py/__init__.py` has higher precedence)\nimport sys\n\nimport _pytest._py.error as error\nimport _pytest._py.path as path\n\nsys.modules[\"py.error\"] = error\nsys.modules[\"py.path\"] = path",
+                "filename": "src/py.py",
+                "start_index": 0,
+                "end_index": 262,
+                "start_line": 1,
+                "end_line": 10,
+                "max_line": 10,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "# 10000 iterations, just for relative comparison\n#                      2.7.5     3.3.2\n# FilesCompleter       75.1109   69.2116\n# FastFilesCompleter    0.7383    1.0760\nimport timeit\n\nimports = [\n    \"from argcomplete.completers import FilesCompleter as completer\",\n    \"from _pytest._argcomplete import FastFilesCompleter as completer\",\n]\n\ncount = 1000  # only a few seconds\nsetup = \"%s\\nfc = completer()\"\nrun = 'fc(\"/d\")'\n\n\nif __name__ == \"__main__\":\n    print(timeit.timeit(run, setup=setup % imports[0], number=count))\n    print(timeit.timeit(run, setup=setup % imports[1], number=count))",
+                "filename": "bench/bench_argcomplete.py",
+                "start_index": 0,
+                "end_index": 593,
+                "start_line": 1,
+                "end_line": 19,
+                "max_line": 19,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "-   repo: local\n    hooks:\n    -   id: rst\n        name: rst\n        entry: rst-lint --encoding utf-8\n        files: ^(RELEASING.rst|README.rst|TIDELIFT.rst)$\n        language: python\n        additional_dependencies: [pygments, restructuredtext_lint]\n    -   id: changelogs-rst\n        name: changelog filenames\n        language: fail\n        entry: 'changelog files must be named ####.(breaking|bugfix|deprecation|doc|feature|improvement|trivial|vendor).rst'\n        exclude: changelog/(\\d+\\.(breaking|bugfix|deprecation|doc|feature|improvement|trivial|vendor).rst|README.rst|_template.rst)\n        files: ^changelog/\n    -   id: py-deprecated\n        name: py library is deprecated\n        language: pygrep\n        entry: >\n            (?x)\\bpy\\.(\n                _code\\.|\n                builtin\\.|\n                code\\.|\n                io\\.|\n                path\\.local\\.sysfind|\n                process\\.|\n                std\\.|\n                error\\.|\n                xml\\.\n            )\n        types: [python]\n    -   id: py-path-deprecated\n        name: py.path usage is deprecated\n        exclude: docs|src/_pytest/deprecated.py|testing/deprecated_test.py|src/_pytest/legacypath.py\n        language: pygrep\n        entry: \\bpy\\.path\\.local\n        types: [python]",
+                "filename": ".pre-commit-config.yaml",
+                "start_index": 2166,
+                "end_index": 3442,
+                "start_line": 73,
+                "end_line": 108,
+                "max_line": 108,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "import pytest\n\n\n@pytest.fixture(scope=\"module\", params=range(966))\ndef foo(request):\n    return request.param\n\n\ndef test_it(foo):\n    pass\n\n\ndef test_it2(foo):\n    pass",
+                "filename": "bench/manyparam.py",
+                "start_index": 0,
+                "end_index": 168,
+                "start_line": 1,
+                "end_line": 14,
+                "max_line": 14,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "import sys\n\nif __name__ == \"__main__\":\n    import cProfile\n    import pytest  # NOQA\n    import pstats\n\n    script = sys.argv[1:] if len(sys.argv) > 1 else [\"empty.py\"]\n    cProfile.run(\"pytest.cmdline.main(%r)\" % script, \"prof\")\n    p = pstats.Stats(\"prof\")\n    p.strip_dirs()\n    p.sort_stats(\"cumulative\")\n    print(p.print_stats(500))",
+                "filename": "bench/bench.py",
+                "start_index": 0,
+                "end_index": 338,
+                "start_line": 1,
+                "end_line": 13,
+                "max_line": 13,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "src/py.py": [
+                {
+                    "chunk": {
+                        "code": "# shim for pylib going away\n# if pylib is installed this file will get skipped\n# (`py/__init__.py` has higher precedence)\nimport sys\n\nimport _pytest._py.error as error\nimport _pytest._py.path as path\n\nsys.modules[\"py.error\"] = error\nsys.modules[\"py.path\"] = path",
+                        "filename": "src/py.py",
+                        "start_index": 0,
+                        "end_index": 262,
+                        "start_line": 1,
+                        "end_line": 10,
+                        "max_line": 10,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "The snippet is from 'src/py.py' which is related to the handling of 'py' library modules. Since the issue is about directory creation and 'py.path' is a module that deals with filesystem paths, it's possible that the issue might be related to the code in this file."
+                }
+            ]
+        },
+        "solution_task": "- Verify that the username returned by `getpass.getuser()` does not contain characters invalid for a Windows directory name. Sanitize if necessary before using it to create a directory.\n- Ensure that the `mkdir` method in `pathlib.py` is called with the correct parameters, and that it can handle any special characters in the path.\n- If the `tmpdir`, `tmpdir_factory`, or `tmp_path_factory` are creating directories with the username, implement a check to sanitize or replace invalid characters in the username.\n- Check the environment variable `LOGNAME` for validity as it might be used as a fallback for `getpass.getuser()` in some cases.\n- If the issue is reproducible with SSH logins, consider using an alternative method to obtain a valid username that is compatible with Windows directory naming conventions.\n- If the `pytest-of-<username>` directory is being created, ensure that the `<username>` placeholder is being replaced with a sanitized username.\n- If the error occurs during a test that uses the `tmpdir` fixture, review the test setup to ensure that the directory creation is not using an invalid path.\n- If the `mktemp` method in `tmpdir_factory` is involved, review its implementation to ensure that it properly handles usernames with special characters and does not create invalid paths.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a series of actionable steps that are relevant to the issue described in the PROMPT. It suggests verifying and sanitizing the username returned by `getpass.getuser()`, ensuring that the `mkdir` method can handle special characters, checking the `LOGNAME` environment variable, considering alternative methods for obtaining valid usernames, and reviewing the implementation of `tmpdir_factory.mktemp`. These steps are directly related to the problem of creating directories with usernames that contain illegal characters. The RESPONSE also provides a link to a code snippet that could be relevant to the issue, although it does not directly address the bug in the `tmpdir`, `tmpdir_factory`, or `tmp_path_factory` modules. The RESPONSE could be improved by providing more specific guidance on how to sanitize the username or by suggesting a specific alternative method for obtaining valid usernames. However, it does cover multiple aspects of the problem and offers a clear direction for investigation and potential resolution.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711734662.9542232,
+        "result": "- Verify that the username returned by `getpass.getuser()` does not contain characters invalid for a Windows directory name. Sanitize if necessary before using it to create a directory.\n- Ensure that the `mkdir` method in `pathlib.py` is called with the correct parameters, and that it can handle any special characters in the path.\n- If the `tmpdir`, `tmpdir_factory`, or `tmp_path_factory` are creating directories with the username, implement a check to sanitize or replace invalid characters in the username.\n- Check the environment variable `LOGNAME` for validity as it might be used as a fallback for `getpass.getuser()` in some cases.\n- If the issue is reproducible with SSH logins, consider using an alternative method to obtain a valid username that is compatible with Windows directory naming conventions.\n- If the `pytest-of-<username>` directory is being created, ensure that the `<username>` placeholder is being replaced with a sanitized username.\n- If the error occurs during a test that uses the `tmpdir` fixture, review the test setup to ensure that the directory creation is not using an invalid path.\n- If the `mktemp` method in `tmpdir_factory` is involved, review its implementation to ensure that it properly handles usernames with special characters and does not create invalid paths.\n\n### Code snippets to check\n\n-  \u2192 [src](https://github.com/testbed/pytest-dev__pytest__6.3/tree//src)- [Lines 1 - 10](https://github.com/testbed/pytest-dev__pytest__6.3/blob//src/py.py#L1-L10)\n\n The snippet is from 'src/py.py' which is related to the handling of 'py' library modules. Since the issue is about directory creation and 'py.path' is a module that deals with filesystem paths, it's possible that the issue might be related to the code in this file."
+    }
+}

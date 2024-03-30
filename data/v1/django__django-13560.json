@@ -1,0 +1,189 @@
+{
+    "id": "django__django-13560",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 8418298186667815160,
+    "title": "ProtectedError/RestrictedError raised from Collector.collect contains iterators.",
+    "body": "Description\n\t \n\t\t(last modified by Kwist)\n\t \n#27852\n(\"Cannot delete some instances of model 'A' because they are referenced through protected foreign keys: 'A.protect', 'B.protect'.\", <itertools.chain object at 0x7f96b5cb6c40>)\nAs a result, the repr of exception in Sentry is not informative.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `ProtectedError` and `RestrictedError` exception classes to provide a more informative `__repr__` method that will be useful in Sentry logs.\n- Implement a custom `__repr__` method for both `ProtectedError` and `RestrictedError` that includes the model name and the related field names causing the error.\n- Ensure that the `__repr__` method returns a string that concisely represents the exception, including the list of protected or restricted objects.\n\n```python\nclass ProtectedError(IntegrityError):\n    def __init__(self, msg, protected_objects):\n        self.protected_objects = protected_objects\n        super().__init__(msg, protected_objects)\n\n    def __repr__(self):\n        return f\"ProtectedError: {self.args[0]} - Protected objects: {self.protected_objects}\"\n\nclass RestrictedError(IntegrityError):\n    def __init__(self, msg, restricted_objects):\n        self.restricted_objects = restricted_objects\n        super().__init__(msg, restricted_objects)\n\n    def __repr__(self):\n        return f\"RestrictedError: {self.args[0]} - Restricted objects: {self.restricted_objects}\"\n```\n\n- Ensure that the `protected_objects` and `restricted_objects` are represented in a way that is readable and useful for debugging when logged to Sentry. This may involve formatting the objects' representations or providing additional context in the `__repr__` method.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.2/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.2/tree//django/db/models)- [Lines 1 - 517](https://github.com/testbed/django__django__3.2/blob//django/db/models/deletion.py#L1-L517)\n\n This snippet defines the ProtectedError and RestrictedError classes, which are directly related to the issue described. The issue mentions that the repr of these exceptions is not informative because they contain iterators. Changes to the __init__ methods or the way protected_objects and restricted_objects are handled may be necessary to resolve the issue. \n\n\n   - [Lines 369 - 517](https://github.com/testbed/django__django__3.2/blob//django/db/models/deletion.py#L369-L517)\n\n This snippet contains the logic that raises the RestrictedError, which is part of the issue. The way restricted_objects are collected and passed to the RestrictedError may need to be modified to make the exception's representation more informative.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0002675,
+        "snippet_processor": 0.04624,
+        "issue_star_creation": 0.04094,
+        "issue_star_solver": 0.04981,
+        "bouncer": 0.02718
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711725876.1034932,
+        "relevant_snippets": [
+            {
+                "code": "from collections import Counter, defaultdict\nfrom functools import partial, reduce\nfrom itertools import chain\nfrom operator import attrgetter, or_\n\nfrom django.db import IntegrityError, connections, models, transaction\nfrom django.db.models import query_utils, signals, sql\n\n\nclass ProtectedError(IntegrityError):\n    def __init__(self, msg, protected_objects):\n        self.protected_objects = protected_objects\n        super().__init__(msg, protected_objects)\n\n\nclass RestrictedError(IntegrityError):\n    def __init__(self, msg, restricted_objects):\n        self.restricted_objects = restricted_objects\n        super().__init__(msg, restricted_objects)\n\n\ndef CASCADE(collector, field, sub_objs, using):\n    collector.collect(\n        sub_objs,\n        source=field.remote_field.model,\n        source_attr=field.name,\n        nullable=field.null,\n        fail_on_restricted=False,\n    )\n    if field.null and not connections[using].features.can_defer_constraint_checks:\n        collector.add_field_update(field, None, sub_objs)\n\n\ndef PROTECT(collector, field, sub_objs, using):\n    raise ProtectedError(\n        \"Cannot delete some instances of model '%s' because they are \"\n        \"referenced through a protected foreign key: '%s.%s'\"\n        % (\n            field.remote_field.model.__name__,\n            sub_objs[0].__class__.__name__,\n            field.name,\n        ),\n        sub_objs,\n    )\n\n\ndef RESTRICT(collector, field, sub_objs, using):\n    collector.add_restricted_objects(field, sub_objs)\n    collector.add_dependency(field.remote_field.model, field.model)\n\n\ndef SET(value):\n    if callable(value):\n\n        def set_on_delete(collector, field, sub_objs, using):\n            collector.add_field_update(field, value(), sub_objs)\n\n    else:\n\n        def set_on_delete(collector, field, sub_objs, using):\n            collector.add_field_update(field, value, sub_objs)\n\n    set_on_delete.deconstruct = lambda: (\"django.db.models.SET\", (value,), {})\n    set_on_delete.lazy_sub_objs = True\n    return set_on_delete\n\n\ndef SET_NULL(collector, field, sub_objs, using):\n    collector.add_field_update(field, None, sub_objs)\n\n\nSET_NULL.lazy_sub_objs = True\n\n\ndef SET_DEFAULT(collector, field, sub_objs, using):\n    collector.add_field_update(field, field.get_default(), sub_objs)\n\n\nSET_DEFAULT.lazy_sub_objs = True\n\n\ndef DO_NOTHING(collector, field, sub_objs, using):\n    pass\n\n\ndef get_candidate_relations_to_delete(opts):\n    # The candidate relations are the ones that come from N-1 and 1-1 relations.\n    # N-N  (i.e., many-to-many) relations aren't candidates for deletion.\n    return (\n        f\n        for f in opts.get_fields(include_hidden=True)\n        if f.auto_created and not f.concrete and (f.one_to_one or f.one_to_many)\n    )",
+                "filename": "django/db/models/deletion.py",
+                "start_index": 0,
+                "end_index": 2747,
+                "start_line": 1,
+                "end_line": 517,
+                "max_line": 522,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class Collector:",
+                "filename": "django/db/models/deletion.py",
+                "start_index": 2750,
+                "end_index": 2766,
+                "start_line": 96,
+                "end_line": 96,
+                "max_line": 522,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "if self_referential:\n                seen_self = sum(\n                    from_model == getattr(field.remote_field, \"model\", None)\n                    for field in self.remote_field.through._meta.fields\n                )\n\n                if seen_self > 2 and not self.remote_field.through_fields:\n                    errors.append(\n                        checks.Error(\n                            \"The model is used as an intermediate model by \"\n                            \"'%s', but it has more than two foreign keys \"\n                            \"to '%s', which is ambiguous. You must specify \"\n                            \"which two foreign keys Django should use via the \"\n                            \"through_fields keyword argument.\"\n                            % (self, from_model_name),\n                            hint=(\n                                \"Use through_fields to specify which two foreign keys \"\n                                \"Django should use.\"\n                            ),\n                            obj=self.remote_field.through,\n                            id=\"fields.E333\",\n                        )\n                    )",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 54255,
+                "end_index": 55411,
+                "start_line": 1503,
+                "end_line": 1777,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "for field in model._meta.private_fields:\n            if hasattr(field, \"bulk_related_objects\"):\n                # It's something like generic foreign key.\n                sub_objs = field.bulk_related_objects(new_objs, self.using)\n                self.collect(\n                    sub_objs, source=model, nullable=True, fail_on_restricted=False\n                )\n\n        if fail_on_restricted:\n            # Raise an error if collected restricted objects (RESTRICT) aren't\n            # candidates for deletion also collected via CASCADE.\n            for related_model, instances in self.data.items():\n                self.clear_restricted_objects_from_set(related_model, instances)\n            for qs in self.fast_deletes:\n                self.clear_restricted_objects_from_queryset(qs.model, qs)\n            if self.restricted_objects.values():\n                restricted_objects = defaultdict(list)\n                for related_model, fields in self.restricted_objects.items():\n                    for field, objs in fields.items():\n                        if objs:\n                            key = \"'%s.%s'\" % (related_model.__name__, field.name)\n                            restricted_objects[key] += objs\n                if restricted_objects:\n                    raise RestrictedError(\n                        \"Cannot delete some instances of model %r because \"\n                        \"they are referenced through restricted foreign keys: \"\n                        \"%s.\"\n                        % (\n                            model.__name__,\n                            \", \".join(restricted_objects),\n                        ),\n                        set(chain.from_iterable(restricted_objects.values())),\n                    )",
+                "filename": "django/db/models/deletion.py",
+                "start_index": 14380,
+                "end_index": 16118,
+                "start_line": 369,
+                "end_line": 517,
+                "max_line": 522,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "seen_from = sum(\n                    from_model == getattr(field.remote_field, \"model\", None)\n                    for field in self.remote_field.through._meta.fields\n                )\n                seen_to = sum(\n                    to_model == getattr(field.remote_field, \"model\", None)\n                    for field in self.remote_field.through._meta.fields\n                )\n\n                if seen_from > 1 and not self.remote_field.through_fields:\n                    errors.append(\n                        checks.Error(\n                            (\n                                \"The model is used as an intermediate model by \"\n                                \"'%s', but it has more than one foreign key \"\n                                \"from '%s', which is ambiguous. You must specify \"\n                                \"which foreign key Django should use via the \"\n                                \"through_fields keyword argument.\"\n                            )\n                            % (self, from_model_name),\n                            hint=(\n                                \"If you want to create a recursive relationship, \"\n                                'use ManyToManyField(\"%s\", through=\"%s\").'\n                            )\n                            % (\n                                RECURSIVE_RELATIONSHIP_CONSTANT,\n                                relationship_model_name,\n                            ),\n                            obj=self,\n                            id=\"fields.E334\",\n                        )\n                    )\n\n                if seen_to > 1 and not self.remote_field.through_fields:\n                    errors.append(\n                        checks.Error(\n                            \"The model is used as an intermediate model by \"\n                            \"'%s', but it has more than one foreign key \"\n                            \"to '%s', which is ambiguous. You must specify \"\n                            \"which foreign key Django should use via the \"\n                            \"through_fields keyword argument.\" % (self, to_model_name),\n                            hint=(\n                                \"If you want to create a recursive relationship, \"\n                                'use ManyToManyField(\"%s\", through=\"%s\").'\n                            )\n                            % (\n                                RECURSIVE_RELATIONSHIP_CONSTANT,\n                                relationship_model_name,\n                            ),\n                            obj=self,\n                            id=\"fields.E335\",\n                        )\n                    )",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 55506,
+                "end_index": 58155,
+                "start_line": 1529,
+                "end_line": 1777,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class ErrorList(UserList, list, RenderableErrorMixin):\n    \"\"\"\n    A collection of errors that knows how to display itself in various formats.\n    \"\"\"\n\n    template_name = \"django/forms/errors/list/default.html\"\n    template_name_text = \"django/forms/errors/list/text.txt\"\n    template_name_ul = \"django/forms/errors/list/ul.html\"\n\n    def __init__(self, initlist=None, error_class=None, renderer=None):\n        super().__init__(initlist)\n\n        if error_class is None:\n            self.error_class = \"errorlist\"\n        else:\n            self.error_class = \"errorlist {}\".format(error_class)\n        self.renderer = renderer or get_default_renderer()\n\n    def as_data(self):\n        return ValidationError(self.data).error_list\n\n    def copy(self):\n        copy = super().copy()\n        copy.error_class = self.error_class\n        return copy\n\n    def get_json_data(self, escape_html=False):\n        errors = []\n        for error in self.as_data():\n            message = next(iter(error))\n            errors.append(\n                {\n                    \"message\": escape(message) if escape_html else message,\n                    \"code\": error.code or \"\",\n                }\n            )\n        return errors\n\n    def get_context(self):\n        return {\n            \"errors\": self,\n            \"error_class\": self.error_class,\n        }\n\n    def __repr__(self):\n        return repr(list(self))\n\n    def __contains__(self, item):\n        return item in list(self)\n\n    def __eq__(self, other):\n        return list(self) == other\n\n    def __getitem__(self, i):\n        error = self.data[i]\n        if isinstance(error, ValidationError):\n            return next(iter(error))\n        return error\n\n    def __reduce_ex__(self, *args, **kwargs):\n        # The `list` reduce function returns an iterator as the fourth element\n        # that is normally used for repopulating. Since we only inherit from\n        # `list` for `isinstance` backward compatibility (Refs #17413) we\n        # nullify this iterator as it would otherwise result in duplicate\n        # entries. (Refs #23594)\n        info = super(UserList, self).__reduce_ex__(*args, **kwargs)\n        return info[:3] + (None, None)\n\n\n# Utilities for time zone support in DateTimeField et al.",
+                "filename": "django/forms/utils.py",
+                "start_index": 4344,
+                "end_index": 6591,
+                "start_line": 141,
+                "end_line": 210,
+                "max_line": 244,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import collections\nimport json\nimport re\nfrom functools import partial\nfrom itertools import chain\n\nfrom django.core.exceptions import EmptyResultSet, FieldError, FullResultSet\nfrom django.db import DatabaseError, NotSupportedError\nfrom django.db.models.constants import LOOKUP_SEP\nfrom django.db.models.expressions import F, OrderBy, RawSQL, Ref, Value\nfrom django.db.models.functions import Cast, Random\nfrom django.db.models.lookups import Lookup\nfrom django.db.models.query_utils import select_related_descend\nfrom django.db.models.sql.constants import (\n    CURSOR,\n    GET_ITERATOR_CHUNK_SIZE,\n    MULTI,\n    NO_RESULTS,\n    ORDER_DIR,\n    SINGLE,\n)\nfrom django.db.models.sql.query import Query, get_order_dir\nfrom django.db.models.sql.where import AND\nfrom django.db.transaction import TransactionManagementError\nfrom django.utils.functional import cached_property\nfrom django.utils.hashable import make_hashable\nfrom django.utils.regex_helper import _lazy_re_compile\n\n\nclass PositionRef(Ref):\n    def __init__(self, ordinal, refs, source):\n        self.ordinal = ordinal\n        super().__init__(refs, source)\n\n    def as_sql(self, compiler, connection):\n        return str(self.ordinal), ()",
+                "filename": "django/db/models/sql/compiler.py",
+                "start_index": 0,
+                "end_index": 1199,
+                "start_line": 1,
+                "end_line": 36,
+                "max_line": 2099,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import collections.abc\nimport inspect\nimport warnings\nfrom math import ceil\n\nfrom django.utils.functional import cached_property\nfrom django.utils.inspect import method_has_no_args\nfrom django.utils.translation import gettext_lazy as _\n\n\nclass UnorderedObjectListWarning(RuntimeWarning):\n    pass\n\n\nclass InvalidPage(Exception):\n    pass\n\n\nclass PageNotAnInteger(InvalidPage):\n    pass\n\n\nclass EmptyPage(InvalidPage):\n    pass",
+                "filename": "django/core/paginator.py",
+                "start_index": 0,
+                "end_index": 426,
+                "start_line": 1,
+                "end_line": 24,
+                "max_line": 238,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "if seen_from == 0 or seen_to == 0:\n                    errors.append(\n                        checks.Error(\n                            \"The model is used as an intermediate model by \"\n                            \"'%s', but it does not have a foreign key to '%s' or '%s'.\"\n                            % (self, from_model_name, to_model_name),\n                            obj=self.remote_field.through,\n                            id=\"fields.E336\",\n                        )\n                    )",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 58173,
+                "end_index": 58668,
+                "start_line": 1583,
+                "end_line": 1777,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def _check_unique_target(self):\n        rel_is_string = isinstance(self.remote_field.model, str)\n        if rel_is_string or not self.requires_unique_target:\n            return []\n\n        try:\n            self.foreign_related_fields\n        except exceptions.FieldDoesNotExist:\n            return []\n\n        if not self.foreign_related_fields:\n            return []\n\n        unique_foreign_fields = {\n            frozenset([f.name])\n            for f in self.remote_field.model._meta.get_fields()\n            if getattr(f, \"unique\", False)\n        }\n        unique_foreign_fields.update(\n            {frozenset(ut) for ut in self.remote_field.model._meta.unique_together}\n        )\n        unique_foreign_fields.update(\n            {\n                frozenset(uc.fields)\n                for uc in self.remote_field.model._meta.total_unique_constraints\n            }\n        )\n        foreign_fields = {f.name for f in self.foreign_related_fields}\n        has_unique_constraint = any(u <= foreign_fields for u in unique_foreign_fields)\n\n        if not has_unique_constraint and len(self.foreign_related_fields) > 1:\n            field_combination = \", \".join(\n                \"'%s'\" % rel_field.name for rel_field in self.foreign_related_fields\n            )\n            model_name = self.remote_field.model.__name__\n            return [\n                checks.Error(\n                    \"No subset of the fields %s on model '%s' is unique.\"\n                    % (field_combination, model_name),\n                    hint=(\n                        \"Mark a single field as unique=True or add a set of \"\n                        \"fields to a unique constraint (via unique_together \"\n                        \"or a UniqueConstraint (without condition) in the \"\n                        \"model Meta.constraints).\"\n                    ),\n                    obj=self,\n                    id=\"fields.E310\",\n                )\n            ]\n        elif not has_unique_constraint:\n            field_name = self.foreign_related_fields[0].name\n            model_name = self.remote_field.model.__name__\n            return [\n                checks.Error(\n                    \"'%s.%s' must be unique because it is referenced by \"\n                    \"a foreign key.\" % (model_name, field_name),\n                    hint=(\n                        \"Add unique=True to this field or add a \"\n                        \"UniqueConstraint (without condition) in the model \"\n                        \"Meta.constraints.\"\n                    ),\n                    obj=self,\n                    id=\"fields.E311\",\n                )\n            ]\n        else:\n            return []",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 22130,
+                "end_index": 24781,
+                "start_line": 604,
+                "end_line": 1698,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/models/deletion.py": [
+                {
+                    "chunk": {
+                        "code": "from collections import Counter, defaultdict\nfrom functools import partial, reduce\nfrom itertools import chain\nfrom operator import attrgetter, or_\n\nfrom django.db import IntegrityError, connections, models, transaction\nfrom django.db.models import query_utils, signals, sql\n\n\nclass ProtectedError(IntegrityError):\n    def __init__(self, msg, protected_objects):\n        self.protected_objects = protected_objects\n        super().__init__(msg, protected_objects)\n\n\nclass RestrictedError(IntegrityError):\n    def __init__(self, msg, restricted_objects):\n        self.restricted_objects = restricted_objects\n        super().__init__(msg, restricted_objects)\n\n\ndef CASCADE(collector, field, sub_objs, using):\n    collector.collect(\n        sub_objs,\n        source=field.remote_field.model,\n        source_attr=field.name,\n        nullable=field.null,\n        fail_on_restricted=False,\n    )\n    if field.null and not connections[using].features.can_defer_constraint_checks:\n        collector.add_field_update(field, None, sub_objs)\n\n\ndef PROTECT(collector, field, sub_objs, using):\n    raise ProtectedError(\n        \"Cannot delete some instances of model '%s' because they are \"\n        \"referenced through a protected foreign key: '%s.%s'\"\n        % (\n            field.remote_field.model.__name__,\n            sub_objs[0].__class__.__name__,\n            field.name,\n        ),\n        sub_objs,\n    )\n\n\ndef RESTRICT(collector, field, sub_objs, using):\n    collector.add_restricted_objects(field, sub_objs)\n    collector.add_dependency(field.remote_field.model, field.model)\n\n\ndef SET(value):\n    if callable(value):\n\n        def set_on_delete(collector, field, sub_objs, using):\n            collector.add_field_update(field, value(), sub_objs)\n\n    else:\n\n        def set_on_delete(collector, field, sub_objs, using):\n            collector.add_field_update(field, value, sub_objs)\n\n    set_on_delete.deconstruct = lambda: (\"django.db.models.SET\", (value,), {})\n    set_on_delete.lazy_sub_objs = True\n    return set_on_delete\n\n\ndef SET_NULL(collector, field, sub_objs, using):\n    collector.add_field_update(field, None, sub_objs)\n\n\nSET_NULL.lazy_sub_objs = True\n\n\ndef SET_DEFAULT(collector, field, sub_objs, using):\n    collector.add_field_update(field, field.get_default(), sub_objs)\n\n\nSET_DEFAULT.lazy_sub_objs = True\n\n\ndef DO_NOTHING(collector, field, sub_objs, using):\n    pass\n\n\ndef get_candidate_relations_to_delete(opts):\n    # The candidate relations are the ones that come from N-1 and 1-1 relations.\n    # N-N  (i.e., many-to-many) relations aren't candidates for deletion.\n    return (\n        f\n        for f in opts.get_fields(include_hidden=True)\n        if f.auto_created and not f.concrete and (f.one_to_one or f.one_to_many)\n    )",
+                        "filename": "django/db/models/deletion.py",
+                        "start_index": 0,
+                        "end_index": 2747,
+                        "start_line": 1,
+                        "end_line": 517,
+                        "max_line": 522,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the ProtectedError and RestrictedError classes, which are directly related to the issue described. The issue mentions that the repr of these exceptions is not informative because they contain iterators. Changes to the __init__ methods or the way protected_objects and restricted_objects are handled may be necessary to resolve the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "for field in model._meta.private_fields:\n            if hasattr(field, \"bulk_related_objects\"):\n                # It's something like generic foreign key.\n                sub_objs = field.bulk_related_objects(new_objs, self.using)\n                self.collect(\n                    sub_objs, source=model, nullable=True, fail_on_restricted=False\n                )\n\n        if fail_on_restricted:\n            # Raise an error if collected restricted objects (RESTRICT) aren't\n            # candidates for deletion also collected via CASCADE.\n            for related_model, instances in self.data.items():\n                self.clear_restricted_objects_from_set(related_model, instances)\n            for qs in self.fast_deletes:\n                self.clear_restricted_objects_from_queryset(qs.model, qs)\n            if self.restricted_objects.values():\n                restricted_objects = defaultdict(list)\n                for related_model, fields in self.restricted_objects.items():\n                    for field, objs in fields.items():\n                        if objs:\n                            key = \"'%s.%s'\" % (related_model.__name__, field.name)\n                            restricted_objects[key] += objs\n                if restricted_objects:\n                    raise RestrictedError(\n                        \"Cannot delete some instances of model %r because \"\n                        \"they are referenced through restricted foreign keys: \"\n                        \"%s.\"\n                        % (\n                            model.__name__,\n                            \", \".join(restricted_objects),\n                        ),\n                        set(chain.from_iterable(restricted_objects.values())),\n                    )",
+                        "filename": "django/db/models/deletion.py",
+                        "start_index": 14380,
+                        "end_index": 16118,
+                        "start_line": 369,
+                        "end_line": 517,
+                        "max_line": 522,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the logic that raises the RestrictedError, which is part of the issue. The way restricted_objects are collected and passed to the RestrictedError may need to be modified to make the exception's representation more informative."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `ProtectedError` and `RestrictedError` exception classes to provide a more informative `__repr__` method that will be useful in Sentry logs.\n- Implement a custom `__repr__` method for both `ProtectedError` and `RestrictedError` that includes the model name and the related field names causing the error.\n- Ensure that the `__repr__` method returns a string that concisely represents the exception, including the list of protected or restricted objects.\n\n```python\nclass ProtectedError(IntegrityError):\n    def __init__(self, msg, protected_objects):\n        self.protected_objects = protected_objects\n        super().__init__(msg, protected_objects)\n\n    def __repr__(self):\n        return f\"ProtectedError: {self.args[0]} - Protected objects: {self.protected_objects}\"\n\nclass RestrictedError(IntegrityError):\n    def __init__(self, msg, restricted_objects):\n        self.restricted_objects = restricted_objects\n        super().__init__(msg, restricted_objects)\n\n    def __repr__(self):\n        return f\"RestrictedError: {self.args[0]} - Restricted objects: {self.restricted_objects}\"\n```\n\n- Ensure that the `protected_objects` and `restricted_objects` are represented in a way that is readable and useful for debugging when logged to Sentry. This may involve formatting the objects' representations or providing additional context in the `__repr__` method.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem of uninformative exception representations in Sentry logs. It suggests modifying the `ProtectedError` and `RestrictedError` classes to include a more informative `__repr__` method, which is directly relevant to the issue described in the PROMPT. The provided Python code offers a concrete implementation of these methods, which includes the model name and related field names causing the error. This directly addresses the problem of the current `repr` containing iterators, which are not informative. The RESPONSE also advises ensuring that the `protected_objects` and `restricted_objects` are represented in a readable and useful way for debugging, which is a valuable suggestion for improving the utility of the logs in Sentry. The RESPONSE is comprehensive and provides a solution that can be implemented to resolve the issue.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711726082.290124,
+        "result": "- Modify the `ProtectedError` and `RestrictedError` exception classes to provide a more informative `__repr__` method that will be useful in Sentry logs.\n- Implement a custom `__repr__` method for both `ProtectedError` and `RestrictedError` that includes the model name and the related field names causing the error.\n- Ensure that the `__repr__` method returns a string that concisely represents the exception, including the list of protected or restricted objects.\n\n```python\nclass ProtectedError(IntegrityError):\n    def __init__(self, msg, protected_objects):\n        self.protected_objects = protected_objects\n        super().__init__(msg, protected_objects)\n\n    def __repr__(self):\n        return f\"ProtectedError: {self.args[0]} - Protected objects: {self.protected_objects}\"\n\nclass RestrictedError(IntegrityError):\n    def __init__(self, msg, restricted_objects):\n        self.restricted_objects = restricted_objects\n        super().__init__(msg, restricted_objects)\n\n    def __repr__(self):\n        return f\"RestrictedError: {self.args[0]} - Restricted objects: {self.restricted_objects}\"\n```\n\n- Ensure that the `protected_objects` and `restricted_objects` are represented in a way that is readable and useful for debugging when logged to Sentry. This may involve formatting the objects' representations or providing additional context in the `__repr__` method.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.2/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.2/tree//django/db/models)- [Lines 1 - 517](https://github.com/testbed/django__django__3.2/blob//django/db/models/deletion.py#L1-L517)\n\n This snippet defines the ProtectedError and RestrictedError classes, which are directly related to the issue described. The issue mentions that the repr of these exceptions is not informative because they contain iterators. Changes to the __init__ methods or the way protected_objects and restricted_objects are handled may be necessary to resolve the issue. \n\n\n   - [Lines 369 - 517](https://github.com/testbed/django__django__3.2/blob//django/db/models/deletion.py#L369-L517)\n\n This snippet contains the logic that raises the RestrictedError, which is part of the issue. The way restricted_objects are collected and passed to the RestrictedError may need to be modified to make the exception's representation more informative."
+    }
+}

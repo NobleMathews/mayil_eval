@@ -1,0 +1,189 @@
+{
+    "id": "django__django-13743",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 141194723969543718,
+    "title": "ConnectionAbortedError should be treated as a broken pipe error in the development server",
+    "body": "Description\n\t\nPeople using Windows have been complaining about very long stack traces in the development server for a long time:\n\u200bhttps://github.com/python/cpython/pull/9713\n\u200bhttps://bugs.python.org/issue27682\nThese happen under normal interaction with the development server using Chrome.\nI have fixed one issue in CPython in wsgiref, but I belive that we should also fix is_broken_pipe_error in django/core/servers/basehttp.py\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `is_broken_pipe_error` function in `django/core/servers/basehttp.py` to include `ConnectionAbortedError` in the tuple of exceptions that are checked to determine if an error is a broken pipe error.\n\n```python\ndef is_broken_pipe_error():\n    exc_type, _, _ = sys.exc_info()\n    return issubclass(\n        exc_type,\n        (\n            BrokenPipeError,\n            ConnectionAbortedError,  # Add this line\n            ConnectionResetError,\n        ),\n    )\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [servers](https://github.com/testbed/django__django__3.2/tree//django/core/servers)- [Lines 1 - 83](https://github.com/testbed/django__django__3.2/blob//django/core/servers/basehttp.py#L1-L83)\n\n This snippet contains the 'is_broken_pipe_error' function which is directly related to the issue and may need to be updated to handle ConnectionAbortedError as a broken pipe error. \n\n\n   - [Lines 114 - 173](https://github.com/testbed/django__django__3.2/blob//django/core/servers/basehttp.py#L114-L173)\n\n This snippet is from the same file as the function in question and may contain related logic that could be impacted by changes to the handling of broken pipe errors.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003035,
+        "snippet_processor": 0.055850000000000004,
+        "issue_star_creation": 0.02406,
+        "issue_star_solver": 0.03527,
+        "bouncer": 0.01812
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711725112.8937442,
+        "relevant_snippets": [
+            {
+                "code": "class ServerHandler(simple_server.ServerHandler):\n    http_version = \"1.1\"\n\n    def __init__(self, stdin, stdout, stderr, environ, **kwargs):\n        \"\"\"\n        Use a LimitedStream so that unread request data will be ignored at\n        the end of the request. WSGIRequest uses a LimitedStream but it\n        shouldn't discard the data since the upstream servers usually do this.\n        This fix applies only for testserver/runserver.\n        \"\"\"\n        try:\n            content_length = int(environ.get(\"CONTENT_LENGTH\"))\n        except (ValueError, TypeError):\n            content_length = 0\n        super().__init__(\n            LimitedStream(stdin, content_length), stdout, stderr, environ, **kwargs\n        )\n\n    def cleanup_headers(self):\n        super().cleanup_headers()\n        if (\n            self.environ[\"REQUEST_METHOD\"] == \"HEAD\"\n            and \"Content-Length\" in self.headers\n        ):\n            del self.headers[\"Content-Length\"]\n        # HTTP/1.1 requires support for persistent connections. Send 'close' if\n        # the content length is unknown to prevent clients from reusing the\n        # connection.\n        if (\n            self.environ[\"REQUEST_METHOD\"] != \"HEAD\"\n            and \"Content-Length\" not in self.headers\n        ):\n            self.headers[\"Connection\"] = \"close\"\n        # Persistent connections require threading server.\n        elif not isinstance(self.request_handler.server, socketserver.ThreadingMixIn):\n            self.headers[\"Connection\"] = \"close\"\n        # Mark the connection for closing if it's set as such above or if the\n        # application sent the header.\n        if self.headers.get(\"Connection\") == \"close\":\n            self.request_handler.close_connection = True\n\n    def close(self):\n        self.get_stdin().read()\n        super().close()\n\n    def finish_response(self):\n        if self.environ[\"REQUEST_METHOD\"] == \"HEAD\":\n            try:\n                deque(self.result, maxlen=0)  # Consume iterator.\n                # Don't call self.finish_content() as, if the headers have not\n                # been sent and Content-Length isn't set, it'll default to \"0\"\n                # which will prevent omission of the Content-Length header with\n                # HEAD requests as permitted by RFC 9110 Section 9.3.2.\n                # Instead, send the headers, if not sent yet.\n                if not self.headers_sent:\n                    self.send_headers()\n            finally:\n                self.close()\n        else:\n            super().finish_response()",
+                "filename": "django/core/servers/basehttp.py",
+                "start_index": 3688,
+                "end_index": 6224,
+                "start_line": 114,
+                "end_line": 173,
+                "max_line": 281,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nHTTP server that implements the Python WSGI protocol (PEP 333, rev 1.21).\n\nBased on wsgiref.simple_server which is part of the standard library since 2.5.\n\nThis is a simple server for use in testing or debugging Django apps. It hasn't\nbeen reviewed for security issues. DON'T USE IT FOR PRODUCTION USE!\n\"\"\"\n\nimport logging\nimport socket\nimport socketserver\nimport sys\nfrom collections import deque\nfrom wsgiref import simple_server\n\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.core.handlers.wsgi import LimitedStream\nfrom django.core.wsgi import get_wsgi_application\nfrom django.db import connections\nfrom django.utils.module_loading import import_string\n\n__all__ = (\"WSGIServer\", \"WSGIRequestHandler\")\n\nlogger = logging.getLogger(\"django.server\")\n\n\ndef get_internal_wsgi_application():\n    \"\"\"\n    Load and return the WSGI application as configured by the user in\n    ``settings.WSGI_APPLICATION``. With the default ``startproject`` layout,\n    this will be the ``application`` object in ``projectname/wsgi.py``.\n\n    This function, and the ``WSGI_APPLICATION`` setting itself, are only useful\n    for Django's internal server (runserver); external WSGI servers should just\n    be configured to point to the correct application object directly.\n\n    If settings.WSGI_APPLICATION is not set (is ``None``), return\n    whatever ``django.core.wsgi.get_wsgi_application`` returns.\n    \"\"\"\n    from django.conf import settings\n\n    app_path = getattr(settings, \"WSGI_APPLICATION\")\n    if app_path is None:\n        return get_wsgi_application()\n\n    try:\n        return import_string(app_path)\n    except ImportError as err:\n        raise ImproperlyConfigured(\n            \"WSGI application '%s' could not be loaded; \"\n            \"Error importing module.\" % app_path\n        ) from err\n\n\ndef is_broken_pipe_error():\n    exc_type, _, _ = sys.exc_info()\n    return issubclass(\n        exc_type,\n        (\n            BrokenPipeError,\n            ConnectionAbortedError,\n            ConnectionResetError,\n        ),\n    )\n\n\nclass WSGIServer(simple_server.WSGIServer):\n    \"\"\"BaseHTTPServer that implements the Python WSGI protocol\"\"\"\n\n    request_queue_size = 10\n\n    def __init__(self, *args, ipv6=False, allow_reuse_address=True, **kwargs):\n        if ipv6:\n            self.address_family = socket.AF_INET6\n        self.allow_reuse_address = allow_reuse_address\n        super().__init__(*args, **kwargs)\n\n    def handle_error(self, request, client_address):\n        if is_broken_pipe_error():\n            logger.info(\"- Broken pipe from %s\", client_address)\n        else:\n            super().handle_error(request, client_address)",
+                "filename": "django/core/servers/basehttp.py",
+                "start_index": 0,
+                "end_index": 2652,
+                "start_line": 1,
+                "end_line": 83,
+                "max_line": 281,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class WSGIRequestHandler(simple_server.WSGIRequestHandler):\n    protocol_version = \"HTTP/1.1\"\n\n    def address_string(self):\n        # Short-circuit parent method to not call socket.getfqdn\n        return self.client_address[0]\n\n    def log_message(self, format, *args):\n        extra = {\n            \"request\": self.request,\n            \"server_time\": self.log_date_time_string(),\n        }\n        if args[1][0] == \"4\":\n            # 0x16 = Handshake, 0x03 = SSL 3.0 or TLS 1.x\n            if args[0].startswith(\"\\x16\\x03\"):\n                extra[\"status_code\"] = 500\n                logger.error(\n                    \"You're accessing the development server over HTTPS, but \"\n                    \"it only supports HTTP.\",\n                    extra=extra,\n                )\n                return\n\n        if args[1].isdigit() and len(args[1]) == 3:\n            status_code = int(args[1])\n            extra[\"status_code\"] = status_code\n\n            if status_code >= 500:\n                level = logger.error\n            elif status_code >= 400:\n                level = logger.warning\n            else:\n                level = logger.info\n        else:\n            level = logger.info\n\n        level(format, *args, extra=extra)\n\n    def get_environ(self):\n        # Strip all headers with underscores in the name before constructing\n        # the WSGI environ. This prevents header-spoofing based on ambiguity\n        # between underscores and dashes both normalized to underscores in WSGI\n        # env vars. Nginx and Apache 2.4+ both do this as well.\n        for k in self.headers:\n            if \"_\" in k:\n                del self.headers[k]\n\n        return super().get_environ()\n\n    def handle(self):\n        self.close_connection = True\n        self.handle_one_request()\n        while not self.close_connection:\n            self.handle_one_request()\n        try:\n            self.connection.shutdown(socket.SHUT_WR)\n        except (AttributeError, OSError):\n            pass\n\n    def handle_one_request(self):\n        \"\"\"Copy of WSGIRequestHandler.handle() but with different ServerHandler\"\"\"\n        self.raw_requestline = self.rfile.readline(65537)\n        if len(self.raw_requestline) > 65536:\n            self.requestline = \"\"\n            self.request_version = \"\"\n            self.command = \"\"\n            self.send_error(414)\n            return\n\n        if not self.parse_request():  # An error code has been sent, just exit\n            return\n\n        handler = ServerHandler(\n            self.rfile, self.wfile, self.get_stderr(), self.get_environ()\n        )\n        handler.request_handler = self  # backpointer for logging & connection closing\n        handler.run(self.server.get_app())",
+                "filename": "django/core/servers/basehttp.py",
+                "start_index": 6227,
+                "end_index": 8933,
+                "start_line": 176,
+                "end_line": 252,
+                "max_line": 281,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from io import IOBase\n\nfrom django.conf import settings\nfrom django.core import signals\nfrom django.core.handlers import base\nfrom django.http import HttpRequest, QueryDict, parse_cookie\nfrom django.urls import set_script_prefix\nfrom django.utils.encoding import repercent_broken_unicode\nfrom django.utils.functional import cached_property\nfrom django.utils.regex_helper import _lazy_re_compile\n\n_slashes_re = _lazy_re_compile(rb\"/+\")\n\n\nclass LimitedStream(IOBase):\n    \"\"\"\n    Wrap another stream to disallow reading it past a number of bytes.\n\n    Based on the implementation from werkzeug.wsgi.LimitedStream\n    See https://github.com/pallets/werkzeug/blob/dbf78f67/src/werkzeug/wsgi.py#L828\n    \"\"\"\n\n    def __init__(self, stream, limit):\n        self._read = stream.read\n        self._readline = stream.readline\n        self._pos = 0\n        self.limit = limit\n\n    def read(self, size=-1, /):\n        _pos = self._pos\n        limit = self.limit\n        if _pos >= limit:\n            return b\"\"\n        if size == -1 or size is None:\n            size = limit - _pos\n        else:\n            size = min(size, limit - _pos)\n        data = self._read(size)\n        self._pos += len(data)\n        return data\n\n    def readline(self, size=-1, /):\n        _pos = self._pos\n        limit = self.limit\n        if _pos >= limit:\n            return b\"\"\n        if size == -1 or size is None:\n            size = limit - _pos\n        else:\n            size = min(size, limit - _pos)\n        line = self._readline(size)\n        self._pos += len(line)\n        return line",
+                "filename": "django/core/handlers/wsgi.py",
+                "start_index": 0,
+                "end_index": 1563,
+                "start_line": 1,
+                "end_line": 53,
+                "max_line": 207,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import errno\nimport os\nimport re\nimport socket\nimport sys\nfrom datetime import datetime\n\nfrom django.conf import settings\nfrom django.core.management.base import BaseCommand, CommandError\nfrom django.core.servers.basehttp import WSGIServer, get_internal_wsgi_application, run\nfrom django.utils import autoreload\nfrom django.utils.regex_helper import _lazy_re_compile\n\nnaiveip_re = _lazy_re_compile(\n    r\"\"\"^(?:\n(?P<addr>\n    (?P<ipv4>\\d{1,3}(?:\\.\\d{1,3}){3}) |         # IPv4 address\n    (?P<ipv6>\\[[a-fA-F0-9:]+\\]) |               # IPv6 address\n    (?P<fqdn>[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*) # FQDN\n):)?(?P<port>\\d+)$\"\"\",\n    re.X,\n)",
+                "filename": "django/core/management/commands/runserver.py",
+                "start_index": 0,
+                "end_index": 637,
+                "start_line": 1,
+                "end_line": 186,
+                "max_line": 186,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.core import signals\nfrom django.db.utils import (\n    DEFAULT_DB_ALIAS,\n    DJANGO_VERSION_PICKLE_KEY,\n    ConnectionHandler,\n    ConnectionRouter,\n    DatabaseError,\n    DataError,\n    Error,\n    IntegrityError,\n    InterfaceError,\n    InternalError,\n    NotSupportedError,\n    OperationalError,\n    ProgrammingError,\n)\nfrom django.utils.connection import ConnectionProxy\n\n__all__ = [\n    \"connection\",\n    \"connections\",\n    \"router\",\n    \"DatabaseError\",\n    \"IntegrityError\",\n    \"InternalError\",\n    \"ProgrammingError\",\n    \"DataError\",\n    \"NotSupportedError\",\n    \"Error\",\n    \"InterfaceError\",\n    \"OperationalError\",\n    \"DEFAULT_DB_ALIAS\",\n    \"DJANGO_VERSION_PICKLE_KEY\",\n]\n\nconnections = ConnectionHandler()\n\nrouter = ConnectionRouter()\n\n# For backwards compatibility. Prefer connections['default'] instead.\nconnection = ConnectionProxy(connections, DEFAULT_DB_ALIAS)\n\n\n# Register an event to reset saved queries when a Django request is started.\ndef reset_queries(**kwargs):\n    for conn in connections.all(initialized_only=True):\n        conn.queries_log.clear()\n\n\nsignals.request_started.connect(reset_queries)\n\n\n# Register an event to reset transaction state and close connections past\n# their lifetime.\ndef close_old_connections(**kwargs):\n    for conn in connections.all(initialized_only=True):\n        conn.close_if_unusable_or_obsolete()\n\n\nsignals.request_started.connect(close_old_connections)\nsignals.request_finished.connect(close_old_connections)",
+                "filename": "django/db/__init__.py",
+                "start_index": 0,
+                "end_index": 1482,
+                "start_line": 1,
+                "end_line": 61,
+                "max_line": 61,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import functools\nimport inspect\nimport itertools\nimport re\nimport sys\nimport types\nimport warnings\nfrom pathlib import Path\n\nfrom django.conf import settings\nfrom django.http import Http404, HttpResponse, HttpResponseNotFound\nfrom django.template import Context, Engine, TemplateDoesNotExist\nfrom django.template.defaultfilters import pprint\nfrom django.urls import resolve\nfrom django.utils import timezone\nfrom django.utils.datastructures import MultiValueDict\nfrom django.utils.encoding import force_str\nfrom django.utils.module_loading import import_string\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.version import PY311, get_docs_version\nfrom django.views.decorators.debug import coroutine_functions_to_sensitive_variables\n\n# Minimal Django templates engine to render the error templates\n# regardless of the project's TEMPLATES setting. Templates are\n# read directly from the filesystem so that the error handler\n# works even if the template loader is broken.\nDEBUG_ENGINE = Engine(\n    debug=True,\n    libraries={\"i18n\": \"django.templatetags.i18n\"},\n)\n\n\ndef builtin_template_path(name):\n    \"\"\"\n    Return a path to a builtin template.\n\n    Avoid calling this function at the module level or in a class-definition\n    because __file__ may not exist, e.g. in frozen environments.\n    \"\"\"\n    return Path(__file__).parent / \"templates\" / name\n\n\nclass ExceptionCycleWarning(UserWarning):\n    pass\n\n\nclass CallableSettingWrapper:\n    \"\"\"\n    Object to wrap callable appearing in settings.\n    * Not to call in the debug page (#21345).\n    * Not to break the debug page if the callable forbidding to set attributes\n      (#23070).\n    \"\"\"\n\n    def __init__(self, callable_setting):\n        self._wrapped = callable_setting\n\n    def __repr__(self):\n        return repr(self._wrapped)\n\n\ndef technical_500_response(request, exc_type, exc_value, tb, status_code=500):\n    \"\"\"\n    Create a technical server error response. The last three arguments are\n    the values returned from sys.exc_info() and friends.\n    \"\"\"\n    reporter = get_exception_reporter_class(request)(request, exc_type, exc_value, tb)\n    if request.accepts(\"text/html\"):\n        html = reporter.get_traceback_html()\n        return HttpResponse(html, status=status_code)\n    else:\n        text = reporter.get_traceback_text()\n        return HttpResponse(\n            text, status=status_code, content_type=\"text/plain; charset=utf-8\"\n        )\n\n\n@functools.lru_cache\ndef get_default_exception_reporter_filter():\n    # Instantiate the default filter for the first time and cache it.\n    return import_string(settings.DEFAULT_EXCEPTION_REPORTER_FILTER)()\n\n\ndef get_exception_reporter_filter(request):\n    default_filter = get_default_exception_reporter_filter()\n    return getattr(request, \"exception_reporter_filter\", default_filter)",
+                "filename": "django/views/debug.py",
+                "start_index": 0,
+                "end_index": 2827,
+                "start_line": 1,
+                "end_line": 86,
+                "max_line": 665,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import asyncio\nimport logging\nimport types\n\nfrom asgiref.sync import async_to_sync, iscoroutinefunction, sync_to_async\n\nfrom django.conf import settings\nfrom django.core.exceptions import ImproperlyConfigured, MiddlewareNotUsed\nfrom django.core.signals import request_finished\nfrom django.db import connections, transaction\nfrom django.urls import get_resolver, set_urlconf\nfrom django.utils.log import log_response\nfrom django.utils.module_loading import import_string\n\nfrom .exception import convert_exception_to_response\n\nlogger = logging.getLogger(\"django.request\")",
+                "filename": "django/core/handlers/base.py",
+                "start_index": 0,
+                "end_index": 569,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 373,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import asyncio\nimport logging\nimport sys\nimport tempfile\nimport traceback\nfrom contextlib import aclosing\n\nfrom asgiref.sync import ThreadSensitiveContext, sync_to_async\n\nfrom django.conf import settings\nfrom django.core import signals\nfrom django.core.exceptions import RequestAborted, RequestDataTooBig\nfrom django.core.handlers import base\nfrom django.http import (\n    FileResponse,\n    HttpRequest,\n    HttpResponse,\n    HttpResponseBadRequest,\n    HttpResponseServerError,\n    QueryDict,\n    parse_cookie,\n)\nfrom django.urls import set_script_prefix\nfrom django.utils.functional import cached_property\n\nlogger = logging.getLogger(\"django.request\")\n\n\ndef get_script_prefix(scope):\n    \"\"\"\n    Return the script prefix to use from either the scope or a setting.\n    \"\"\"\n    if settings.FORCE_SCRIPT_NAME:\n        return settings.FORCE_SCRIPT_NAME\n    return scope.get(\"root_path\", \"\") or \"\"",
+                "filename": "django/core/handlers/asgi.py",
+                "start_index": 0,
+                "end_index": 894,
+                "start_line": 1,
+                "end_line": 35,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from asgiref.local import Local\n\nfrom django.conf import settings as django_settings\nfrom django.utils.functional import cached_property\n\n\nclass ConnectionProxy:\n    \"\"\"Proxy for accessing a connection object's attributes.\"\"\"\n\n    def __init__(self, connections, alias):\n        self.__dict__[\"_connections\"] = connections\n        self.__dict__[\"_alias\"] = alias\n\n    def __getattr__(self, item):\n        return getattr(self._connections[self._alias], item)\n\n    def __setattr__(self, name, value):\n        return setattr(self._connections[self._alias], name, value)\n\n    def __delattr__(self, name):\n        return delattr(self._connections[self._alias], name)\n\n    def __contains__(self, key):\n        return key in self._connections[self._alias]\n\n    def __eq__(self, other):\n        return self._connections[self._alias] == other\n\n\nclass ConnectionDoesNotExist(Exception):\n    pass\n\n\nclass BaseConnectionHandler:\n    settings_name = None\n    exception_class = ConnectionDoesNotExist\n    thread_critical = False\n\n    def __init__(self, settings=None):\n        self._settings = settings\n        self._connections = Local(self.thread_critical)\n\n    @cached_property\n    def settings(self):\n        self._settings = self.configure_settings(self._settings)\n        return self._settings\n\n    def configure_settings(self, settings):\n        if settings is None:\n            settings = getattr(django_settings, self.settings_name)\n        return settings\n\n    def create_connection(self, alias):\n        raise NotImplementedError(\"Subclasses must implement create_connection().\")\n\n    def __getitem__(self, alias):\n        try:\n            return getattr(self._connections, alias)\n        except AttributeError:\n            if alias not in self.settings:\n                raise self.exception_class(f\"The connection '{alias}' doesn't exist.\")\n        conn = self.create_connection(alias)\n        setattr(self._connections, alias, conn)\n        return conn\n\n    def __setitem__(self, key, value):\n        setattr(self._connections, key, value)\n\n    def __delitem__(self, key):\n        delattr(self._connections, key)\n\n    def __iter__(self):\n        return iter(self.settings)\n\n    def all(self, initialized_only=False):\n        return [\n            self[alias]\n            for alias in self\n            # If initialized_only is True, return only initialized connections.\n            if not initialized_only or hasattr(self._connections, alias)\n        ]\n\n    def close_all(self):\n        for conn in self.all(initialized_only=True):\n            conn.close()",
+                "filename": "django/utils/connection.py",
+                "start_index": 0,
+                "end_index": 2553,
+                "start_line": 1,
+                "end_line": 85,
+                "max_line": 85,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/core/servers/basehttp.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nHTTP server that implements the Python WSGI protocol (PEP 333, rev 1.21).\n\nBased on wsgiref.simple_server which is part of the standard library since 2.5.\n\nThis is a simple server for use in testing or debugging Django apps. It hasn't\nbeen reviewed for security issues. DON'T USE IT FOR PRODUCTION USE!\n\"\"\"\n\nimport logging\nimport socket\nimport socketserver\nimport sys\nfrom collections import deque\nfrom wsgiref import simple_server\n\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.core.handlers.wsgi import LimitedStream\nfrom django.core.wsgi import get_wsgi_application\nfrom django.db import connections\nfrom django.utils.module_loading import import_string\n\n__all__ = (\"WSGIServer\", \"WSGIRequestHandler\")\n\nlogger = logging.getLogger(\"django.server\")\n\n\ndef get_internal_wsgi_application():\n    \"\"\"\n    Load and return the WSGI application as configured by the user in\n    ``settings.WSGI_APPLICATION``. With the default ``startproject`` layout,\n    this will be the ``application`` object in ``projectname/wsgi.py``.\n\n    This function, and the ``WSGI_APPLICATION`` setting itself, are only useful\n    for Django's internal server (runserver); external WSGI servers should just\n    be configured to point to the correct application object directly.\n\n    If settings.WSGI_APPLICATION is not set (is ``None``), return\n    whatever ``django.core.wsgi.get_wsgi_application`` returns.\n    \"\"\"\n    from django.conf import settings\n\n    app_path = getattr(settings, \"WSGI_APPLICATION\")\n    if app_path is None:\n        return get_wsgi_application()\n\n    try:\n        return import_string(app_path)\n    except ImportError as err:\n        raise ImproperlyConfigured(\n            \"WSGI application '%s' could not be loaded; \"\n            \"Error importing module.\" % app_path\n        ) from err\n\n\ndef is_broken_pipe_error():\n    exc_type, _, _ = sys.exc_info()\n    return issubclass(\n        exc_type,\n        (\n            BrokenPipeError,\n            ConnectionAbortedError,\n            ConnectionResetError,\n        ),\n    )\n\n\nclass WSGIServer(simple_server.WSGIServer):\n    \"\"\"BaseHTTPServer that implements the Python WSGI protocol\"\"\"\n\n    request_queue_size = 10\n\n    def __init__(self, *args, ipv6=False, allow_reuse_address=True, **kwargs):\n        if ipv6:\n            self.address_family = socket.AF_INET6\n        self.allow_reuse_address = allow_reuse_address\n        super().__init__(*args, **kwargs)\n\n    def handle_error(self, request, client_address):\n        if is_broken_pipe_error():\n            logger.info(\"- Broken pipe from %s\", client_address)\n        else:\n            super().handle_error(request, client_address)",
+                        "filename": "django/core/servers/basehttp.py",
+                        "start_index": 0,
+                        "end_index": 2652,
+                        "start_line": 1,
+                        "end_line": 83,
+                        "max_line": 281,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'is_broken_pipe_error' function which is directly related to the issue and may need to be updated to handle ConnectionAbortedError as a broken pipe error."
+                },
+                {
+                    "chunk": {
+                        "code": "class ServerHandler(simple_server.ServerHandler):\n    http_version = \"1.1\"\n\n    def __init__(self, stdin, stdout, stderr, environ, **kwargs):\n        \"\"\"\n        Use a LimitedStream so that unread request data will be ignored at\n        the end of the request. WSGIRequest uses a LimitedStream but it\n        shouldn't discard the data since the upstream servers usually do this.\n        This fix applies only for testserver/runserver.\n        \"\"\"\n        try:\n            content_length = int(environ.get(\"CONTENT_LENGTH\"))\n        except (ValueError, TypeError):\n            content_length = 0\n        super().__init__(\n            LimitedStream(stdin, content_length), stdout, stderr, environ, **kwargs\n        )\n\n    def cleanup_headers(self):\n        super().cleanup_headers()\n        if (\n            self.environ[\"REQUEST_METHOD\"] == \"HEAD\"\n            and \"Content-Length\" in self.headers\n        ):\n            del self.headers[\"Content-Length\"]\n        # HTTP/1.1 requires support for persistent connections. Send 'close' if\n        # the content length is unknown to prevent clients from reusing the\n        # connection.\n        if (\n            self.environ[\"REQUEST_METHOD\"] != \"HEAD\"\n            and \"Content-Length\" not in self.headers\n        ):\n            self.headers[\"Connection\"] = \"close\"\n        # Persistent connections require threading server.\n        elif not isinstance(self.request_handler.server, socketserver.ThreadingMixIn):\n            self.headers[\"Connection\"] = \"close\"\n        # Mark the connection for closing if it's set as such above or if the\n        # application sent the header.\n        if self.headers.get(\"Connection\") == \"close\":\n            self.request_handler.close_connection = True\n\n    def close(self):\n        self.get_stdin().read()\n        super().close()\n\n    def finish_response(self):\n        if self.environ[\"REQUEST_METHOD\"] == \"HEAD\":\n            try:\n                deque(self.result, maxlen=0)  # Consume iterator.\n                # Don't call self.finish_content() as, if the headers have not\n                # been sent and Content-Length isn't set, it'll default to \"0\"\n                # which will prevent omission of the Content-Length header with\n                # HEAD requests as permitted by RFC 9110 Section 9.3.2.\n                # Instead, send the headers, if not sent yet.\n                if not self.headers_sent:\n                    self.send_headers()\n            finally:\n                self.close()\n        else:\n            super().finish_response()",
+                        "filename": "django/core/servers/basehttp.py",
+                        "start_index": 3688,
+                        "end_index": 6224,
+                        "start_line": 114,
+                        "end_line": 173,
+                        "max_line": 281,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is from the same file as the function in question and may contain related logic that could be impacted by changes to the handling of broken pipe errors."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `is_broken_pipe_error` function in `django/core/servers/basehttp.py` to include `ConnectionAbortedError` in the tuple of exceptions that are checked to determine if an error is a broken pipe error.\n\n```python\ndef is_broken_pipe_error():\n    exc_type, _, _ = sys.exc_info()\n    return issubclass(\n        exc_type,\n        (\n            BrokenPipeError,\n            ConnectionAbortedError,  # Add this line\n            ConnectionResetError,\n        ),\n    )\n```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a specific and actionable solution to the problem described in the PROMPT by suggesting a modification to the 'is_broken_pipe_error' function in 'django/core/servers/basehttp.py'. It correctly identifies that 'ConnectionAbortedError' should be included in the tuple of exceptions to treat it as a broken pipe error. The provided code snippet is a direct and relevant change that would likely resolve the issue. Additionally, the RESPONSE includes references to the relevant code snippets in the Django repository, which is helpful for locating the function that needs to be modified. The RESPONSE does not address all aspects of the described bug, such as testing the change or considering potential side effects, which is why it does not receive a perfect score.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711725322.2391381,
+        "result": "- Modify the `is_broken_pipe_error` function in `django/core/servers/basehttp.py` to include `ConnectionAbortedError` in the tuple of exceptions that are checked to determine if an error is a broken pipe error.\n\n```python\ndef is_broken_pipe_error():\n    exc_type, _, _ = sys.exc_info()\n    return issubclass(\n        exc_type,\n        (\n            BrokenPipeError,\n            ConnectionAbortedError,  # Add this line\n            ConnectionResetError,\n        ),\n    )\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [servers](https://github.com/testbed/django__django__3.2/tree//django/core/servers)- [Lines 1 - 83](https://github.com/testbed/django__django__3.2/blob//django/core/servers/basehttp.py#L1-L83)\n\n This snippet contains the 'is_broken_pipe_error' function which is directly related to the issue and may need to be updated to handle ConnectionAbortedError as a broken pipe error. \n\n\n   - [Lines 114 - 173](https://github.com/testbed/django__django__3.2/blob//django/core/servers/basehttp.py#L114-L173)\n\n This snippet is from the same file as the function in question and may contain related logic that could be impacted by changes to the handling of broken pipe errors."
+    }
+}

@@ -1,0 +1,208 @@
+{
+    "id": "django__django-12933",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 3774714573074630847,
+    "title": "Raise CommandError when clearsessions is called on a backend not implementing clear_expired()",
+    "body": "Description\n\t\nFormal ticket for the issue raised by Fran\u00e7ois Freitag in \u200bPR.\nclearsessions writes to stderr directly when a backend has not implemented clear_expired(). Fran\u00e7ois notes that the recommended behavior is to raise CommandError.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `clear_expired` method in `django/contrib/sessions/backends/cache.py` to raise `NotImplementedError` instead of passing silently:\n\n```python\n# django/contrib/sessions/backends/cache.py\n\nclass SessionStore(SessionBase):\n    # ... existing code ...\n\n    @classmethod\n    def clear_expired(cls):\n        raise NotImplementedError('This backend does not support clear_expired().')\n```\n\n- Modify the `clear_expired` method in `django/contrib/sessions/backends/signed_cookies.py` similarly:\n\n```python\n# django/contrib/sessions/backends/signed_cookies.py\n\nclass SessionStore(SessionBase):\n    # ... existing code ...\n\n    @classmethod\n    def clear_expired(cls):\n        raise NotImplementedError('This backend does not support clear_expired().')\n```\n\n- Ensure that the `clearsessions` management command in `django/contrib/sessions/management/commands/clearsessions.py` is correctly catching `NotImplementedError` and raising `CommandError`:\n\n```python\n# django/contrib/sessions/management/commands/clearsessions.py\n\nclass Command(BaseCommand):\n    # ... existing code ...\n\n    def handle(self, **options):\n        engine = import_module(settings.SESSION_ENGINE)\n        try:\n            engine.SessionStore.clear_expired()\n        except NotImplementedError:\n            raise CommandError(\n                \"Session engine '%s' doesn't support clearing expired \"\n                \"sessions.\" % settings.SESSION_ENGINE\n            )\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [sessions](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions) \u2192 [management](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions/management) \u2192 [commands](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions/management/commands)- [Lines 1 - 21](https://github.com/testbed/django__django__3.2/blob//django/contrib/sessions/management/commands/clearsessions.py#L1-L21)\n\n This snippet contains the 'clearsessions' command implementation where the CommandError should be raised if the backend does not implement 'clear_expired()'.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [sessions](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions) \u2192 [backends](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions/backends)- [Lines 1 - 85](https://github.com/testbed/django__django__3.2/blob//django/contrib/sessions/backends/cache.py#L1-L85)\n\n This snippet shows an example of a session backend (cache backend) where 'clear_expired()' is not implemented and thus would trigger the CommandError when 'clearsessions' is called.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [sessions](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions) \u2192 [backends](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions/backends)- [Lines 1 - 72](https://github.com/testbed/django__django__3.2/blob//django/contrib/sessions/backends/cached_db.py#L1-L72)\n\n This snippet is from the cached_db backend and may be relevant to check if 'clear_expired()' is implemented correctly and if it would raise the CommandError as expected.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000326,
+        "snippet_processor": 0.04952,
+        "issue_star_creation": 0.027679999999999996,
+        "issue_star_solver": 0.05689,
+        "bouncer": 0.02876
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711728011.3799129,
+        "relevant_snippets": [
+            {
+                "code": "from importlib import import_module\n\nfrom django.conf import settings\nfrom django.core.management.base import BaseCommand, CommandError\n\n\nclass Command(BaseCommand):\n    help = (\n        \"Can be run as a cronjob or directly to clean out expired sessions \"\n        \"when the backend supports it.\"\n    )\n\n    def handle(self, **options):\n        engine = import_module(settings.SESSION_ENGINE)\n        try:\n            engine.SessionStore.clear_expired()\n        except NotImplementedError:\n            raise CommandError(\n                \"Session engine '%s' doesn't support clearing expired \"\n                \"sessions.\" % settings.SESSION_ENGINE\n            )",
+                "filename": "django/contrib/sessions/management/commands/clearsessions.py",
+                "start_index": 0,
+                "end_index": 660,
+                "start_line": 1,
+                "end_line": 21,
+                "max_line": 21,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import logging\nimport string\nfrom datetime import datetime, timedelta\n\nfrom django.conf import settings\nfrom django.core import signing\nfrom django.utils import timezone\nfrom django.utils.crypto import get_random_string\nfrom django.utils.module_loading import import_string\n\n# session_key should not be case sensitive because some backends can store it\n# on case insensitive file systems.\nVALID_KEY_CHARS = string.ascii_lowercase + string.digits\n\n\nclass CreateError(Exception):\n    \"\"\"\n    Used internally as a consistent exception type to catch from save (see the\n    docstring for SessionBase.save() for details).\n    \"\"\"\n\n    pass\n\n\nclass UpdateError(Exception):\n    \"\"\"\n    Occurs if Django tries to update a session that was deleted.\n    \"\"\"\n\n    pass",
+                "filename": "django/contrib/sessions/backends/base.py",
+                "start_index": 0,
+                "end_index": 756,
+                "start_line": 1,
+                "end_line": 270,
+                "max_line": 365,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.conf import settings\nfrom django.contrib.sessions.backends.base import CreateError, SessionBase, UpdateError\nfrom django.core.cache import caches\n\nKEY_PREFIX = \"django.contrib.sessions.cache\"\n\n\nclass SessionStore(SessionBase):\n    \"\"\"\n    A cache-based session store.\n    \"\"\"\n\n    cache_key_prefix = KEY_PREFIX\n\n    def __init__(self, session_key=None):\n        self._cache = caches[settings.SESSION_CACHE_ALIAS]\n        super().__init__(session_key)\n\n    @property\n    def cache_key(self):\n        return self.cache_key_prefix + self._get_or_create_session_key()\n\n    def load(self):\n        try:\n            session_data = self._cache.get(self.cache_key)\n        except Exception:\n            # Some backends (e.g. memcache) raise an exception on invalid\n            # cache keys. If this happens, reset the session. See #17810.\n            session_data = None\n        if session_data is not None:\n            return session_data\n        self._session_key = None\n        return {}\n\n    def create(self):\n        # Because a cache can fail silently (e.g. memcache), we don't know if\n        # we are failing to create a new session because of a key collision or\n        # because the cache is missing. So we try for a (large) number of times\n        # and then raise an exception. That's the risk you shoulder if using\n        # cache backing.\n        for i in range(10000):\n            self._session_key = self._get_new_session_key()\n            try:\n                self.save(must_create=True)\n            except CreateError:\n                continue\n            self.modified = True\n            return\n        raise RuntimeError(\n            \"Unable to create a new session key. \"\n            \"It is likely that the cache is unavailable.\"\n        )\n\n    def save(self, must_create=False):\n        if self.session_key is None:\n            return self.create()\n        if must_create:\n            func = self._cache.add\n        elif self._cache.get(self.cache_key) is not None:\n            func = self._cache.set\n        else:\n            raise UpdateError\n        result = func(\n            self.cache_key,\n            self._get_session(no_load=must_create),\n            self.get_expiry_age(),\n        )\n        if must_create and not result:\n            raise CreateError\n\n    def exists(self, session_key):\n        return (\n            bool(session_key) and (self.cache_key_prefix + session_key) in self._cache\n        )\n\n    def delete(self, session_key=None):\n        if session_key is None:\n            if self.session_key is None:\n                return\n            session_key = self.session_key\n        self._cache.delete(self.cache_key_prefix + session_key)\n\n    @classmethod\n    def clear_expired(cls):\n        pass",
+                "filename": "django/contrib/sessions/backends/cache.py",
+                "start_index": 0,
+                "end_index": 2740,
+                "start_line": 1,
+                "end_line": 85,
+                "max_line": 85,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nCached, database-backed sessions.\n\"\"\"\n\nfrom django.conf import settings\nfrom django.contrib.sessions.backends.db import SessionStore as DBStore\nfrom django.core.cache import caches\n\nKEY_PREFIX = \"django.contrib.sessions.cached_db\"\n\n\nclass SessionStore(DBStore):\n    \"\"\"\n    Implement cached, database backed sessions.\n    \"\"\"\n\n    cache_key_prefix = KEY_PREFIX\n\n    def __init__(self, session_key=None):\n        self._cache = caches[settings.SESSION_CACHE_ALIAS]\n        super().__init__(session_key)\n\n    @property\n    def cache_key(self):\n        return self.cache_key_prefix + self._get_or_create_session_key()\n\n    def load(self):\n        try:\n            data = self._cache.get(self.cache_key)\n        except Exception:\n            # Some backends (e.g. memcache) raise an exception on invalid\n            # cache keys. If this happens, reset the session. See #17810.\n            data = None\n\n        if data is None:\n            s = self._get_session_from_db()\n            if s:\n                data = self.decode(s.session_data)\n                self._cache.set(\n                    self.cache_key, data, self.get_expiry_age(expiry=s.expire_date)\n                )\n            else:\n                data = {}\n        return data\n\n    def exists(self, session_key):\n        return (\n            session_key\n            and (self.cache_key_prefix + session_key) in self._cache\n            or super().exists(session_key)\n        )\n\n    def save(self, must_create=False):\n        super().save(must_create)\n        self._cache.set(self.cache_key, self._session, self.get_expiry_age())\n\n    def delete(self, session_key=None):\n        super().delete(session_key)\n        if session_key is None:\n            if self.session_key is None:\n                return\n            session_key = self.session_key\n        self._cache.delete(self.cache_key_prefix + session_key)\n\n    def flush(self):\n        \"\"\"\n        Remove the current session data from the database and regenerate the\n        key.\n        \"\"\"\n        self.clear()\n        self.delete(self.session_key)\n        self._session_key = None",
+                "filename": "django/contrib/sessions/backends/cached_db.py",
+                "start_index": 0,
+                "end_index": 2097,
+                "start_line": 1,
+                "end_line": 72,
+                "max_line": 72,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.core.exceptions import BadRequest, SuspiciousOperation\n\n\nclass InvalidSessionKey(SuspiciousOperation):\n    \"\"\"Invalid characters in session key\"\"\"\n\n    pass\n\n\nclass SuspiciousSession(SuspiciousOperation):\n    \"\"\"The session may be tampered with\"\"\"\n\n    pass\n\n\nclass SessionInterrupted(BadRequest):\n    \"\"\"The session was interrupted.\"\"\"\n\n    pass",
+                "filename": "django/contrib/sessions/exceptions.py",
+                "start_index": 0,
+                "end_index": 358,
+                "start_line": 1,
+                "end_line": 19,
+                "max_line": 19,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import datetime\nimport logging\nimport os\nimport shutil\nimport tempfile\n\nfrom django.conf import settings\nfrom django.contrib.sessions.backends.base import (\n    VALID_KEY_CHARS,\n    CreateError,\n    SessionBase,\n    UpdateError,\n)\nfrom django.contrib.sessions.exceptions import InvalidSessionKey\nfrom django.core.exceptions import ImproperlyConfigured, SuspiciousOperation",
+                "filename": "django/contrib/sessions/backends/file.py",
+                "start_index": 0,
+                "end_index": 372,
+                "start_line": 1,
+                "end_line": 15,
+                "max_line": 210,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class SessionStore(SessionBase):",
+                "filename": "django/contrib/sessions/backends/db.py",
+                "start_index": 320,
+                "end_index": 352,
+                "start_line": 10,
+                "end_line": 10,
+                "max_line": 110,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class SessionStore(SessionBase):",
+                "filename": "django/contrib/sessions/backends/file.py",
+                "start_index": 375,
+                "end_index": 407,
+                "start_line": 18,
+                "end_line": 18,
+                "max_line": 210,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.contrib.sessions.backends.base import SessionBase\nfrom django.core import signing\n\n\nclass SessionStore(SessionBase):\n    def load(self):\n        \"\"\"\n        Load the data from the key itself instead of fetching from some\n        external data store. Opposite of _get_session_key(), raise BadSignature\n        if signature fails.\n        \"\"\"\n        try:\n            return signing.loads(\n                self.session_key,\n                serializer=self.serializer,\n                # This doesn't handle non-default expiry dates, see #19201\n                max_age=self.get_session_cookie_age(),\n                salt=\"django.contrib.sessions.backends.signed_cookies\",\n            )\n        except Exception:\n            # BadSignature, ValueError, or unpickling exceptions. If any of\n            # these happen, reset the session.\n            self.create()\n        return {}\n\n    def create(self):\n        \"\"\"\n        To create a new key, set the modified flag so that the cookie is set\n        on the client for the current request.\n        \"\"\"\n        self.modified = True\n\n    def save(self, must_create=False):\n        \"\"\"\n        To save, get the session key as a securely signed string and then set\n        the modified flag so that the cookie is set on the client for the\n        current request.\n        \"\"\"\n        self._session_key = self._get_session_key()\n        self.modified = True\n\n    def exists(self, session_key=None):\n        \"\"\"\n        This method makes sense when you're talking to a shared resource, but\n        it doesn't matter when you're storing the information in the client's\n        cookie.\n        \"\"\"\n        return False\n\n    def delete(self, session_key=None):\n        \"\"\"\n        To delete, clear the session key and the underlying data structure\n        and set the modified flag so that the cookie is set on the client for\n        the current request.\n        \"\"\"\n        self._session_key = \"\"\n        self._session_cache = {}\n        self.modified = True\n\n    def cycle_key(self):\n        \"\"\"\n        Keep the same data but with a new key. Call save() and it will\n        automatically save a cookie with a new key at the end of the request.\n        \"\"\"\n        self.save()\n\n    def _get_session_key(self):\n        \"\"\"\n        Instead of generating a random string, generate a secure url-safe\n        base64-encoded string of data as our session key.\n        \"\"\"\n        return signing.dumps(\n            self._session,\n            compress=True,\n            salt=\"django.contrib.sessions.backends.signed_cookies\",\n            serializer=self.serializer,\n        )\n\n    @classmethod\n    def clear_expired(cls):\n        pass",
+                "filename": "django/contrib/sessions/backends/signed_cookies.py",
+                "start_index": 0,
+                "end_index": 2675,
+                "start_line": 1,
+                "end_line": 81,
+                "max_line": 81,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import logging\n\nfrom django.contrib.sessions.backends.base import CreateError, SessionBase, UpdateError\nfrom django.core.exceptions import SuspiciousOperation\nfrom django.db import DatabaseError, IntegrityError, router, transaction\nfrom django.utils import timezone\nfrom django.utils.functional import cached_property",
+                "filename": "django/contrib/sessions/backends/db.py",
+                "start_index": 0,
+                "end_index": 317,
+                "start_line": 1,
+                "end_line": 7,
+                "max_line": 110,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/contrib/sessions/management/commands/clearsessions.py": [
+                {
+                    "chunk": {
+                        "code": "from importlib import import_module\n\nfrom django.conf import settings\nfrom django.core.management.base import BaseCommand, CommandError\n\n\nclass Command(BaseCommand):\n    help = (\n        \"Can be run as a cronjob or directly to clean out expired sessions \"\n        \"when the backend supports it.\"\n    )\n\n    def handle(self, **options):\n        engine = import_module(settings.SESSION_ENGINE)\n        try:\n            engine.SessionStore.clear_expired()\n        except NotImplementedError:\n            raise CommandError(\n                \"Session engine '%s' doesn't support clearing expired \"\n                \"sessions.\" % settings.SESSION_ENGINE\n            )",
+                        "filename": "django/contrib/sessions/management/commands/clearsessions.py",
+                        "start_index": 0,
+                        "end_index": 660,
+                        "start_line": 1,
+                        "end_line": 21,
+                        "max_line": 21,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'clearsessions' command implementation where the CommandError should be raised if the backend does not implement 'clear_expired()'."
+                }
+            ],
+            "django/contrib/sessions/backends/cache.py": [
+                {
+                    "chunk": {
+                        "code": "from django.conf import settings\nfrom django.contrib.sessions.backends.base import CreateError, SessionBase, UpdateError\nfrom django.core.cache import caches\n\nKEY_PREFIX = \"django.contrib.sessions.cache\"\n\n\nclass SessionStore(SessionBase):\n    \"\"\"\n    A cache-based session store.\n    \"\"\"\n\n    cache_key_prefix = KEY_PREFIX\n\n    def __init__(self, session_key=None):\n        self._cache = caches[settings.SESSION_CACHE_ALIAS]\n        super().__init__(session_key)\n\n    @property\n    def cache_key(self):\n        return self.cache_key_prefix + self._get_or_create_session_key()\n\n    def load(self):\n        try:\n            session_data = self._cache.get(self.cache_key)\n        except Exception:\n            # Some backends (e.g. memcache) raise an exception on invalid\n            # cache keys. If this happens, reset the session. See #17810.\n            session_data = None\n        if session_data is not None:\n            return session_data\n        self._session_key = None\n        return {}\n\n    def create(self):\n        # Because a cache can fail silently (e.g. memcache), we don't know if\n        # we are failing to create a new session because of a key collision or\n        # because the cache is missing. So we try for a (large) number of times\n        # and then raise an exception. That's the risk you shoulder if using\n        # cache backing.\n        for i in range(10000):\n            self._session_key = self._get_new_session_key()\n            try:\n                self.save(must_create=True)\n            except CreateError:\n                continue\n            self.modified = True\n            return\n        raise RuntimeError(\n            \"Unable to create a new session key. \"\n            \"It is likely that the cache is unavailable.\"\n        )\n\n    def save(self, must_create=False):\n        if self.session_key is None:\n            return self.create()\n        if must_create:\n            func = self._cache.add\n        elif self._cache.get(self.cache_key) is not None:\n            func = self._cache.set\n        else:\n            raise UpdateError\n        result = func(\n            self.cache_key,\n            self._get_session(no_load=must_create),\n            self.get_expiry_age(),\n        )\n        if must_create and not result:\n            raise CreateError\n\n    def exists(self, session_key):\n        return (\n            bool(session_key) and (self.cache_key_prefix + session_key) in self._cache\n        )\n\n    def delete(self, session_key=None):\n        if session_key is None:\n            if self.session_key is None:\n                return\n            session_key = self.session_key\n        self._cache.delete(self.cache_key_prefix + session_key)\n\n    @classmethod\n    def clear_expired(cls):\n        pass",
+                        "filename": "django/contrib/sessions/backends/cache.py",
+                        "start_index": 0,
+                        "end_index": 2740,
+                        "start_line": 1,
+                        "end_line": 85,
+                        "max_line": 85,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows an example of a session backend (cache backend) where 'clear_expired()' is not implemented and thus would trigger the CommandError when 'clearsessions' is called."
+                }
+            ],
+            "django/contrib/sessions/backends/cached_db.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nCached, database-backed sessions.\n\"\"\"\n\nfrom django.conf import settings\nfrom django.contrib.sessions.backends.db import SessionStore as DBStore\nfrom django.core.cache import caches\n\nKEY_PREFIX = \"django.contrib.sessions.cached_db\"\n\n\nclass SessionStore(DBStore):\n    \"\"\"\n    Implement cached, database backed sessions.\n    \"\"\"\n\n    cache_key_prefix = KEY_PREFIX\n\n    def __init__(self, session_key=None):\n        self._cache = caches[settings.SESSION_CACHE_ALIAS]\n        super().__init__(session_key)\n\n    @property\n    def cache_key(self):\n        return self.cache_key_prefix + self._get_or_create_session_key()\n\n    def load(self):\n        try:\n            data = self._cache.get(self.cache_key)\n        except Exception:\n            # Some backends (e.g. memcache) raise an exception on invalid\n            # cache keys. If this happens, reset the session. See #17810.\n            data = None\n\n        if data is None:\n            s = self._get_session_from_db()\n            if s:\n                data = self.decode(s.session_data)\n                self._cache.set(\n                    self.cache_key, data, self.get_expiry_age(expiry=s.expire_date)\n                )\n            else:\n                data = {}\n        return data\n\n    def exists(self, session_key):\n        return (\n            session_key\n            and (self.cache_key_prefix + session_key) in self._cache\n            or super().exists(session_key)\n        )\n\n    def save(self, must_create=False):\n        super().save(must_create)\n        self._cache.set(self.cache_key, self._session, self.get_expiry_age())\n\n    def delete(self, session_key=None):\n        super().delete(session_key)\n        if session_key is None:\n            if self.session_key is None:\n                return\n            session_key = self.session_key\n        self._cache.delete(self.cache_key_prefix + session_key)\n\n    def flush(self):\n        \"\"\"\n        Remove the current session data from the database and regenerate the\n        key.\n        \"\"\"\n        self.clear()\n        self.delete(self.session_key)\n        self._session_key = None",
+                        "filename": "django/contrib/sessions/backends/cached_db.py",
+                        "start_index": 0,
+                        "end_index": 2097,
+                        "start_line": 1,
+                        "end_line": 72,
+                        "max_line": 72,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is from the cached_db backend and may be relevant to check if 'clear_expired()' is implemented correctly and if it would raise the CommandError as expected."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `clear_expired` method in `django/contrib/sessions/backends/cache.py` to raise `NotImplementedError` instead of passing silently:\n\n```python\n# django/contrib/sessions/backends/cache.py\n\nclass SessionStore(SessionBase):\n    # ... existing code ...\n\n    @classmethod\n    def clear_expired(cls):\n        raise NotImplementedError('This backend does not support clear_expired().')\n```\n\n- Modify the `clear_expired` method in `django/contrib/sessions/backends/signed_cookies.py` similarly:\n\n```python\n# django/contrib/sessions/backends/signed_cookies.py\n\nclass SessionStore(SessionBase):\n    # ... existing code ...\n\n    @classmethod\n    def clear_expired(cls):\n        raise NotImplementedError('This backend does not support clear_expired().')\n```\n\n- Ensure that the `clearsessions` management command in `django/contrib/sessions/management/commands/clearsessions.py` is correctly catching `NotImplementedError` and raising `CommandError`:\n\n```python\n# django/contrib/sessions/management/commands/clearsessions.py\n\nclass Command(BaseCommand):\n    # ... existing code ...\n\n    def handle(self, **options):\n        engine = import_module(settings.SESSION_ENGINE)\n        try:\n            engine.SessionStore.clear_expired()\n        except NotImplementedError:\n            raise CommandError(\n                \"Session engine '%s' doesn't support clearing expired \"\n                \"sessions.\" % settings.SESSION_ENGINE\n            )\n```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable solution to the problem described in the PROMPT. It suggests modifying the `clear_expired` method in two backend files to raise `NotImplementedError` and then catching this error in the `clearsessions` management command to raise `CommandError`. This directly addresses the issue raised in the PROMPT, which is to change the behavior from writing to stderr to raising a `CommandError` when a backend has not implemented `clear_expired()`. The RESPONSE also includes code snippets, which are highly relevant and provide clear guidance on how to implement the suggested changes. The only reason it does not score a 10 is that it does not explicitly mention removing the direct write to stderr, which is part of the current behavior that needs to be changed according to the PROMPT.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711728152.1509051,
+        "result": "- Modify the `clear_expired` method in `django/contrib/sessions/backends/cache.py` to raise `NotImplementedError` instead of passing silently:\n\n```python\n# django/contrib/sessions/backends/cache.py\n\nclass SessionStore(SessionBase):\n    # ... existing code ...\n\n    @classmethod\n    def clear_expired(cls):\n        raise NotImplementedError('This backend does not support clear_expired().')\n```\n\n- Modify the `clear_expired` method in `django/contrib/sessions/backends/signed_cookies.py` similarly:\n\n```python\n# django/contrib/sessions/backends/signed_cookies.py\n\nclass SessionStore(SessionBase):\n    # ... existing code ...\n\n    @classmethod\n    def clear_expired(cls):\n        raise NotImplementedError('This backend does not support clear_expired().')\n```\n\n- Ensure that the `clearsessions` management command in `django/contrib/sessions/management/commands/clearsessions.py` is correctly catching `NotImplementedError` and raising `CommandError`:\n\n```python\n# django/contrib/sessions/management/commands/clearsessions.py\n\nclass Command(BaseCommand):\n    # ... existing code ...\n\n    def handle(self, **options):\n        engine = import_module(settings.SESSION_ENGINE)\n        try:\n            engine.SessionStore.clear_expired()\n        except NotImplementedError:\n            raise CommandError(\n                \"Session engine '%s' doesn't support clearing expired \"\n                \"sessions.\" % settings.SESSION_ENGINE\n            )\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [sessions](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions) \u2192 [management](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions/management) \u2192 [commands](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions/management/commands)- [Lines 1 - 21](https://github.com/testbed/django__django__3.2/blob//django/contrib/sessions/management/commands/clearsessions.py#L1-L21)\n\n This snippet contains the 'clearsessions' command implementation where the CommandError should be raised if the backend does not implement 'clear_expired()'.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [sessions](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions) \u2192 [backends](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions/backends)- [Lines 1 - 85](https://github.com/testbed/django__django__3.2/blob//django/contrib/sessions/backends/cache.py#L1-L85)\n\n This snippet shows an example of a session backend (cache backend) where 'clear_expired()' is not implemented and thus would trigger the CommandError when 'clearsessions' is called.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [sessions](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions) \u2192 [backends](https://github.com/testbed/django__django__3.2/tree//django/contrib/sessions/backends)- [Lines 1 - 72](https://github.com/testbed/django__django__3.2/blob//django/contrib/sessions/backends/cached_db.py#L1-L72)\n\n This snippet is from the cached_db backend and may be relevant to check if 'clear_expired()' is implemented correctly and if it would raise the CommandError as expected."
+    }
+}

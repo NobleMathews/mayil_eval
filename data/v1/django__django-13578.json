@@ -1,0 +1,204 @@
+{
+    "id": "django__django-13578",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 7517382718311254067,
+    "title": "ManagementForm exception in case of bad prefix should be easier to understand",
+    "body": "Description\n\t\nIf user adds multiple formsets with prefixes, and specifies the prefix incorrectly when binding the form and validating:\nsome_formset = SomeFormSet(request.POST, 'articles')\ninstead of:\nsome_formset = SomeFormSet(request.POST, prefix='articles') \nDjango \"suppresses\" the original exception and raises only relatively unhelpful \"ManagementForm data is missing or has been tampered with\". \nIn file django/forms/formsets.py, line 57:\n 54. if self.data or self.files:\n 55.\t form = ManagementForm(self.data, auto_id=self.auto_id, prefix=self.prefix)\n 56.\t if not form.is_valid():\n 57.\t\t raise ValidationError('ManagementForm data is missing or has been tampered with') \nSuggestion: include form._errors in output, because for such a small bug in code, it can take a really long time find it.\n{'INITIAL_FORMS': [u'This field is required.'],\n 'MAX_NUM_FORMS': [u'This field is required.'],\n 'TOTAL_FORMS': [u'This field is required.']}\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the instantiation of `SomeFormSet` to use the correct keyword argument for the prefix:\n  ```python\n  SomeFormSet(request.POST, prefix='articles')\n  ```\n  \n- Update the `ValidationError` message in `formsets.py` to include `form._errors` for better context:\n  ```python\n  if not form.is_valid():\n      error_message = 'ManagementForm data is missing or has been tampered with: %s' % form._errors\n      raise ValidationError(error_message)\n  ```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [forms](https://github.com/testbed/django__django__3.2/tree//django/forms)- [Lines 1 - 49](https://github.com/testbed/django__django__3.2/blob//django/forms/formsets.py#L1-L49)\n\n This snippet contains the ManagementForm class definition and the clean method that sets default values for TOTAL_FORM_COUNT and INITIAL_FORM_COUNT, which are relevant to the issue. \n\n\n   - [Lines 29 - 500](https://github.com/testbed/django__django__3.2/blob//django/forms/formsets.py#L29-L500)\n\n This snippet contains the BaseFormSet class where the ManagementForm is used and where the error message could be improved to include form._errors as suggested. \n\n\n   - [Lines 144 - 215](https://github.com/testbed/django__django__3.2/blob//django/forms/formsets.py#L144-L215)\n\n This snippet shows the management_form property of the BaseFormSet class, which is directly involved in the creation and validation of the ManagementForm, relevant to the issue.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0002675,
+        "snippet_processor": 0.04624,
+        "issue_star_creation": 0.04094,
+        "issue_star_solver": 0.04981,
+        "bouncer": 0.02718
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711725876.076809,
+        "relevant_snippets": [
+            {
+                "code": "from django.core.exceptions import ValidationError\nfrom django.utils.functional import SimpleLazyObject\nfrom django.utils.text import format_lazy\n\n\ndef prefix_validation_error(error, prefix, code, params):\n    \"\"\"\n    Prefix a validation error message while maintaining the existing\n    validation data structure.\n    \"\"\"\n    if error.error_list == [error]:\n        error_params = error.params or {}\n        return ValidationError(\n            # We can't simply concatenate messages since they might require\n            # their associated parameters to be expressed correctly which\n            # is not something `format_lazy` does. For example, proxied\n            # ngettext calls require a count parameter and are converted\n            # to an empty string if they are missing it.\n            message=format_lazy(\n                \"{} {}\",\n                SimpleLazyObject(lambda: prefix % params),\n                SimpleLazyObject(lambda: error.message % error_params),\n            ),\n            code=code,\n            params={**error_params, **params},\n        )\n    return ValidationError(\n        [prefix_validation_error(e, prefix, code, params) for e in error.error_list]\n    )",
+                "filename": "django/contrib/postgres/utils.py",
+                "start_index": 0,
+                "end_index": 1186,
+                "start_line": 1,
+                "end_line": 29,
+                "max_line": 29,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.core.exceptions import ValidationError\nfrom django.forms import Form\nfrom django.forms.fields import BooleanField, IntegerField\nfrom django.forms.renderers import get_default_renderer\nfrom django.forms.utils import ErrorList, RenderableFormMixin\nfrom django.forms.widgets import CheckboxInput, HiddenInput, NumberInput\nfrom django.utils.functional import cached_property\nfrom django.utils.translation import gettext_lazy as _\nfrom django.utils.translation import ngettext_lazy\n\n__all__ = (\"BaseFormSet\", \"formset_factory\", \"all_valid\")\n\n# special field names\nTOTAL_FORM_COUNT = \"TOTAL_FORMS\"\nINITIAL_FORM_COUNT = \"INITIAL_FORMS\"\nMIN_NUM_FORM_COUNT = \"MIN_NUM_FORMS\"\nMAX_NUM_FORM_COUNT = \"MAX_NUM_FORMS\"\nORDERING_FIELD_NAME = \"ORDER\"\nDELETION_FIELD_NAME = \"DELETE\"\n\n# default minimum number of forms in a formset\nDEFAULT_MIN_NUM = 0\n\n# default maximum number of forms in a formset, to prevent memory exhaustion\nDEFAULT_MAX_NUM = 1000\n\n\nclass ManagementForm(Form):\n    \"\"\"\n    Keep track of how many form instances are displayed on the page. If adding\n    new forms via JavaScript, you should increment the count field of this form\n    as well.\n    \"\"\"\n\n    TOTAL_FORMS = IntegerField(widget=HiddenInput)\n    INITIAL_FORMS = IntegerField(widget=HiddenInput)\n    # MIN_NUM_FORM_COUNT and MAX_NUM_FORM_COUNT are output with the rest of the\n    # management form, but only for the convenience of client-side code. The\n    # POST value of them returned from the client is not checked.\n    MIN_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)\n    MAX_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)\n\n    def clean(self):\n        cleaned_data = super().clean()\n        # When the management form is invalid, we don't know how many forms\n        # were submitted.\n        cleaned_data.setdefault(TOTAL_FORM_COUNT, 0)\n        cleaned_data.setdefault(INITIAL_FORM_COUNT, 0)\n        return cleaned_data",
+                "filename": "django/forms/formsets.py",
+                "start_index": 0,
+                "end_index": 1927,
+                "start_line": 1,
+                "end_line": 49,
+                "max_line": 577,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def get_unique_error_message(self, unique_check):\n        if len(unique_check) == 1:\n            return gettext(\"Please correct the duplicate data for %(field)s.\") % {\n                \"field\": unique_check[0],\n            }\n        else:\n            return gettext(\n                \"Please correct the duplicate data for %(field)s, which must be unique.\"\n            ) % {\n                \"field\": get_text_list(unique_check, _(\"and\")),\n            }\n\n    def get_date_error_message(self, date_check):\n        return gettext(\n            \"Please correct the duplicate data for %(field_name)s \"\n            \"which must be unique for the %(lookup)s in %(date_field)s.\"\n        ) % {\n            \"field_name\": date_check[2],\n            \"date_field\": date_check[3],\n            \"lookup\": str(date_check[1]),\n        }\n\n    def get_form_error(self):\n        return gettext(\"Please correct the duplicate values below.\")\n\n    def save_existing_objects(self, commit=True):\n        self.changed_objects = []\n        self.deleted_objects = []\n        if not self.initial_forms:\n            return []\n\n        saved_instances = []\n        forms_to_delete = self.deleted_forms\n        for form in self.initial_forms:\n            obj = form.instance\n            # If the pk is None, it means either:\n            # 1. The object is an unexpected empty model, created by invalid\n            #    POST data such as an object outside the formset's queryset.\n            # 2. The object was already deleted from the database.\n            if obj.pk is None:\n                continue\n            if form in forms_to_delete:\n                self.deleted_objects.append(obj)\n                self.delete_existing(obj, commit=commit)\n            elif form.has_changed():\n                self.changed_objects.append((obj, form.changed_data))\n                saved_instances.append(self.save_existing(form, obj, commit=commit))\n                if not commit:\n                    self.saved_forms.append(form)\n        return saved_instances\n\n    def save_new_objects(self, commit=True):\n        self.new_objects = []\n        for form in self.extra_forms:\n            if not form.has_changed():\n                continue\n            # If someone has marked an add form for deletion, don't save the\n            # object.\n            if self.can_delete and self._should_delete_form(form):\n                continue\n            self.new_objects.append(self.save_new(form, commit=commit))\n            if not commit:\n                self.saved_forms.append(form)\n        return self.new_objects",
+                "filename": "django/forms/models.py",
+                "start_index": 32895,
+                "end_index": 35455,
+                "start_line": 892,
+                "end_line": 955,
+                "max_line": 1674,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import copy\nfrom itertools import chain\n\nfrom django import forms\nfrom django.contrib.postgres.validators import (\n    ArrayMaxLengthValidator,\n    ArrayMinLengthValidator,\n)\nfrom django.core.exceptions import ValidationError\nfrom django.utils.translation import gettext_lazy as _\n\nfrom ..utils import prefix_validation_error",
+                "filename": "django/contrib/postgres/forms/array.py",
+                "start_index": 0,
+                "end_index": 325,
+                "start_line": 1,
+                "end_line": 12,
+                "max_line": 251,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class ValidationError(Exception):",
+                "filename": "django/core/exceptions.py",
+                "start_index": 2394,
+                "end_index": 2427,
+                "start_line": 133,
+                "end_line": 133,
+                "max_line": 254,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def add_initial_prefix(self, field_name):\n        \"\"\"Add an 'initial' prefix for checking dynamic initial values.\"\"\"\n        return \"initial-%s\" % self.add_prefix(field_name)\n\n    def _widget_data_value(self, widget, html_name):\n        # value_from_datadict() gets the data from the data dictionaries.\n        # Each widget type knows how to retrieve its own data, because some\n        # widgets split data over several HTML fields.\n        return widget.value_from_datadict(self.data, self.files, html_name)\n\n    @property\n    def template_name(self):\n        return self.renderer.form_template_name\n\n    def get_context(self):\n        fields = []\n        hidden_fields = []\n        top_errors = self.non_field_errors().copy()\n        for name, bf in self._bound_items():\n            bf_errors = self.error_class(bf.errors, renderer=self.renderer)\n            if bf.is_hidden:\n                if bf_errors:\n                    top_errors += [\n                        _(\"(Hidden field %(name)s) %(error)s\")\n                        % {\"name\": name, \"error\": str(e)}\n                        for e in bf_errors\n                    ]\n                hidden_fields.append(bf)\n            else:\n                errors_str = str(bf_errors)\n                fields.append((bf, errors_str))\n        return {\n            \"form\": self,\n            \"fields\": fields,\n            \"hidden_fields\": hidden_fields,\n            \"errors\": top_errors,\n        }\n\n    def non_field_errors(self):\n        \"\"\"\n        Return an ErrorList of errors that aren't associated with a particular\n        field -- i.e., from Form.clean(). Return an empty ErrorList if there\n        are none.\n        \"\"\"\n        return self.errors.get(\n            NON_FIELD_ERRORS,\n            self.error_class(error_class=\"nonfield\", renderer=self.renderer),\n        )",
+                "filename": "django/forms/forms.py",
+                "start_index": 7375,
+                "end_index": 9198,
+                "start_line": 208,
+                "end_line": 422,
+                "max_line": 433,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from django import forms\nfrom django.conf import settings\nfrom django.contrib.flatpages.models import FlatPage\nfrom django.core.exceptions import ValidationError\nfrom django.utils.translation import gettext\nfrom django.utils.translation import gettext_lazy as _\n\n\nclass FlatpageForm(forms.ModelForm):\n    url = forms.RegexField(\n        label=_(\"URL\"),\n        max_length=100,\n        regex=r\"^[-\\w/\\.~]+$\",\n        help_text=_(\n            \"Example: \u201c/about/contact/\u201d. Make sure to have leading and trailing \"\n            \"slashes.\"\n        ),\n        error_messages={\n            \"invalid\": _(\n                \"This value must contain only letters, numbers, dots, \"\n                \"underscores, dashes, slashes or tildes.\"\n            ),\n        },\n    )\n\n    class Meta:\n        model = FlatPage\n        fields = \"__all__\"\n\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n        if not self._trailing_slash_required():\n            self.fields[\"url\"].help_text = _(\n                \"Example: \u201c/about/contact\u201d. Make sure to have a leading slash.\"\n            )\n\n    def _trailing_slash_required(self):\n        return (\n            settings.APPEND_SLASH\n            and \"django.middleware.common.CommonMiddleware\" in settings.MIDDLEWARE\n        )\n\n    def clean_url(self):\n        url = self.cleaned_data[\"url\"]\n        if not url.startswith(\"/\"):\n            raise ValidationError(\n                gettext(\"URL is missing a leading slash.\"),\n                code=\"missing_leading_slash\",\n            )\n        if self._trailing_slash_required() and not url.endswith(\"/\"):\n            raise ValidationError(\n                gettext(\"URL is missing a trailing slash.\"),\n                code=\"missing_trailing_slash\",\n            )\n        return url\n\n    def clean(self):\n        url = self.cleaned_data.get(\"url\")\n        sites = self.cleaned_data.get(\"sites\")\n\n        same_url = FlatPage.objects.filter(url=url)\n        if self.instance.pk:\n            same_url = same_url.exclude(pk=self.instance.pk)\n\n        if sites and same_url.filter(sites__in=sites).exists():\n            for site in sites:\n                if same_url.filter(sites=site).exists():\n                    raise ValidationError(\n                        _(\"Flatpage with url %(url)s already exists for site %(site)s\"),\n                        code=\"duplicate_url\",\n                        params={\"url\": url, \"site\": site},\n                    )\n\n        return super().clean()",
+                "filename": "django/contrib/flatpages/forms.py",
+                "start_index": 0,
+                "end_index": 2484,
+                "start_line": 1,
+                "end_line": 74,
+                "max_line": 74,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    A collection of instances of the same Form class.\n    \"\"\"\n\n    deletion_widget = CheckboxInput\n    ordering_widget = NumberInput\n    default_error_messages = {\n        \"missing_management_form\": _(\n            \"ManagementForm data is missing or has been tampered with. Missing fields: \"\n            \"%(field_names)s. You may need to file a bug report if the issue persists.\"\n        ),\n        \"too_many_forms\": ngettext_lazy(\n            \"Please submit at most %(num)d form.\",\n            \"Please submit at most %(num)d forms.\",\n            \"num\",\n        ),\n        \"too_few_forms\": ngettext_lazy(\n            \"Please submit at least %(num)d form.\",\n            \"Please submit at least %(num)d forms.\",\n            \"num\",\n        ),\n    }\n\n    template_name_div = \"django/forms/formsets/div.html\"\n    template_name_p = \"django/forms/formsets/p.html\"\n    template_name_table = \"django/forms/formsets/table.html\"\n    template_name_ul = \"django/forms/formsets/ul.html\"\n\n    def __init__(\n        self,\n        data=None,\n        files=None,\n        auto_id=\"id_%s\",\n        prefix=None,\n        initial=None,\n        error_class=ErrorList,\n        form_kwargs=None,\n        error_messages=None,\n    ):\n        self.is_bound = data is not None or files is not None\n        self.prefix = prefix or self.get_default_prefix()\n        self.auto_id = auto_id\n        self.data = data or {}\n        self.files = files or {}\n        self.initial = initial\n        self.form_kwargs = form_kwargs or {}\n        self.error_class = error_class\n        self._errors = None\n        self._non_form_errors = None\n\n        messages = {}\n        for cls in reversed(type(self).__mro__):\n            messages.update(getattr(cls, \"default_error_messages\", {}))\n        if error_messages is not None:\n            messages.update(error_messages)\n        self.error_messages = messages\n\n    def __iter__(self):\n        \"\"\"Yield the forms in the order they should be rendered.\"\"\"\n        return iter(self.forms)\n\n    def __getitem__(self, index):\n        \"\"\"Return the form at the given index, based on the rendering order.\"\"\"\n        return self.forms[index]\n\n    def __len__(self):\n        return len(self.forms)\n\n    def __bool__(self):\n        \"\"\"\n        Return True since all formsets have a management form which is not\n        included in the length.\n        \"\"\"\n        return True\n\n    def __repr__(self):\n        if self._errors is None:\n            is_valid = \"Unknown\"\n        else:\n            is_valid = (\n                self.is_bound\n                and not self._non_form_errors\n                and not any(form_errors for form_errors in self._errors)\n            )\n        return \"<%s: bound=%s valid=%s total_forms=%s>\" % (\n            self.__class__.__qualname__,\n            self.is_bound,\n            is_valid,\n            self.total_form_count(),\n        )",
+                "filename": "django/forms/formsets.py",
+                "start_index": 1974,
+                "end_index": 4837,
+                "start_line": 29,
+                "end_line": 500,
+                "max_line": 577,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "@cached_property\n    def management_form(self):\n        \"\"\"Return the ManagementForm instance for this FormSet.\"\"\"\n        if self.is_bound:\n            form = ManagementForm(\n                self.data,\n                auto_id=self.auto_id,\n                prefix=self.prefix,\n                renderer=self.renderer,\n            )\n            form.full_clean()\n        else:\n            form = ManagementForm(\n                auto_id=self.auto_id,\n                prefix=self.prefix,\n                initial={\n                    TOTAL_FORM_COUNT: self.total_form_count(),\n                    INITIAL_FORM_COUNT: self.initial_form_count(),\n                    MIN_NUM_FORM_COUNT: self.min_num,\n                    MAX_NUM_FORM_COUNT: self.max_num,\n                },\n                renderer=self.renderer,\n            )\n        return form\n\n    def total_form_count(self):\n        \"\"\"Return the total number of forms in this FormSet.\"\"\"\n        if self.is_bound:\n            # return absolute_max if it is lower than the actual total form\n            # count in the data; this is DoS protection to prevent clients\n            # from forcing the server to instantiate arbitrary numbers of\n            # forms\n            return min(\n                self.management_form.cleaned_data[TOTAL_FORM_COUNT], self.absolute_max\n            )\n        else:\n            initial_forms = self.initial_form_count()\n            total_forms = max(initial_forms, self.min_num) + self.extra\n            # Allow all existing related objects/inlines to be displayed,\n            # but don't allow extra beyond max_num.\n            if initial_forms > self.max_num >= 0:\n                total_forms = initial_forms\n            elif total_forms > self.max_num >= 0:\n                total_forms = self.max_num\n        return total_forms\n\n    def initial_form_count(self):\n        \"\"\"Return the number of forms that are required in this FormSet.\"\"\"\n        if self.is_bound:\n            return self.management_form.cleaned_data[INITIAL_FORM_COUNT]\n        else:\n            # Use the length of the initial data if it's there, 0 otherwise.\n            initial_forms = len(self.initial) if self.initial else 0\n        return initial_forms\n\n    @cached_property\n    def forms(self):\n        \"\"\"Instantiate forms at first property access.\"\"\"\n        # DoS protection is included in total_form_count()\n        return [\n            self._construct_form(i, **self.get_form_kwargs(i))\n            for i in range(self.total_form_count())\n        ]\n\n    def get_form_kwargs(self, index):\n        \"\"\"\n        Return additional keyword arguments for each individual formset form.\n\n        index will be None if the form being constructed is a new empty\n        form.\n        \"\"\"\n        return self.form_kwargs.copy()",
+                "filename": "django/forms/formsets.py",
+                "start_index": 4843,
+                "end_index": 7624,
+                "start_line": 144,
+                "end_line": 215,
+                "max_line": 577,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nDjango validation and HTML form handling.\n\"\"\"\n\nfrom django.core.exceptions import ValidationError  # NOQA\nfrom django.forms.boundfield import *  # NOQA\nfrom django.forms.fields import *  # NOQA\nfrom django.forms.forms import *  # NOQA\nfrom django.forms.formsets import *  # NOQA\nfrom django.forms.models import *  # NOQA\nfrom django.forms.widgets import *  # NOQA",
+                "filename": "django/forms/__init__.py",
+                "start_index": 0,
+                "end_index": 367,
+                "start_line": 1,
+                "end_line": 11,
+                "max_line": 11,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/forms/formsets.py": [
+                {
+                    "chunk": {
+                        "code": "from django.core.exceptions import ValidationError\nfrom django.forms import Form\nfrom django.forms.fields import BooleanField, IntegerField\nfrom django.forms.renderers import get_default_renderer\nfrom django.forms.utils import ErrorList, RenderableFormMixin\nfrom django.forms.widgets import CheckboxInput, HiddenInput, NumberInput\nfrom django.utils.functional import cached_property\nfrom django.utils.translation import gettext_lazy as _\nfrom django.utils.translation import ngettext_lazy\n\n__all__ = (\"BaseFormSet\", \"formset_factory\", \"all_valid\")\n\n# special field names\nTOTAL_FORM_COUNT = \"TOTAL_FORMS\"\nINITIAL_FORM_COUNT = \"INITIAL_FORMS\"\nMIN_NUM_FORM_COUNT = \"MIN_NUM_FORMS\"\nMAX_NUM_FORM_COUNT = \"MAX_NUM_FORMS\"\nORDERING_FIELD_NAME = \"ORDER\"\nDELETION_FIELD_NAME = \"DELETE\"\n\n# default minimum number of forms in a formset\nDEFAULT_MIN_NUM = 0\n\n# default maximum number of forms in a formset, to prevent memory exhaustion\nDEFAULT_MAX_NUM = 1000\n\n\nclass ManagementForm(Form):\n    \"\"\"\n    Keep track of how many form instances are displayed on the page. If adding\n    new forms via JavaScript, you should increment the count field of this form\n    as well.\n    \"\"\"\n\n    TOTAL_FORMS = IntegerField(widget=HiddenInput)\n    INITIAL_FORMS = IntegerField(widget=HiddenInput)\n    # MIN_NUM_FORM_COUNT and MAX_NUM_FORM_COUNT are output with the rest of the\n    # management form, but only for the convenience of client-side code. The\n    # POST value of them returned from the client is not checked.\n    MIN_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)\n    MAX_NUM_FORMS = IntegerField(required=False, widget=HiddenInput)\n\n    def clean(self):\n        cleaned_data = super().clean()\n        # When the management form is invalid, we don't know how many forms\n        # were submitted.\n        cleaned_data.setdefault(TOTAL_FORM_COUNT, 0)\n        cleaned_data.setdefault(INITIAL_FORM_COUNT, 0)\n        return cleaned_data",
+                        "filename": "django/forms/formsets.py",
+                        "start_index": 0,
+                        "end_index": 1927,
+                        "start_line": 1,
+                        "end_line": 49,
+                        "max_line": 577,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the ManagementForm class definition and the clean method that sets default values for TOTAL_FORM_COUNT and INITIAL_FORM_COUNT, which are relevant to the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    A collection of instances of the same Form class.\n    \"\"\"\n\n    deletion_widget = CheckboxInput\n    ordering_widget = NumberInput\n    default_error_messages = {\n        \"missing_management_form\": _(\n            \"ManagementForm data is missing or has been tampered with. Missing fields: \"\n            \"%(field_names)s. You may need to file a bug report if the issue persists.\"\n        ),\n        \"too_many_forms\": ngettext_lazy(\n            \"Please submit at most %(num)d form.\",\n            \"Please submit at most %(num)d forms.\",\n            \"num\",\n        ),\n        \"too_few_forms\": ngettext_lazy(\n            \"Please submit at least %(num)d form.\",\n            \"Please submit at least %(num)d forms.\",\n            \"num\",\n        ),\n    }\n\n    template_name_div = \"django/forms/formsets/div.html\"\n    template_name_p = \"django/forms/formsets/p.html\"\n    template_name_table = \"django/forms/formsets/table.html\"\n    template_name_ul = \"django/forms/formsets/ul.html\"\n\n    def __init__(\n        self,\n        data=None,\n        files=None,\n        auto_id=\"id_%s\",\n        prefix=None,\n        initial=None,\n        error_class=ErrorList,\n        form_kwargs=None,\n        error_messages=None,\n    ):\n        self.is_bound = data is not None or files is not None\n        self.prefix = prefix or self.get_default_prefix()\n        self.auto_id = auto_id\n        self.data = data or {}\n        self.files = files or {}\n        self.initial = initial\n        self.form_kwargs = form_kwargs or {}\n        self.error_class = error_class\n        self._errors = None\n        self._non_form_errors = None\n\n        messages = {}\n        for cls in reversed(type(self).__mro__):\n            messages.update(getattr(cls, \"default_error_messages\", {}))\n        if error_messages is not None:\n            messages.update(error_messages)\n        self.error_messages = messages\n\n    def __iter__(self):\n        \"\"\"Yield the forms in the order they should be rendered.\"\"\"\n        return iter(self.forms)\n\n    def __getitem__(self, index):\n        \"\"\"Return the form at the given index, based on the rendering order.\"\"\"\n        return self.forms[index]\n\n    def __len__(self):\n        return len(self.forms)\n\n    def __bool__(self):\n        \"\"\"\n        Return True since all formsets have a management form which is not\n        included in the length.\n        \"\"\"\n        return True\n\n    def __repr__(self):\n        if self._errors is None:\n            is_valid = \"Unknown\"\n        else:\n            is_valid = (\n                self.is_bound\n                and not self._non_form_errors\n                and not any(form_errors for form_errors in self._errors)\n            )\n        return \"<%s: bound=%s valid=%s total_forms=%s>\" % (\n            self.__class__.__qualname__,\n            self.is_bound,\n            is_valid,\n            self.total_form_count(),\n        )",
+                        "filename": "django/forms/formsets.py",
+                        "start_index": 1974,
+                        "end_index": 4837,
+                        "start_line": 29,
+                        "end_line": 500,
+                        "max_line": 577,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the BaseFormSet class where the ManagementForm is used and where the error message could be improved to include form._errors as suggested."
+                },
+                {
+                    "chunk": {
+                        "code": "@cached_property\n    def management_form(self):\n        \"\"\"Return the ManagementForm instance for this FormSet.\"\"\"\n        if self.is_bound:\n            form = ManagementForm(\n                self.data,\n                auto_id=self.auto_id,\n                prefix=self.prefix,\n                renderer=self.renderer,\n            )\n            form.full_clean()\n        else:\n            form = ManagementForm(\n                auto_id=self.auto_id,\n                prefix=self.prefix,\n                initial={\n                    TOTAL_FORM_COUNT: self.total_form_count(),\n                    INITIAL_FORM_COUNT: self.initial_form_count(),\n                    MIN_NUM_FORM_COUNT: self.min_num,\n                    MAX_NUM_FORM_COUNT: self.max_num,\n                },\n                renderer=self.renderer,\n            )\n        return form\n\n    def total_form_count(self):\n        \"\"\"Return the total number of forms in this FormSet.\"\"\"\n        if self.is_bound:\n            # return absolute_max if it is lower than the actual total form\n            # count in the data; this is DoS protection to prevent clients\n            # from forcing the server to instantiate arbitrary numbers of\n            # forms\n            return min(\n                self.management_form.cleaned_data[TOTAL_FORM_COUNT], self.absolute_max\n            )\n        else:\n            initial_forms = self.initial_form_count()\n            total_forms = max(initial_forms, self.min_num) + self.extra\n            # Allow all existing related objects/inlines to be displayed,\n            # but don't allow extra beyond max_num.\n            if initial_forms > self.max_num >= 0:\n                total_forms = initial_forms\n            elif total_forms > self.max_num >= 0:\n                total_forms = self.max_num\n        return total_forms\n\n    def initial_form_count(self):\n        \"\"\"Return the number of forms that are required in this FormSet.\"\"\"\n        if self.is_bound:\n            return self.management_form.cleaned_data[INITIAL_FORM_COUNT]\n        else:\n            # Use the length of the initial data if it's there, 0 otherwise.\n            initial_forms = len(self.initial) if self.initial else 0\n        return initial_forms\n\n    @cached_property\n    def forms(self):\n        \"\"\"Instantiate forms at first property access.\"\"\"\n        # DoS protection is included in total_form_count()\n        return [\n            self._construct_form(i, **self.get_form_kwargs(i))\n            for i in range(self.total_form_count())\n        ]\n\n    def get_form_kwargs(self, index):\n        \"\"\"\n        Return additional keyword arguments for each individual formset form.\n\n        index will be None if the form being constructed is a new empty\n        form.\n        \"\"\"\n        return self.form_kwargs.copy()",
+                        "filename": "django/forms/formsets.py",
+                        "start_index": 4843,
+                        "end_index": 7624,
+                        "start_line": 144,
+                        "end_line": 215,
+                        "max_line": 577,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the management_form property of the BaseFormSet class, which is directly involved in the creation and validation of the ManagementForm, relevant to the issue."
+                }
+            ]
+        },
+        "solution_task": "- Modify the instantiation of `SomeFormSet` to use the correct keyword argument for the prefix:\n  ```python\n  SomeFormSet(request.POST, prefix='articles')\n  ```\n  \n- Update the `ValidationError` message in `formsets.py` to include `form._errors` for better context:\n  ```python\n  if not form.is_valid():\n      error_message = 'ManagementForm data is missing or has been tampered with: %s' % form._errors\n      raise ValidationError(error_message)\n  ```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides two actionable solutions that directly address the issues described in the PROMPT. First, it correctly advises modifying the instantiation of 'SomeFormSet' to use the correct keyword argument for the prefix, which is the root cause of the issue. Second, it suggests updating the 'ValidationError' message in 'formsets.py' to include 'form._errors' for better context, which aligns with the suggestion in the PROMPT to make the exception message more informative. Additionally, the RESPONSE provides links to the relevant code snippets in the Django repository, which is helpful for locating the exact sections of code that need to be reviewed or modified. The only reason it does not score a 10 is that it does not explicitly state that the developer should test the changes to ensure they resolve the issue without introducing new ones.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711726077.8828201,
+        "result": "- Modify the instantiation of `SomeFormSet` to use the correct keyword argument for the prefix:\n  ```python\n  SomeFormSet(request.POST, prefix='articles')\n  ```\n  \n- Update the `ValidationError` message in `formsets.py` to include `form._errors` for better context:\n  ```python\n  if not form.is_valid():\n      error_message = 'ManagementForm data is missing or has been tampered with: %s' % form._errors\n      raise ValidationError(error_message)\n  ```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [forms](https://github.com/testbed/django__django__3.2/tree//django/forms)- [Lines 1 - 49](https://github.com/testbed/django__django__3.2/blob//django/forms/formsets.py#L1-L49)\n\n This snippet contains the ManagementForm class definition and the clean method that sets default values for TOTAL_FORM_COUNT and INITIAL_FORM_COUNT, which are relevant to the issue. \n\n\n   - [Lines 29 - 500](https://github.com/testbed/django__django__3.2/blob//django/forms/formsets.py#L29-L500)\n\n This snippet contains the BaseFormSet class where the ManagementForm is used and where the error message could be improved to include form._errors as suggested. \n\n\n   - [Lines 144 - 215](https://github.com/testbed/django__django__3.2/blob//django/forms/formsets.py#L144-L215)\n\n This snippet shows the management_form property of the BaseFormSet class, which is directly involved in the creation and validation of the ManagementForm, relevant to the issue."
+    }
+}

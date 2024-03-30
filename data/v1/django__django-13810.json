@@ -1,0 +1,223 @@
+{
+    "id": "django__django-13810",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 6355475024945149058,
+    "title": "MiddlewareNotUsed leaves undesired side effects when loading middleware in ASGI context",
+    "body": "Description\n\t\nI experienced strange issues when working with \u200bASGI , \u200bdjango-debug-toolbar and my own small middleware. It was hard problem to debug, I uploaded an example project here: \u200bhttps://github.com/hbielenia/asgi-djangotoolbar-bug (the name is misleading - I initially thought it's a bug with django-debug-toolbar).\nThe SESSION_FILE_PATH setting is intentionally broken to cause a 500 error. When starting the application and accessing /admin (any location really, but I wanted to leave it at a minimum and didn't add any views) it gives TypeError: object HttpResponse can't be used in 'await' expression. Commenting out asgi_djangotoolbar_bug.middleware.DummyMiddleware fixes the issue (in that I receive a 500 ImproperlyConfigured exception). I'm not sure about the overall role of django-debug-toolbar here - removing it causes Daphne to return a 500 error page but without debug information and there's no traceback in console either. I decided to leave it since it helped me approximate the causes of issue.\nI notice that in \u200bhttps://github.com/django/django/blob/3.1.4/django/core/handlers/base.py#L58 while MiddlewareNotUsed causes the loop to skip futher processing and go to next middleware, it does leave handler variable overwritten with output of self.adapt_method_mode(). On next pass, this handler is passed to next middleware instance, disregarding all the previous checks for (lack of) async support. This likely causes the middleware chain to be \"poisoned\" from this point onwards, resulting in last middleware in response cycle to return an HttpResponse as a synchronous middleware would, instead of coroutine that is expected.\nThis is probably avoided by adding async support to my middleware, but unless I'm missing something \u200bdocs indicate it should work as it is. It is my intention that it's applied only on synchronous requests, so I didn't make it async compatible on purpose. If it's intentional in Django that every middleware needs to support async if the application is run as ASGI app, the documentation should probably state that clearly. Though it kinda defeats the purpose of having async_capable = False flag in the first place.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Ensure that `DummyMiddleware` is marked as async-capable by setting `async_capable = True` if it needs to support ASGI.\n- If `DummyMiddleware` should only be used for synchronous views, ensure that it is not included in the `MIDDLEWARE` setting when running in ASGI mode.\n- If `DummyMiddleware` is intended to be used in both synchronous and asynchronous contexts, implement an `__acall__` method to handle asynchronous requests.\n- Use `sync_to_async` or `async_to_sync` decorators from `asgiref.sync` to wrap synchronous code for compatibility with asynchronous calls.\n- Check if `adapt_method_mode` is properly converting middleware methods to the correct mode (sync or async) based on the `async_capable` flag.\n- Ensure that `adapt_method_mode` is used correctly to adapt the `get_response` method of the middleware to the correct mode.\n- If the middleware is not intended to be used with ASGI, consider raising `MiddlewareNotUsed` during initialization to prevent it from being added to the middleware chain.\n- Verify that the `SESSION_FILE_PATH` setting is not causing the `ImproperlyConfigured` exception by ensuring it is set correctly or by not using it if not necessary.\n- Review the Django documentation and ensure that the middleware follows the guidelines for ASGI compatibility.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [handlers](https://github.com/testbed/django__django__3.2/tree//django/core/handlers)- [Lines 39 - 102](https://github.com/testbed/django__django__3.2/blob//django/core/handlers/base.py#L39-L102)\n\n This snippet contains the middleware loading and adaptation logic, which is directly related to the issue of middleware not being used properly in an ASGI context and leaving side effects. \n\n\n   - [Lines 1 - 17](https://github.com/testbed/django__django__3.2/blob//django/core/handlers/base.py#L1-L17)\n\n This snippet includes imports that are relevant to the middleware handling in Django, such as 'async_to_sync' and 'sync_to_async', which may be part of the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [utils](https://github.com/testbed/django__django__3.2/tree//django/utils)- [Lines 118 - 190](https://github.com/testbed/django__django__3.2/blob//django/utils/decorators.py#L118-L190)\n\n This snippet defines decorators for middleware, which may be relevant to understanding how middleware is expected to behave in both synchronous and asynchronous contexts.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [utils](https://github.com/testbed/django__django__3.2/tree//django/utils)- [Lines 86 - 156](https://github.com/testbed/django__django__3.2/blob//django/utils/deprecation.py#L86-L156)\n\n This snippet defines the MiddlewareMixin class, which includes the async check and the __call__ method that could be relevant to the issue if the middleware in question is using this mixin.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003035,
+        "snippet_processor": 0.055850000000000004,
+        "issue_star_creation": 0.02406,
+        "issue_star_solver": 0.03527,
+        "bouncer": 0.01812
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711725112.786043,
+        "relevant_snippets": [
+            {
+                "code": "for middleware_path in reversed(settings.MIDDLEWARE):\n            middleware = import_string(middleware_path)\n            middleware_can_sync = getattr(middleware, \"sync_capable\", True)\n            middleware_can_async = getattr(middleware, \"async_capable\", False)\n            if not middleware_can_sync and not middleware_can_async:\n                raise RuntimeError(\n                    \"Middleware %s must have at least one of \"\n                    \"sync_capable/async_capable set to True.\" % middleware_path\n                )\n            elif not handler_is_async and middleware_can_sync:\n                middleware_is_async = False\n            else:\n                middleware_is_async = middleware_can_async\n            try:\n                # Adapt handler, if needed.\n                adapted_handler = self.adapt_method_mode(\n                    middleware_is_async,\n                    handler,\n                    handler_is_async,\n                    debug=settings.DEBUG,\n                    name=\"middleware %s\" % middleware_path,\n                )\n                mw_instance = middleware(adapted_handler)\n            except MiddlewareNotUsed as exc:\n                if settings.DEBUG:\n                    if str(exc):\n                        logger.debug(\"MiddlewareNotUsed(%r): %s\", middleware_path, exc)\n                    else:\n                        logger.debug(\"MiddlewareNotUsed: %r\", middleware_path)\n                continue\n            else:\n                handler = adapted_handler\n\n            if mw_instance is None:\n                raise ImproperlyConfigured(\n                    \"Middleware factory %s returned None.\" % middleware_path\n                )\n\n            if hasattr(mw_instance, \"process_view\"):\n                self._view_middleware.insert(\n                    0,\n                    self.adapt_method_mode(is_async, mw_instance.process_view),\n                )\n            if hasattr(mw_instance, \"process_template_response\"):\n                self._template_response_middleware.append(\n                    self.adapt_method_mode(\n                        is_async, mw_instance.process_template_response\n                    ),\n                )\n            if hasattr(mw_instance, \"process_exception\"):\n                # The exception-handling stack is still always synchronous for\n                # now, so adapt that way.\n                self._exception_middleware.append(\n                    self.adapt_method_mode(False, mw_instance.process_exception),\n                )\n\n            handler = convert_exception_to_response(mw_instance)\n            handler_is_async = middleware_is_async\n\n        # Adapt the top of the stack, if needed.\n        handler = self.adapt_method_mode(is_async, handler, handler_is_async)\n        # We only assign to this when initialization is complete as it is used\n        # as a flag for initialization being complete.\n        self._middleware_chain = handler",
+                "filename": "django/core/handlers/base.py",
+                "start_index": 1253,
+                "end_index": 4192,
+                "start_line": 39,
+                "end_line": 102,
+                "max_line": 373,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import asyncio\nimport logging\nimport types\n\nfrom asgiref.sync import async_to_sync, iscoroutinefunction, sync_to_async\n\nfrom django.conf import settings\nfrom django.core.exceptions import ImproperlyConfigured, MiddlewareNotUsed\nfrom django.core.signals import request_finished\nfrom django.db import connections, transaction\nfrom django.urls import get_resolver, set_urlconf\nfrom django.utils.log import log_response\nfrom django.utils.module_loading import import_string\n\nfrom .exception import convert_exception_to_response\n\nlogger = logging.getLogger(\"django.request\")",
+                "filename": "django/core/handlers/base.py",
+                "start_index": 0,
+                "end_index": 569,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 373,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from urllib.parse import urlparse\nfrom urllib.request import url2pathname\n\nfrom asgiref.sync import sync_to_async\n\nfrom django.conf import settings\nfrom django.contrib.staticfiles import utils\nfrom django.contrib.staticfiles.views import serve\nfrom django.core.handlers.asgi import ASGIHandler\nfrom django.core.handlers.exception import response_for_exception\nfrom django.core.handlers.wsgi import WSGIHandler, get_path_info\nfrom django.http import Http404\n\n\nclass StaticFilesHandlerMixin:\n    \"\"\"\n    Common methods used by WSGI and ASGI handlers.\n    \"\"\"\n\n    # May be used to differentiate between handler types (e.g. in a\n    # request_finished signal)\n    handles_files = True\n\n    def load_middleware(self):\n        # Middleware are already loaded for self.application; no need to reload\n        # them for self.\n        pass\n\n    def get_base_url(self):\n        utils.check_settings()\n        return settings.STATIC_URL\n\n    def _should_handle(self, path):\n        \"\"\"\n        Check if the path should be handled. Ignore the path if:\n        * the host is provided as part of the base_url\n        * the request's path isn't under the media path (or equal)\n        \"\"\"\n        return path.startswith(self.base_url[2]) and not self.base_url[1]\n\n    def file_path(self, url):\n        \"\"\"\n        Return the relative path to the media file on disk for the given URL.\n        \"\"\"\n        relative_url = url.removeprefix(self.base_url[2])\n        return url2pathname(relative_url)\n\n    def serve(self, request):\n        \"\"\"Serve the request path.\"\"\"\n        return serve(request, self.file_path(request.path), insecure=True)\n\n    def get_response(self, request):\n        try:\n            return self.serve(request)\n        except Http404 as e:\n            return response_for_exception(request, e)\n\n    async def get_response_async(self, request):\n        try:\n            return await sync_to_async(self.serve, thread_sensitive=False)(request)\n        except Http404 as e:\n            return await sync_to_async(response_for_exception, thread_sensitive=False)(\n                request, e\n            )\n\n\nclass StaticFilesHandler(StaticFilesHandlerMixin, WSGIHandler):\n    \"\"\"\n    WSGI middleware that intercepts calls to the static files directory, as\n    defined by the STATIC_URL setting, and serves those files.\n    \"\"\"\n\n    def __init__(self, application):\n        self.application = application\n        self.base_url = urlparse(self.get_base_url())\n        super().__init__()\n\n    def __call__(self, environ, start_response):\n        if not self._should_handle(get_path_info(environ)):\n            return self.application(environ, start_response)\n        return super().__call__(environ, start_response)",
+                "filename": "django/contrib/staticfiles/handlers.py",
+                "start_index": 0,
+                "end_index": 2710,
+                "start_line": 1,
+                "end_line": 81,
+                "max_line": 115,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class DeprecationInstanceCheck(type):\n    def __instancecheck__(self, instance):\n        warnings.warn(\n            \"`%s` is deprecated, use `%s` instead.\" % (self.__name__, self.alternative),\n            self.deprecation_warning,\n            2,\n        )\n        return super().__instancecheck__(instance)\n\n\nclass MiddlewareMixin:\n    sync_capable = True\n    async_capable = True\n\n    def __init__(self, get_response):\n        if get_response is None:\n            raise ValueError(\"get_response must be provided.\")\n        self.get_response = get_response\n        self._async_check()\n        super().__init__()\n\n    def __repr__(self):\n        return \"<%s get_response=%s>\" % (\n            self.__class__.__qualname__,\n            getattr(\n                self.get_response,\n                \"__qualname__\",\n                self.get_response.__class__.__name__,\n            ),\n        )\n\n    def _async_check(self):\n        \"\"\"\n        If get_response is a coroutine function, turns us into async mode so\n        a thread is not consumed during a whole request.\n        \"\"\"\n        if iscoroutinefunction(self.get_response):\n            # Mark the class as async-capable, but do the actual switch\n            # inside __call__ to avoid swapping out dunder methods\n            markcoroutinefunction(self)\n\n    def __call__(self, request):\n        # Exit out to async mode, if needed\n        if iscoroutinefunction(self):\n            return self.__acall__(request)\n        response = None\n        if hasattr(self, \"process_request\"):\n            response = self.process_request(request)\n        response = response or self.get_response(request)\n        if hasattr(self, \"process_response\"):\n            response = self.process_response(request, response)\n        return response\n\n    async def __acall__(self, request):\n        \"\"\"\n        Async version of __call__ that is swapped in when an async request\n        is running.\n        \"\"\"\n        response = None\n        if hasattr(self, \"process_request\"):\n            response = await sync_to_async(\n                self.process_request,\n                thread_sensitive=True,\n            )(request)\n        response = response or await self.get_response(request)\n        if hasattr(self, \"process_response\"):\n            response = await sync_to_async(\n                self.process_response,\n                thread_sensitive=True,\n            )(request, response)\n        return response",
+                "filename": "django/utils/deprecation.py",
+                "start_index": 2790,
+                "end_index": 5228,
+                "start_line": 86,
+                "end_line": 156,
+                "max_line": 156,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def make_middleware_decorator(middleware_class):\n    def _make_decorator(*m_args, **m_kwargs):\n        def _decorator(view_func):\n            middleware = middleware_class(view_func, *m_args, **m_kwargs)\n\n            @wraps(view_func)\n            def _wrapper_view(request, *args, **kwargs):\n                if hasattr(middleware, \"process_request\"):\n                    result = middleware.process_request(request)\n                    if result is not None:\n                        return result\n                if hasattr(middleware, \"process_view\"):\n                    result = middleware.process_view(request, view_func, args, kwargs)\n                    if result is not None:\n                        return result\n                try:\n                    response = view_func(request, *args, **kwargs)\n                except Exception as e:\n                    if hasattr(middleware, \"process_exception\"):\n                        result = middleware.process_exception(request, e)\n                        if result is not None:\n                            return result\n                    raise\n                if hasattr(response, \"render\") and callable(response.render):\n                    if hasattr(middleware, \"process_template_response\"):\n                        response = middleware.process_template_response(\n                            request, response\n                        )\n                    # Defer running of process_response until after the template\n                    # has been rendered:\n                    if hasattr(middleware, \"process_response\"):\n\n                        def callback(response):\n                            return middleware.process_response(request, response)\n\n                        response.add_post_render_callback(callback)\n                else:\n                    if hasattr(middleware, \"process_response\"):\n                        return middleware.process_response(request, response)\n                return response\n\n            return _wrapper_view\n\n        return _decorator\n\n    return _make_decorator\n\n\ndef sync_and_async_middleware(func):\n    \"\"\"\n    Mark a middleware factory as returning a hybrid middleware supporting both\n    types of request.\n    \"\"\"\n    func.sync_capable = True\n    func.async_capable = True\n    return func\n\n\ndef sync_only_middleware(func):\n    \"\"\"\n    Mark a middleware factory as returning a sync middleware.\n    This is the default.\n    \"\"\"\n    func.sync_capable = True\n    func.async_capable = False\n    return func\n\n\ndef async_only_middleware(func):\n    \"\"\"Mark a middleware factory as returning an async middleware.\"\"\"\n    func.sync_capable = False\n    func.async_capable = True\n    return func",
+                "filename": "django/utils/decorators.py",
+                "start_index": 4246,
+                "end_index": 6939,
+                "start_line": 118,
+                "end_line": 190,
+                "max_line": 190,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class SessionMiddleware(MiddlewareMixin):",
+                "filename": "django/contrib/sessions/middleware.py",
+                "start_index": 355,
+                "end_index": 396,
+                "start_line": 12,
+                "end_line": 12,
+                "max_line": 77,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "if not _contains_subclass(\n        \"django.contrib.sessions.middleware.SessionMiddleware\", settings.MIDDLEWARE\n    ):\n        errors.append(\n            checks.Error(\n                \"'django.contrib.sessions.middleware.SessionMiddleware' must \"\n                \"be in MIDDLEWARE in order to use the admin application.\",\n                hint=(\n                    \"Insert \"\n                    \"'django.contrib.sessions.middleware.SessionMiddleware' \"\n                    \"before \"\n                    \"'django.contrib.auth.middleware.AuthenticationMiddleware'.\"\n                ),\n                id=\"admin.E410\",\n            )\n        )\n    return errors",
+                "filename": "django/contrib/admin/checks.py",
+                "start_index": 5484,
+                "end_index": 6140,
+                "start_line": 138,
+                "end_line": 1245,
+                "max_line": 1367,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import asyncio\nimport logging\nimport sys\nimport tempfile\nimport traceback\nfrom contextlib import aclosing\n\nfrom asgiref.sync import ThreadSensitiveContext, sync_to_async\n\nfrom django.conf import settings\nfrom django.core import signals\nfrom django.core.exceptions import RequestAborted, RequestDataTooBig\nfrom django.core.handlers import base\nfrom django.http import (\n    FileResponse,\n    HttpRequest,\n    HttpResponse,\n    HttpResponseBadRequest,\n    HttpResponseServerError,\n    QueryDict,\n    parse_cookie,\n)\nfrom django.urls import set_script_prefix\nfrom django.utils.functional import cached_property\n\nlogger = logging.getLogger(\"django.request\")\n\n\ndef get_script_prefix(scope):\n    \"\"\"\n    Return the script prefix to use from either the scope or a setting.\n    \"\"\"\n    if settings.FORCE_SCRIPT_NAME:\n        return settings.FORCE_SCRIPT_NAME\n    return scope.get(\"root_path\", \"\") or \"\"",
+                "filename": "django/core/handlers/asgi.py",
+                "start_index": 0,
+                "end_index": 894,
+                "start_line": 1,
+                "end_line": 35,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from functools import wraps\n\nfrom asgiref.sync import iscoroutinefunction\n\nfrom django.middleware.csrf import CsrfViewMiddleware, get_token\nfrom django.utils.decorators import decorator_from_middleware\n\ncsrf_protect = decorator_from_middleware(CsrfViewMiddleware)\ncsrf_protect.__name__ = \"csrf_protect\"\ncsrf_protect.__doc__ = \"\"\"\nThis decorator adds CSRF protection in exactly the same way as\nCsrfViewMiddleware, but it can be used on a per view basis.  Using both, or\nusing the decorator multiple times, is harmless and efficient.\n\"\"\"\n\n\nclass _EnsureCsrfToken(CsrfViewMiddleware):\n    # Behave like CsrfViewMiddleware but don't reject requests or log warnings.\n    def _reject(self, request, reason):\n        return None\n\n\nrequires_csrf_token = decorator_from_middleware(_EnsureCsrfToken)\nrequires_csrf_token.__name__ = \"requires_csrf_token\"\nrequires_csrf_token.__doc__ = \"\"\"\nUse this decorator on views that need a correct csrf_token available to\nRequestContext, but without the CSRF protection that csrf_protect\nenforces.\n\"\"\"\n\n\nclass _EnsureCsrfCookie(CsrfViewMiddleware):\n    def _reject(self, request, reason):\n        return None\n\n    def process_view(self, request, callback, callback_args, callback_kwargs):\n        retval = super().process_view(request, callback, callback_args, callback_kwargs)\n        # Force process_response to send the cookie\n        get_token(request)\n        return retval\n\n\nensure_csrf_cookie = decorator_from_middleware(_EnsureCsrfCookie)\nensure_csrf_cookie.__name__ = \"ensure_csrf_cookie\"\nensure_csrf_cookie.__doc__ = \"\"\"\nUse this decorator to ensure that a view sets a CSRF cookie, whether or not it\nuses the csrf_token template tag, or the CsrfViewMiddleware is used.\n\"\"\"\n\n\ndef csrf_exempt(view_func):\n    \"\"\"Mark a view function as being exempt from the CSRF view protection.\"\"\"\n\n    # view_func.csrf_exempt = True would also work, but decorators are nicer\n    # if they don't have side effects, so return a new function.\n\n    if iscoroutinefunction(view_func):\n\n        async def _view_wrapper(request, *args, **kwargs):\n            return await view_func(request, *args, **kwargs)\n\n    else:\n\n        def _view_wrapper(request, *args, **kwargs):\n            return view_func(request, *args, **kwargs)\n\n    _view_wrapper.csrf_exempt = True\n\n    return wraps(view_func)(_view_wrapper)",
+                "filename": "django/views/decorators/csrf.py",
+                "start_index": 0,
+                "end_index": 2323,
+                "start_line": 1,
+                "end_line": 69,
+                "max_line": 69,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def load_middleware(self, is_async=False):",
+                "filename": "django/core/handlers/base.py",
+                "start_index": 727,
+                "end_index": 769,
+                "start_line": 26,
+                "end_line": 26,
+                "max_line": 373,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/core/handlers/base.py": [
+                {
+                    "chunk": {
+                        "code": "for middleware_path in reversed(settings.MIDDLEWARE):\n            middleware = import_string(middleware_path)\n            middleware_can_sync = getattr(middleware, \"sync_capable\", True)\n            middleware_can_async = getattr(middleware, \"async_capable\", False)\n            if not middleware_can_sync and not middleware_can_async:\n                raise RuntimeError(\n                    \"Middleware %s must have at least one of \"\n                    \"sync_capable/async_capable set to True.\" % middleware_path\n                )\n            elif not handler_is_async and middleware_can_sync:\n                middleware_is_async = False\n            else:\n                middleware_is_async = middleware_can_async\n            try:\n                # Adapt handler, if needed.\n                adapted_handler = self.adapt_method_mode(\n                    middleware_is_async,\n                    handler,\n                    handler_is_async,\n                    debug=settings.DEBUG,\n                    name=\"middleware %s\" % middleware_path,\n                )\n                mw_instance = middleware(adapted_handler)\n            except MiddlewareNotUsed as exc:\n                if settings.DEBUG:\n                    if str(exc):\n                        logger.debug(\"MiddlewareNotUsed(%r): %s\", middleware_path, exc)\n                    else:\n                        logger.debug(\"MiddlewareNotUsed: %r\", middleware_path)\n                continue\n            else:\n                handler = adapted_handler\n\n            if mw_instance is None:\n                raise ImproperlyConfigured(\n                    \"Middleware factory %s returned None.\" % middleware_path\n                )\n\n            if hasattr(mw_instance, \"process_view\"):\n                self._view_middleware.insert(\n                    0,\n                    self.adapt_method_mode(is_async, mw_instance.process_view),\n                )\n            if hasattr(mw_instance, \"process_template_response\"):\n                self._template_response_middleware.append(\n                    self.adapt_method_mode(\n                        is_async, mw_instance.process_template_response\n                    ),\n                )\n            if hasattr(mw_instance, \"process_exception\"):\n                # The exception-handling stack is still always synchronous for\n                # now, so adapt that way.\n                self._exception_middleware.append(\n                    self.adapt_method_mode(False, mw_instance.process_exception),\n                )\n\n            handler = convert_exception_to_response(mw_instance)\n            handler_is_async = middleware_is_async\n\n        # Adapt the top of the stack, if needed.\n        handler = self.adapt_method_mode(is_async, handler, handler_is_async)\n        # We only assign to this when initialization is complete as it is used\n        # as a flag for initialization being complete.\n        self._middleware_chain = handler",
+                        "filename": "django/core/handlers/base.py",
+                        "start_index": 1253,
+                        "end_index": 4192,
+                        "start_line": 39,
+                        "end_line": 102,
+                        "max_line": 373,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the middleware loading and adaptation logic, which is directly related to the issue of middleware not being used properly in an ASGI context and leaving side effects."
+                },
+                {
+                    "chunk": {
+                        "code": "import asyncio\nimport logging\nimport types\n\nfrom asgiref.sync import async_to_sync, iscoroutinefunction, sync_to_async\n\nfrom django.conf import settings\nfrom django.core.exceptions import ImproperlyConfigured, MiddlewareNotUsed\nfrom django.core.signals import request_finished\nfrom django.db import connections, transaction\nfrom django.urls import get_resolver, set_urlconf\nfrom django.utils.log import log_response\nfrom django.utils.module_loading import import_string\n\nfrom .exception import convert_exception_to_response\n\nlogger = logging.getLogger(\"django.request\")",
+                        "filename": "django/core/handlers/base.py",
+                        "start_index": 0,
+                        "end_index": 569,
+                        "start_line": 1,
+                        "end_line": 17,
+                        "max_line": 373,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes imports that are relevant to the middleware handling in Django, such as 'async_to_sync' and 'sync_to_async', which may be part of the issue."
+                }
+            ],
+            "django/utils/decorators.py": [
+                {
+                    "chunk": {
+                        "code": "def make_middleware_decorator(middleware_class):\n    def _make_decorator(*m_args, **m_kwargs):\n        def _decorator(view_func):\n            middleware = middleware_class(view_func, *m_args, **m_kwargs)\n\n            @wraps(view_func)\n            def _wrapper_view(request, *args, **kwargs):\n                if hasattr(middleware, \"process_request\"):\n                    result = middleware.process_request(request)\n                    if result is not None:\n                        return result\n                if hasattr(middleware, \"process_view\"):\n                    result = middleware.process_view(request, view_func, args, kwargs)\n                    if result is not None:\n                        return result\n                try:\n                    response = view_func(request, *args, **kwargs)\n                except Exception as e:\n                    if hasattr(middleware, \"process_exception\"):\n                        result = middleware.process_exception(request, e)\n                        if result is not None:\n                            return result\n                    raise\n                if hasattr(response, \"render\") and callable(response.render):\n                    if hasattr(middleware, \"process_template_response\"):\n                        response = middleware.process_template_response(\n                            request, response\n                        )\n                    # Defer running of process_response until after the template\n                    # has been rendered:\n                    if hasattr(middleware, \"process_response\"):\n\n                        def callback(response):\n                            return middleware.process_response(request, response)\n\n                        response.add_post_render_callback(callback)\n                else:\n                    if hasattr(middleware, \"process_response\"):\n                        return middleware.process_response(request, response)\n                return response\n\n            return _wrapper_view\n\n        return _decorator\n\n    return _make_decorator\n\n\ndef sync_and_async_middleware(func):\n    \"\"\"\n    Mark a middleware factory as returning a hybrid middleware supporting both\n    types of request.\n    \"\"\"\n    func.sync_capable = True\n    func.async_capable = True\n    return func\n\n\ndef sync_only_middleware(func):\n    \"\"\"\n    Mark a middleware factory as returning a sync middleware.\n    This is the default.\n    \"\"\"\n    func.sync_capable = True\n    func.async_capable = False\n    return func\n\n\ndef async_only_middleware(func):\n    \"\"\"Mark a middleware factory as returning an async middleware.\"\"\"\n    func.sync_capable = False\n    func.async_capable = True\n    return func",
+                        "filename": "django/utils/decorators.py",
+                        "start_index": 4246,
+                        "end_index": 6939,
+                        "start_line": 118,
+                        "end_line": 190,
+                        "max_line": 190,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines decorators for middleware, which may be relevant to understanding how middleware is expected to behave in both synchronous and asynchronous contexts."
+                }
+            ],
+            "django/utils/deprecation.py": [
+                {
+                    "chunk": {
+                        "code": "class DeprecationInstanceCheck(type):\n    def __instancecheck__(self, instance):\n        warnings.warn(\n            \"`%s` is deprecated, use `%s` instead.\" % (self.__name__, self.alternative),\n            self.deprecation_warning,\n            2,\n        )\n        return super().__instancecheck__(instance)\n\n\nclass MiddlewareMixin:\n    sync_capable = True\n    async_capable = True\n\n    def __init__(self, get_response):\n        if get_response is None:\n            raise ValueError(\"get_response must be provided.\")\n        self.get_response = get_response\n        self._async_check()\n        super().__init__()\n\n    def __repr__(self):\n        return \"<%s get_response=%s>\" % (\n            self.__class__.__qualname__,\n            getattr(\n                self.get_response,\n                \"__qualname__\",\n                self.get_response.__class__.__name__,\n            ),\n        )\n\n    def _async_check(self):\n        \"\"\"\n        If get_response is a coroutine function, turns us into async mode so\n        a thread is not consumed during a whole request.\n        \"\"\"\n        if iscoroutinefunction(self.get_response):\n            # Mark the class as async-capable, but do the actual switch\n            # inside __call__ to avoid swapping out dunder methods\n            markcoroutinefunction(self)\n\n    def __call__(self, request):\n        # Exit out to async mode, if needed\n        if iscoroutinefunction(self):\n            return self.__acall__(request)\n        response = None\n        if hasattr(self, \"process_request\"):\n            response = self.process_request(request)\n        response = response or self.get_response(request)\n        if hasattr(self, \"process_response\"):\n            response = self.process_response(request, response)\n        return response\n\n    async def __acall__(self, request):\n        \"\"\"\n        Async version of __call__ that is swapped in when an async request\n        is running.\n        \"\"\"\n        response = None\n        if hasattr(self, \"process_request\"):\n            response = await sync_to_async(\n                self.process_request,\n                thread_sensitive=True,\n            )(request)\n        response = response or await self.get_response(request)\n        if hasattr(self, \"process_response\"):\n            response = await sync_to_async(\n                self.process_response,\n                thread_sensitive=True,\n            )(request, response)\n        return response",
+                        "filename": "django/utils/deprecation.py",
+                        "start_index": 2790,
+                        "end_index": 5228,
+                        "start_line": 86,
+                        "end_line": 156,
+                        "max_line": 156,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the MiddlewareMixin class, which includes the async check and the __call__ method that could be relevant to the issue if the middleware in question is using this mixin."
+                }
+            ]
+        },
+        "solution_task": "- Ensure that `DummyMiddleware` is marked as async-capable by setting `async_capable = True` if it needs to support ASGI.\n- If `DummyMiddleware` should only be used for synchronous views, ensure that it is not included in the `MIDDLEWARE` setting when running in ASGI mode.\n- If `DummyMiddleware` is intended to be used in both synchronous and asynchronous contexts, implement an `__acall__` method to handle asynchronous requests.\n- Use `sync_to_async` or `async_to_sync` decorators from `asgiref.sync` to wrap synchronous code for compatibility with asynchronous calls.\n- Check if `adapt_method_mode` is properly converting middleware methods to the correct mode (sync or async) based on the `async_capable` flag.\n- Ensure that `adapt_method_mode` is used correctly to adapt the `get_response` method of the middleware to the correct mode.\n- If the middleware is not intended to be used with ASGI, consider raising `MiddlewareNotUsed` during initialization to prevent it from being added to the middleware chain.\n- Verify that the `SESSION_FILE_PATH` setting is not causing the `ImproperlyConfigured` exception by ensuring it is set correctly or by not using it if not necessary.\n- Review the Django documentation and ensure that the middleware follows the guidelines for ASGI compatibility.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a comprehensive list of actionable steps that are relevant to the issue described in the PROMPT. It suggests ensuring that `DummyMiddleware` is marked as async-capable if it needs to support ASGI, which is directly related to the problem of middleware not being used properly in an ASGI context. It also advises on the correct use of `adapt_method_mode` and the use of `sync_to_async` or `async_to_sync` decorators, which are relevant to the issue of adapting synchronous code to asynchronous calls. The RESPONSE also correctly identifies the need to review the Django documentation for ASGI compatibility guidelines and to verify the `SESSION_FILE_PATH` setting. However, it does not directly address the specific issue of the middleware chain being 'poisoned' by the overwritten `handler` variable, which is a key part of the PROMPT's described bug. While the RESPONSE is highly relevant and offers clear guidance, it falls short of providing a precise solution to this core problem, hence it does not score a 10.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711725319.9770281,
+        "result": "- Ensure that `DummyMiddleware` is marked as async-capable by setting `async_capable = True` if it needs to support ASGI.\n- If `DummyMiddleware` should only be used for synchronous views, ensure that it is not included in the `MIDDLEWARE` setting when running in ASGI mode.\n- If `DummyMiddleware` is intended to be used in both synchronous and asynchronous contexts, implement an `__acall__` method to handle asynchronous requests.\n- Use `sync_to_async` or `async_to_sync` decorators from `asgiref.sync` to wrap synchronous code for compatibility with asynchronous calls.\n- Check if `adapt_method_mode` is properly converting middleware methods to the correct mode (sync or async) based on the `async_capable` flag.\n- Ensure that `adapt_method_mode` is used correctly to adapt the `get_response` method of the middleware to the correct mode.\n- If the middleware is not intended to be used with ASGI, consider raising `MiddlewareNotUsed` during initialization to prevent it from being added to the middleware chain.\n- Verify that the `SESSION_FILE_PATH` setting is not causing the `ImproperlyConfigured` exception by ensuring it is set correctly or by not using it if not necessary.\n- Review the Django documentation and ensure that the middleware follows the guidelines for ASGI compatibility.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [handlers](https://github.com/testbed/django__django__3.2/tree//django/core/handlers)- [Lines 39 - 102](https://github.com/testbed/django__django__3.2/blob//django/core/handlers/base.py#L39-L102)\n\n This snippet contains the middleware loading and adaptation logic, which is directly related to the issue of middleware not being used properly in an ASGI context and leaving side effects. \n\n\n   - [Lines 1 - 17](https://github.com/testbed/django__django__3.2/blob//django/core/handlers/base.py#L1-L17)\n\n This snippet includes imports that are relevant to the middleware handling in Django, such as 'async_to_sync' and 'sync_to_async', which may be part of the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [utils](https://github.com/testbed/django__django__3.2/tree//django/utils)- [Lines 118 - 190](https://github.com/testbed/django__django__3.2/blob//django/utils/decorators.py#L118-L190)\n\n This snippet defines decorators for middleware, which may be relevant to understanding how middleware is expected to behave in both synchronous and asynchronous contexts.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [utils](https://github.com/testbed/django__django__3.2/tree//django/utils)- [Lines 86 - 156](https://github.com/testbed/django__django__3.2/blob//django/utils/deprecation.py#L86-L156)\n\n This snippet defines the MiddlewareMixin class, which includes the async check and the __call__ method that could be relevant to the issue if the middleware in question is using this mixin."
+    }
+}

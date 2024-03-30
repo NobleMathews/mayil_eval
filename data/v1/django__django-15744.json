@@ -1,0 +1,234 @@
+{
+    "id": "django__django-15744",
+    "repo_name": "testbed/django__django__4.2",
+    "task_id": 2949100909238875546,
+    "title": "Request body is closed prematurely by the ASGI handler",
+    "body": "Description\n\t\nThe following PR \u200bhttps://github.com/django/django/pull/15675/ introduces I/O operation on closed file., due to closing the ASGI request body before getting the response, e.g. accessing request.body in a view.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Review the `ASGIHandler` class in `django/core/handlers/asgi.py` to ensure that the request body is not closed prematurely.\n- Ensure that the `body_file` object created in the `handle` method of `ASGIHandler` is not closed before the view has a chance to access `request.body`.\n- Modify the `handle` method to keep the `body_file` open until after the view has been called and the response has been generated.\n- Check the `ASGIRequest` class to ensure that the `HttpRequest` object's `_stream` attribute is properly managed and does not close the stream prematurely.\n- If the `body_file` is being closed in the `handle` method after `await self.send_response(response, send)`, consider removing that close operation or restructuring the code to delay closing until after the response has been fully sent.\n- Ensure that any cleanup code that closes the request body is only executed after the view has been processed and the response has been sent. This might involve reordering code or using context managers to control the lifecycle of the `body_file`.\n- Look for any `finally` blocks or exception handling in `ASGIHandler` that may be closing the `body_file` too early and adjust as necessary.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__4.2/tree//django/core) \u2192 [handlers](https://github.com/testbed/django__django__4.2/tree//django/core/handlers)- [Lines 148 - 221](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L148-L221)\n\n This snippet contains the ASGI handler logic where the request body is read and the response is sent. It is likely where the premature closing of the request body occurs. \n\n\n   - [Lines 48 - 117](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L48-L117)\n\n This snippet initializes the ASGIRequest object and assigns the body file to the request stream, which is relevant to understanding how the request body is handled. \n\n\n   - [Lines 30 - 46](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L30-L46)\n\n This snippet defines the timeout for reading the request body, which could be related to the issue if the timeout is causing the premature closing. \n\n\n   - [Lines 38 - 38](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L38-L38)\n\n This snippet shows the ASGIRequest class definition, which may need to be examined for its relationship with the request body handling. \n\n\n   - [Lines 1 - 35](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L1-L35)\n\n This snippet includes imports and settings that might be relevant to the ASGI handler's behavior and the handling of the request body.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00029299999999999997,
+        "snippet_processor": 0.05661,
+        "issue_star_solver": 0.05147000000000001,
+        "issue_star_creation": 0.0343,
+        "bouncer": 0.02192
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711716080.6032178,
+        "relevant_snippets": [
+            {
+                "code": "class ASGIRequest(HttpRequest):",
+                "filename": "django/core/handlers/asgi.py",
+                "start_index": 897,
+                "end_index": 928,
+                "start_line": 38,
+                "end_line": 38,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    Custom request subclass that decodes from an ASGI-standard request dict\n    and wraps request body handling.\n    \"\"\"\n\n    # Number of seconds until a Request gives up on trying to read a request\n    # body and aborts.\n    body_receive_timeout = 60",
+                "filename": "django/core/handlers/asgi.py",
+                "start_index": 933,
+                "end_index": 1188,
+                "start_line": 30,
+                "end_line": 46,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "from io import IOBase\n\nfrom django.conf import settings\nfrom django.core import signals\nfrom django.core.handlers import base\nfrom django.http import HttpRequest, QueryDict, parse_cookie\nfrom django.urls import set_script_prefix\nfrom django.utils.encoding import repercent_broken_unicode\nfrom django.utils.functional import cached_property\nfrom django.utils.regex_helper import _lazy_re_compile\n\n_slashes_re = _lazy_re_compile(rb\"/+\")\n\n\nclass LimitedStream(IOBase):\n    \"\"\"\n    Wrap another stream to disallow reading it past a number of bytes.\n\n    Based on the implementation from werkzeug.wsgi.LimitedStream\n    See https://github.com/pallets/werkzeug/blob/dbf78f67/src/werkzeug/wsgi.py#L828\n    \"\"\"\n\n    def __init__(self, stream, limit):\n        self._read = stream.read\n        self._readline = stream.readline\n        self._pos = 0\n        self.limit = limit\n\n    def read(self, size=-1, /):\n        _pos = self._pos\n        limit = self.limit\n        if _pos >= limit:\n            return b\"\"\n        if size == -1 or size is None:\n            size = limit - _pos\n        else:\n            size = min(size, limit - _pos)\n        data = self._read(size)\n        self._pos += len(data)\n        return data\n\n    def readline(self, size=-1, /):\n        _pos = self._pos\n        limit = self.limit\n        if _pos >= limit:\n            return b\"\"\n        if size == -1 or size is None:\n            size = limit - _pos\n        else:\n            size = min(size, limit - _pos)\n        line = self._readline(size)\n        self._pos += len(line)\n        return line",
+                "filename": "django/core/handlers/wsgi.py",
+                "start_index": 0,
+                "end_index": 1563,
+                "start_line": 1,
+                "end_line": 53,
+                "max_line": 207,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"Handler for ASGI requests.\"\"\"\n\n    request_class = ASGIRequest\n    # Size to chunk response bodies into for multiple response messages.\n    chunk_size = 2**16\n\n    def __init__(self):\n        super().__init__()\n        self.load_middleware(is_async=True)\n\n    async def __call__(self, scope, receive, send):\n        \"\"\"\n        Async entrypoint - parses the request and hands off to get_response.\n        \"\"\"\n        # Serve only HTTP connections.\n        # FIXME: Allow to override this.\n        if scope[\"type\"] != \"http\":\n            raise ValueError(\n                \"Django can only handle ASGI/HTTP connections, not %s.\" % scope[\"type\"]\n            )\n\n        async with ThreadSensitiveContext():\n            await self.handle(scope, receive, send)\n\n    async def handle(self, scope, receive, send):\n        \"\"\"\n        Handles the ASGI request. Called via the __call__ method.\n        \"\"\"\n        # Receive the HTTP request body as a stream object.\n        try:\n            body_file = await self.read_body(receive)\n        except RequestAborted:\n            return\n        # Request is complete and can be served.\n        set_script_prefix(get_script_prefix(scope))\n        await signals.request_started.asend(sender=self.__class__, scope=scope)\n        # Get the request and check for basic issues.\n        request, error_response = self.create_request(scope, body_file)\n        if request is None:\n            body_file.close()\n            await self.send_response(error_response, send)\n            return\n        # Try to catch a disconnect while getting response.\n        tasks = [\n            asyncio.create_task(self.run_get_response(request)),\n            asyncio.create_task(self.listen_for_disconnect(receive)),\n        ]\n        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)\n        done, pending = done.pop(), pending.pop()\n        # Allow views to handle cancellation.\n        pending.cancel()\n        try:\n            await pending\n        except asyncio.CancelledError:\n            # Task re-raised the CancelledError as expected.\n            pass\n        try:\n            response = done.result()\n        except RequestAborted:\n            body_file.close()\n            return\n        except AssertionError:\n            body_file.close()\n            raise\n        # Send the response.\n        await self.send_response(response, send)\n\n    async def listen_for_disconnect(self, receive):\n        \"\"\"Listen for disconnect from the client.\"\"\"\n        message = await receive()\n        if message[\"type\"] == \"http.disconnect\":\n            raise RequestAborted()\n        # This should never happen.\n        assert False, \"Invalid ASGI message after request body: %s\" % message[\"type\"]",
+                "filename": "django/core/handlers/asgi.py",
+                "start_index": 4875,
+                "end_index": 7613,
+                "start_line": 148,
+                "end_line": 221,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "def __init__(self, scope, body_file):\n        self.scope = scope\n        self._post_parse_error = False\n        self._read_started = False\n        self.resolver_match = None\n        self.script_name = get_script_prefix(scope)\n        if self.script_name:\n            # TODO: Better is-prefix checking, slash handling?\n            self.path_info = scope[\"path\"].removeprefix(self.script_name)\n        else:\n            self.path_info = scope[\"path\"]\n        # The Django path is different from ASGI scope path args, it should\n        # combine with script name.\n        if self.script_name:\n            self.path = \"%s/%s\" % (\n                self.script_name.rstrip(\"/\"),\n                self.path_info.replace(\"/\", \"\", 1),\n            )\n        else:\n            self.path = scope[\"path\"]\n        # HTTP basics.\n        self.method = self.scope[\"method\"].upper()\n        # Ensure query string is encoded correctly.\n        query_string = self.scope.get(\"query_string\", \"\")\n        if isinstance(query_string, bytes):\n            query_string = query_string.decode()\n        self.META = {\n            \"REQUEST_METHOD\": self.method,\n            \"QUERY_STRING\": query_string,\n            \"SCRIPT_NAME\": self.script_name,\n            \"PATH_INFO\": self.path_info,\n            # WSGI-expecting code will need these for a while\n            \"wsgi.multithread\": True,\n            \"wsgi.multiprocess\": True,\n        }\n        if self.scope.get(\"client\"):\n            self.META[\"REMOTE_ADDR\"] = self.scope[\"client\"][0]\n            self.META[\"REMOTE_HOST\"] = self.META[\"REMOTE_ADDR\"]\n            self.META[\"REMOTE_PORT\"] = self.scope[\"client\"][1]\n        if self.scope.get(\"server\"):\n            self.META[\"SERVER_NAME\"] = self.scope[\"server\"][0]\n            self.META[\"SERVER_PORT\"] = str(self.scope[\"server\"][1])\n        else:\n            self.META[\"SERVER_NAME\"] = \"unknown\"\n            self.META[\"SERVER_PORT\"] = \"0\"\n        # Headers go into META.\n        for name, value in self.scope.get(\"headers\", []):\n            name = name.decode(\"latin1\")\n            if name == \"content-length\":\n                corrected_name = \"CONTENT_LENGTH\"\n            elif name == \"content-type\":\n                corrected_name = \"CONTENT_TYPE\"\n            else:\n                corrected_name = \"HTTP_%s\" % name.upper().replace(\"-\", \"_\")\n            # HTTP/2 say only ASCII chars are allowed in headers, but decode\n            # latin1 just in case.\n            value = value.decode(\"latin1\")\n            if corrected_name in self.META:\n                value = self.META[corrected_name] + \",\" + value\n            self.META[corrected_name] = value\n        # Pull out request encoding, if provided.\n        self._set_content_type_params(self.META)\n        # Directly assign the body file to be our stream.\n        self._stream = body_file\n        # Other bits.\n        self.resolver_match = None\n\n    @cached_property\n    def GET(self):\n        return QueryDict(self.META[\"QUERY_STRING\"])",
+                "filename": "django/core/handlers/asgi.py",
+                "start_index": 1194,
+                "end_index": 4157,
+                "start_line": 48,
+                "end_line": 117,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "import codecs\nimport copy\nfrom io import BytesIO\nfrom itertools import chain\nfrom urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit\n\nfrom django.conf import settings\nfrom django.core import signing\nfrom django.core.exceptions import (\n    DisallowedHost,\n    ImproperlyConfigured,\n    RequestDataTooBig,\n    TooManyFieldsSent,\n)\nfrom django.core.files import uploadhandler\nfrom django.http.multipartparser import (\n    MultiPartParser,\n    MultiPartParserError,\n    TooManyFilesSent,\n)\nfrom django.utils.datastructures import (\n    CaseInsensitiveMapping,\n    ImmutableList,\n    MultiValueDict,\n)\nfrom django.utils.encoding import escape_uri_path, iri_to_uri\nfrom django.utils.functional import cached_property\nfrom django.utils.http import is_same_domain, parse_header_parameters\nfrom django.utils.regex_helper import _lazy_re_compile\n\nRAISE_ERROR = object()\nhost_validation_re = _lazy_re_compile(\n    r\"^([a-z0-9.-]+|\\[[a-f0-9]*:[a-f0-9\\.:]+\\])(:[0-9]+)?$\"\n)\n\n\nclass UnreadablePostError(OSError):\n    pass\n\n\nclass RawPostDataException(Exception):\n    \"\"\"\n    You cannot access raw_post_data from a request that has\n    multipart/* POST data if it has been accessed via POST,\n    FILES, etc..\n    \"\"\"\n\n    pass",
+                "filename": "django/http/request.py",
+                "start_index": 0,
+                "end_index": 1228,
+                "start_line": 1,
+                "end_line": 108,
+                "max_line": 737,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "class ServerHandler(simple_server.ServerHandler):\n    http_version = \"1.1\"\n\n    def __init__(self, stdin, stdout, stderr, environ, **kwargs):\n        \"\"\"\n        Use a LimitedStream so that unread request data will be ignored at\n        the end of the request. WSGIRequest uses a LimitedStream but it\n        shouldn't discard the data since the upstream servers usually do this.\n        This fix applies only for testserver/runserver.\n        \"\"\"\n        try:\n            content_length = int(environ.get(\"CONTENT_LENGTH\"))\n        except (ValueError, TypeError):\n            content_length = 0\n        super().__init__(\n            LimitedStream(stdin, content_length), stdout, stderr, environ, **kwargs\n        )\n\n    def cleanup_headers(self):\n        super().cleanup_headers()\n        if (\n            self.environ[\"REQUEST_METHOD\"] == \"HEAD\"\n            and \"Content-Length\" in self.headers\n        ):\n            del self.headers[\"Content-Length\"]\n        # HTTP/1.1 requires support for persistent connections. Send 'close' if\n        # the content length is unknown to prevent clients from reusing the\n        # connection.\n        if (\n            self.environ[\"REQUEST_METHOD\"] != \"HEAD\"\n            and \"Content-Length\" not in self.headers\n        ):\n            self.headers[\"Connection\"] = \"close\"\n        # Persistent connections require threading server.\n        elif not isinstance(self.request_handler.server, socketserver.ThreadingMixIn):\n            self.headers[\"Connection\"] = \"close\"\n        # Mark the connection for closing if it's set as such above or if the\n        # application sent the header.\n        if self.headers.get(\"Connection\") == \"close\":\n            self.request_handler.close_connection = True\n\n    def close(self):\n        self.get_stdin().read()\n        super().close()\n\n    def finish_response(self):\n        if self.environ[\"REQUEST_METHOD\"] == \"HEAD\":\n            try:\n                deque(self.result, maxlen=0)  # Consume iterator.\n                # Don't call self.finish_content() as, if the headers have not\n                # been sent and Content-Length isn't set, it'll default to \"0\"\n                # which will prevent omission of the Content-Length header with\n                # HEAD requests as permitted by RFC 9110 Section 9.3.2.\n                # Instead, send the headers, if not sent yet.\n                if not self.headers_sent:\n                    self.send_headers()\n            finally:\n                self.close()\n        else:\n            super().finish_response()",
+                "filename": "django/core/servers/basehttp.py",
+                "start_index": 3688,
+                "end_index": 6224,
+                "start_line": 114,
+                "end_line": 173,
+                "max_line": 281,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "class ASGIHandler(base.BaseHandler):",
+                "filename": "django/core/handlers/asgi.py",
+                "start_index": 4834,
+                "end_index": 4870,
+                "start_line": 147,
+                "end_line": 147,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "except StopUpload as e:\n            self._close_files()\n            if not e.connection_reset:\n                exhaust(self._input_data)\n        else:\n            if not uploaded_file:\n                for handler in handlers:\n                    handler.upload_interrupted()\n            # Make sure that the request data is all fed\n            exhaust(self._input_data)",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 14464,
+                "end_index": 14833,
+                "start_line": 348,
+                "end_line": 357,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "import asyncio\nimport logging\nimport sys\nimport tempfile\nimport traceback\nfrom contextlib import aclosing\n\nfrom asgiref.sync import ThreadSensitiveContext, sync_to_async\n\nfrom django.conf import settings\nfrom django.core import signals\nfrom django.core.exceptions import RequestAborted, RequestDataTooBig\nfrom django.core.handlers import base\nfrom django.http import (\n    FileResponse,\n    HttpRequest,\n    HttpResponse,\n    HttpResponseBadRequest,\n    HttpResponseServerError,\n    QueryDict,\n    parse_cookie,\n)\nfrom django.urls import set_script_prefix\nfrom django.utils.functional import cached_property\n\nlogger = logging.getLogger(\"django.request\")\n\n\ndef get_script_prefix(scope):\n    \"\"\"\n    Return the script prefix to use from either the scope or a setting.\n    \"\"\"\n    if settings.FORCE_SCRIPT_NAME:\n        return settings.FORCE_SCRIPT_NAME\n    return scope.get(\"root_path\", \"\") or \"\"",
+                "filename": "django/core/handlers/asgi.py",
+                "start_index": 0,
+                "end_index": 894,
+                "start_line": 1,
+                "end_line": 35,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/core/handlers/asgi.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"Handler for ASGI requests.\"\"\"\n\n    request_class = ASGIRequest\n    # Size to chunk response bodies into for multiple response messages.\n    chunk_size = 2**16\n\n    def __init__(self):\n        super().__init__()\n        self.load_middleware(is_async=True)\n\n    async def __call__(self, scope, receive, send):\n        \"\"\"\n        Async entrypoint - parses the request and hands off to get_response.\n        \"\"\"\n        # Serve only HTTP connections.\n        # FIXME: Allow to override this.\n        if scope[\"type\"] != \"http\":\n            raise ValueError(\n                \"Django can only handle ASGI/HTTP connections, not %s.\" % scope[\"type\"]\n            )\n\n        async with ThreadSensitiveContext():\n            await self.handle(scope, receive, send)\n\n    async def handle(self, scope, receive, send):\n        \"\"\"\n        Handles the ASGI request. Called via the __call__ method.\n        \"\"\"\n        # Receive the HTTP request body as a stream object.\n        try:\n            body_file = await self.read_body(receive)\n        except RequestAborted:\n            return\n        # Request is complete and can be served.\n        set_script_prefix(get_script_prefix(scope))\n        await signals.request_started.asend(sender=self.__class__, scope=scope)\n        # Get the request and check for basic issues.\n        request, error_response = self.create_request(scope, body_file)\n        if request is None:\n            body_file.close()\n            await self.send_response(error_response, send)\n            return\n        # Try to catch a disconnect while getting response.\n        tasks = [\n            asyncio.create_task(self.run_get_response(request)),\n            asyncio.create_task(self.listen_for_disconnect(receive)),\n        ]\n        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)\n        done, pending = done.pop(), pending.pop()\n        # Allow views to handle cancellation.\n        pending.cancel()\n        try:\n            await pending\n        except asyncio.CancelledError:\n            # Task re-raised the CancelledError as expected.\n            pass\n        try:\n            response = done.result()\n        except RequestAborted:\n            body_file.close()\n            return\n        except AssertionError:\n            body_file.close()\n            raise\n        # Send the response.\n        await self.send_response(response, send)\n\n    async def listen_for_disconnect(self, receive):\n        \"\"\"Listen for disconnect from the client.\"\"\"\n        message = await receive()\n        if message[\"type\"] == \"http.disconnect\":\n            raise RequestAborted()\n        # This should never happen.\n        assert False, \"Invalid ASGI message after request body: %s\" % message[\"type\"]",
+                        "filename": "django/core/handlers/asgi.py",
+                        "start_index": 4875,
+                        "end_index": 7613,
+                        "start_line": 148,
+                        "end_line": 221,
+                        "max_line": 355,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the ASGI handler logic where the request body is read and the response is sent. It is likely where the premature closing of the request body occurs."
+                },
+                {
+                    "chunk": {
+                        "code": "def __init__(self, scope, body_file):\n        self.scope = scope\n        self._post_parse_error = False\n        self._read_started = False\n        self.resolver_match = None\n        self.script_name = get_script_prefix(scope)\n        if self.script_name:\n            # TODO: Better is-prefix checking, slash handling?\n            self.path_info = scope[\"path\"].removeprefix(self.script_name)\n        else:\n            self.path_info = scope[\"path\"]\n        # The Django path is different from ASGI scope path args, it should\n        # combine with script name.\n        if self.script_name:\n            self.path = \"%s/%s\" % (\n                self.script_name.rstrip(\"/\"),\n                self.path_info.replace(\"/\", \"\", 1),\n            )\n        else:\n            self.path = scope[\"path\"]\n        # HTTP basics.\n        self.method = self.scope[\"method\"].upper()\n        # Ensure query string is encoded correctly.\n        query_string = self.scope.get(\"query_string\", \"\")\n        if isinstance(query_string, bytes):\n            query_string = query_string.decode()\n        self.META = {\n            \"REQUEST_METHOD\": self.method,\n            \"QUERY_STRING\": query_string,\n            \"SCRIPT_NAME\": self.script_name,\n            \"PATH_INFO\": self.path_info,\n            # WSGI-expecting code will need these for a while\n            \"wsgi.multithread\": True,\n            \"wsgi.multiprocess\": True,\n        }\n        if self.scope.get(\"client\"):\n            self.META[\"REMOTE_ADDR\"] = self.scope[\"client\"][0]\n            self.META[\"REMOTE_HOST\"] = self.META[\"REMOTE_ADDR\"]\n            self.META[\"REMOTE_PORT\"] = self.scope[\"client\"][1]\n        if self.scope.get(\"server\"):\n            self.META[\"SERVER_NAME\"] = self.scope[\"server\"][0]\n            self.META[\"SERVER_PORT\"] = str(self.scope[\"server\"][1])\n        else:\n            self.META[\"SERVER_NAME\"] = \"unknown\"\n            self.META[\"SERVER_PORT\"] = \"0\"\n        # Headers go into META.\n        for name, value in self.scope.get(\"headers\", []):\n            name = name.decode(\"latin1\")\n            if name == \"content-length\":\n                corrected_name = \"CONTENT_LENGTH\"\n            elif name == \"content-type\":\n                corrected_name = \"CONTENT_TYPE\"\n            else:\n                corrected_name = \"HTTP_%s\" % name.upper().replace(\"-\", \"_\")\n            # HTTP/2 say only ASCII chars are allowed in headers, but decode\n            # latin1 just in case.\n            value = value.decode(\"latin1\")\n            if corrected_name in self.META:\n                value = self.META[corrected_name] + \",\" + value\n            self.META[corrected_name] = value\n        # Pull out request encoding, if provided.\n        self._set_content_type_params(self.META)\n        # Directly assign the body file to be our stream.\n        self._stream = body_file\n        # Other bits.\n        self.resolver_match = None\n\n    @cached_property\n    def GET(self):\n        return QueryDict(self.META[\"QUERY_STRING\"])",
+                        "filename": "django/core/handlers/asgi.py",
+                        "start_index": 1194,
+                        "end_index": 4157,
+                        "start_line": 48,
+                        "end_line": 117,
+                        "max_line": 355,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet initializes the ASGIRequest object and assigns the body file to the request stream, which is relevant to understanding how the request body is handled."
+                },
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    Custom request subclass that decodes from an ASGI-standard request dict\n    and wraps request body handling.\n    \"\"\"\n\n    # Number of seconds until a Request gives up on trying to read a request\n    # body and aborts.\n    body_receive_timeout = 60",
+                        "filename": "django/core/handlers/asgi.py",
+                        "start_index": 933,
+                        "end_index": 1188,
+                        "start_line": 30,
+                        "end_line": 46,
+                        "max_line": 355,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the timeout for reading the request body, which could be related to the issue if the timeout is causing the premature closing."
+                },
+                {
+                    "chunk": {
+                        "code": "class ASGIRequest(HttpRequest):",
+                        "filename": "django/core/handlers/asgi.py",
+                        "start_index": 897,
+                        "end_index": 928,
+                        "start_line": 38,
+                        "end_line": 38,
+                        "max_line": 355,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the ASGIRequest class definition, which may need to be examined for its relationship with the request body handling."
+                },
+                {
+                    "chunk": {
+                        "code": "import asyncio\nimport logging\nimport sys\nimport tempfile\nimport traceback\nfrom contextlib import aclosing\n\nfrom asgiref.sync import ThreadSensitiveContext, sync_to_async\n\nfrom django.conf import settings\nfrom django.core import signals\nfrom django.core.exceptions import RequestAborted, RequestDataTooBig\nfrom django.core.handlers import base\nfrom django.http import (\n    FileResponse,\n    HttpRequest,\n    HttpResponse,\n    HttpResponseBadRequest,\n    HttpResponseServerError,\n    QueryDict,\n    parse_cookie,\n)\nfrom django.urls import set_script_prefix\nfrom django.utils.functional import cached_property\n\nlogger = logging.getLogger(\"django.request\")\n\n\ndef get_script_prefix(scope):\n    \"\"\"\n    Return the script prefix to use from either the scope or a setting.\n    \"\"\"\n    if settings.FORCE_SCRIPT_NAME:\n        return settings.FORCE_SCRIPT_NAME\n    return scope.get(\"root_path\", \"\") or \"\"",
+                        "filename": "django/core/handlers/asgi.py",
+                        "start_index": 0,
+                        "end_index": 894,
+                        "start_line": 1,
+                        "end_line": 35,
+                        "max_line": 355,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes imports and settings that might be relevant to the ASGI handler's behavior and the handling of the request body."
+                }
+            ]
+        },
+        "solution_task": "- Review the `ASGIHandler` class in `django/core/handlers/asgi.py` to ensure that the request body is not closed prematurely.\n- Ensure that the `body_file` object created in the `handle` method of `ASGIHandler` is not closed before the view has a chance to access `request.body`.\n- Modify the `handle` method to keep the `body_file` open until after the view has been called and the response has been generated.\n- Check the `ASGIRequest` class to ensure that the `HttpRequest` object's `_stream` attribute is properly managed and does not close the stream prematurely.\n- If the `body_file` is being closed in the `handle` method after `await self.send_response(response, send)`, consider removing that close operation or restructuring the code to delay closing until after the response has been fully sent.\n- Ensure that any cleanup code that closes the request body is only executed after the view has been processed and the response has been sent. This might involve reordering code or using context managers to control the lifecycle of the `body_file`.\n- Look for any `finally` blocks or exception handling in `ASGIHandler` that may be closing the `body_file` too early and adjust as necessary.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable set of steps to investigate and potentially resolve the issue of the request body being closed prematurely by the ASGI handler. It suggests reviewing the ASGIHandler class, ensuring the body_file object is not closed prematurely, modifying the handle method, checking the ASGIRequest class, and adjusting any cleanup code or exception handling that may be closing the body_file too early. Additionally, the RESPONSE provides specific code snippets to check, which are highly relevant to the issue at hand. The RESPONSE is comprehensive and addresses all aspects of the described bug, offering clear guidance for debugging and fixing the problem.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711716250.9392881,
+        "result": "- Review the `ASGIHandler` class in `django/core/handlers/asgi.py` to ensure that the request body is not closed prematurely.\n- Ensure that the `body_file` object created in the `handle` method of `ASGIHandler` is not closed before the view has a chance to access `request.body`.\n- Modify the `handle` method to keep the `body_file` open until after the view has been called and the response has been generated.\n- Check the `ASGIRequest` class to ensure that the `HttpRequest` object's `_stream` attribute is properly managed and does not close the stream prematurely.\n- If the `body_file` is being closed in the `handle` method after `await self.send_response(response, send)`, consider removing that close operation or restructuring the code to delay closing until after the response has been fully sent.\n- Ensure that any cleanup code that closes the request body is only executed after the view has been processed and the response has been sent. This might involve reordering code or using context managers to control the lifecycle of the `body_file`.\n- Look for any `finally` blocks or exception handling in `ASGIHandler` that may be closing the `body_file` too early and adjust as necessary.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__4.2/tree//django/core) \u2192 [handlers](https://github.com/testbed/django__django__4.2/tree//django/core/handlers)- [Lines 148 - 221](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L148-L221)\n\n This snippet contains the ASGI handler logic where the request body is read and the response is sent. It is likely where the premature closing of the request body occurs. \n\n\n   - [Lines 48 - 117](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L48-L117)\n\n This snippet initializes the ASGIRequest object and assigns the body file to the request stream, which is relevant to understanding how the request body is handled. \n\n\n   - [Lines 30 - 46](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L30-L46)\n\n This snippet defines the timeout for reading the request body, which could be related to the issue if the timeout is causing the premature closing. \n\n\n   - [Lines 38 - 38](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L38-L38)\n\n This snippet shows the ASGIRequest class definition, which may need to be examined for its relationship with the request body handling. \n\n\n   - [Lines 1 - 35](https://github.com/testbed/django__django__4.2/blob//django/core/handlers/asgi.py#L1-L35)\n\n This snippet includes imports and settings that might be relevant to the ASGI handler's behavior and the handling of the request body."
+    }
+}

@@ -1,0 +1,174 @@
+{
+    "id": "django__django-16493",
+    "repo_name": "testbed/django__django__5.0",
+    "task_id": 4587192598352942606,
+    "title": "Callable storage on FileField fails to deconstruct when it returns default_storage",
+    "body": "Description\n\t\nIf the storage argument on a FileField is set to a callable that returns default_storage, it is omitted from the deconstructed form of the field, rather than being included as a reference to the callable as expected.\nFor example, given a model definition:\nfrom django.core.files.storage import FileSystemStorage, default_storage\nfrom django.db import models\nimport random\nother_storage = FileSystemStorage(location='/media/other')\ndef get_storage():\n\treturn random.choice([default_storage, other_storage])\nclass MyModel(models.Model):\n\tmy_file = models.FileField(storage=get_storage)\nrepeatedly running makemigrations will randomly generate a migration that alternately includes or omits storage=myapp.models.get_storage on the FileField definition.\nThis case was overlooked in the fix for #31941 - the deconstruct method tests if self.storage is not default_storage to determine whether to add the storage kwarg, but at this point self.storage is the evaluated version, so it wrongly returns false for a callable that returns default_storage.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__5.0.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `deconstruct` method in the `FileField` class within `django/db/models/fields/files.py` to ensure that the `storage` argument is consistently included in the deconstructed arguments when a callable is provided that sometimes returns `default_storage`.\n- The modification should check if `_storage_callable` is set and use it directly in the `kwargs` if it is not equal to `default_storage`.\n\n```python\ndef deconstruct(self):\n    name, path, args, kwargs = super().deconstruct()\n    if kwargs.get(\"max_length\") == 100:\n        del kwargs[\"max_length\"]\n    kwargs[\"upload_to\"] = self.upload_to\n    storage = getattr(self, \"_storage_callable\", self.storage)\n    if storage is not default_storage:\n        kwargs[\"storage\"] = storage\n    elif hasattr(self, '_storage_callable'):\n        kwargs['storage'] = self._storage_callable\n    return name, path, args, kwargs\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__5.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__5.0/tree//django/db/models) \u2192 [fields](https://github.com/testbed/django__django__5.0/tree//django/db/models/fields)- [Lines 227 - 311](https://github.com/testbed/django__django__5.0/blob//django/db/models/fields/files.py#L227-L311)\n\n This snippet contains the deconstruct method of the FileField which is directly related to the issue of callable storage not being deconstructed properly when it returns default_storage.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0007825,
+        "snippet_processor": 0.06176000000000001,
+        "issue_star_creation": 0.0426,
+        "issue_star_solver": 0.05258,
+        "bouncer": 0.0258
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711706166.9013708,
+        "relevant_snippets": [
+            {
+                "code": "@deconstructible(path=\"django.core.files.storage.FileSystemStorage\")",
+                "filename": "django/core/files/storage/filesystem.py",
+                "start_index": 521,
+                "end_index": 589,
+                "start_line": 18,
+                "end_line": 18,
+                "max_line": 207,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "@deconstructible(path=\"django.core.files.storage.InMemoryStorage\")",
+                "filename": "django/core/files/storage/memory.py",
+                "start_index": 5437,
+                "end_index": 5503,
+                "start_line": 164,
+                "end_line": 164,
+                "max_line": 290,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.conf import settings\nfrom django.utils.module_loading import import_string\n\n\ndef default_storage(request):\n    \"\"\"\n    Callable with the same interface as the storage classes.\n\n    This isn't just default_storage = import_string(settings.MESSAGE_STORAGE)\n    to avoid accessing the settings at the module level.\n    \"\"\"\n    return import_string(settings.MESSAGE_STORAGE)(request)",
+                "filename": "django/contrib/messages/storage/__init__.py",
+                "start_index": 0,
+                "end_index": 391,
+                "start_line": 1,
+                "end_line": 12,
+                "max_line": 12,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "attr_class = FieldFile\n\n    # The descriptor to use for accessing the attribute off of the class.\n    descriptor_class = FileDescriptor\n\n    description = _(\"File\")\n\n    def __init__(\n        self, verbose_name=None, name=None, upload_to=\"\", storage=None, **kwargs\n    ):\n        self._primary_key_set_explicitly = \"primary_key\" in kwargs\n\n        self.storage = storage or default_storage\n        if callable(self.storage):\n            # Hold a reference to the callable for deconstruct().\n            self._storage_callable = self.storage\n            self.storage = self.storage()\n            if not isinstance(self.storage, Storage):\n                raise TypeError(\n                    \"%s.storage must be a subclass/instance of %s.%s\"\n                    % (\n                        self.__class__.__qualname__,\n                        Storage.__module__,\n                        Storage.__qualname__,\n                    )\n                )\n        self.upload_to = upload_to\n\n        kwargs.setdefault(\"max_length\", 100)\n        super().__init__(verbose_name, name, **kwargs)\n\n    def check(self, **kwargs):\n        return [\n            *super().check(**kwargs),\n            *self._check_primary_key(),\n            *self._check_upload_to(),\n        ]\n\n    def _check_primary_key(self):\n        if self._primary_key_set_explicitly:\n            return [\n                checks.Error(\n                    \"'primary_key' is not a valid argument for a %s.\"\n                    % self.__class__.__name__,\n                    obj=self,\n                    id=\"fields.E201\",\n                )\n            ]\n        else:\n            return []\n\n    def _check_upload_to(self):\n        if isinstance(self.upload_to, str) and self.upload_to.startswith(\"/\"):\n            return [\n                checks.Error(\n                    \"%s's 'upload_to' argument must be a relative path, not an \"\n                    \"absolute path.\" % self.__class__.__name__,\n                    obj=self,\n                    id=\"fields.E202\",\n                    hint=\"Remove the leading slash.\",\n                )\n            ]\n        else:\n            return []\n\n    def deconstruct(self):\n        name, path, args, kwargs = super().deconstruct()\n        if kwargs.get(\"max_length\") == 100:\n            del kwargs[\"max_length\"]\n        kwargs[\"upload_to\"] = self.upload_to\n        storage = getattr(self, \"_storage_callable\", self.storage)\n        if storage is not default_storage:\n            kwargs[\"storage\"] = storage\n        return name, path, args, kwargs\n\n    def get_internal_type(self):\n        return \"FileField\"\n\n    def get_prep_value(self, value):\n        value = super().get_prep_value(value)\n        # Need to convert File objects provided via a form to string for\n        # database insertion.\n        if value is None:\n            return None\n        return str(value)",
+                "filename": "django/db/models/fields/files.py",
+                "start_index": 7979,
+                "end_index": 10843,
+                "start_line": 227,
+                "end_line": 311,
+                "max_line": 511,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "def __get__(self, instance, cls=None):\n        if instance is None:\n            return self\n\n        # This is slightly complicated, so worth an explanation.\n        # instance.file needs to ultimately return some instance of `File`,\n        # probably a subclass. Additionally, this returned object needs to have\n        # the FieldFile API so that users can easily do things like\n        # instance.file.path and have that delegated to the file storage engine.\n        # Easy enough if we're strict about assignment in __set__, but if you\n        # peek below you can see that we're not. So depending on the current\n        # value of the field we have to dynamically construct some sort of\n        # \"thing\" to return.\n\n        # The instance dict contains whatever was originally assigned\n        # in __set__.\n        file = super().__get__(instance, cls)\n\n        # If this value is a string (instance.file = \"path/to/file\") or None\n        # then we simply wrap it with the appropriate attribute class according\n        # to the file field. [This is FieldFile for FileFields and\n        # ImageFieldFile for ImageFields; it's also conceivable that user\n        # subclasses might also want to subclass the attribute class]. This\n        # object understands how to convert a path to a file, and also how to\n        # handle None.\n        if isinstance(file, str) or file is None:\n            attr = self.field.attr_class(instance, self.field, file)\n            instance.__dict__[self.field.attname] = attr\n\n        # Other types of files may be assigned as well, but they need to have\n        # the FieldFile interface added to them. Thus, we wrap any other type of\n        # File inside a FieldFile (well, the field's attr_class, which is\n        # usually FieldFile).\n        elif isinstance(file, File) and not isinstance(file, FieldFile):\n            file_copy = self.field.attr_class(instance, self.field, file.name)\n            file_copy.file = file\n            file_copy._committed = False\n            instance.__dict__[self.field.attname] = file_copy\n\n        # Finally, because of the (some would say boneheaded) way pickle works,\n        # the underlying FieldFile might not actually itself have an associated\n        # file. So we need to reset the details of the FieldFile in those cases.\n        elif isinstance(file, FieldFile) and not hasattr(file, \"field\"):\n            file.instance = instance\n            file.field = self.field\n            file.storage = self.field.storage\n\n        # Make sure that the instance is correct.\n        elif isinstance(file, FieldFile) and instance is not file.instance:\n            file.instance = instance\n\n        # That was fun, wasn't it?\n        return instance.__dict__[self.field.attname]\n\n    def __set__(self, instance, value):\n        instance.__dict__[self.field.attname] = value",
+                "filename": "django/db/models/fields/files.py",
+                "start_index": 4958,
+                "end_index": 7805,
+                "start_line": 166,
+                "end_line": 221,
+                "max_line": 511,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "@deconstructible(path=\"django.db.models.Func\")",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 30094,
+                "end_index": 30140,
+                "start_line": 898,
+                "end_line": 898,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "def deconstruct(self):\n        name, path, args, kwargs = super().deconstruct()\n        kwargs[\"on_delete\"] = self.remote_field.on_delete\n        kwargs[\"from_fields\"] = self.from_fields\n        kwargs[\"to_fields\"] = self.to_fields\n\n        if self.remote_field.parent_link:\n            kwargs[\"parent_link\"] = self.remote_field.parent_link\n        if isinstance(self.remote_field.model, str):\n            if \".\" in self.remote_field.model:\n                app_label, model_name = self.remote_field.model.split(\".\")\n                kwargs[\"to\"] = \"%s.%s\" % (app_label, model_name.lower())\n            else:\n                kwargs[\"to\"] = self.remote_field.model.lower()\n        else:\n            kwargs[\"to\"] = self.remote_field.model._meta.label_lower\n        # If swappable is True, then see if we're actually pointing to the target\n        # of a swap.\n        swappable_setting = self.swappable_setting\n        if swappable_setting is not None:\n            # If it's already a settings reference, error\n            if hasattr(kwargs[\"to\"], \"setting_name\"):\n                if kwargs[\"to\"].setting_name != swappable_setting:\n                    raise ValueError(\n                        \"Cannot deconstruct a ForeignKey pointing to a model \"\n                        \"that is swapped in place of more than one model (%s and %s)\"\n                        % (kwargs[\"to\"].setting_name, swappable_setting)\n                    )\n            # Set it\n            kwargs[\"to\"] = SettingsReference(\n                kwargs[\"to\"],\n                swappable_setting,\n            )\n        return name, path, args, kwargs\n\n    def resolve_related_fields(self):\n        if not self.from_fields or len(self.from_fields) != len(self.to_fields):\n            raise ValueError(\n                \"Foreign Object from and to fields must be the same non-zero length\"\n            )\n        if isinstance(self.remote_field.model, str):\n            raise ValueError(\n                \"Related model %r cannot be resolved\" % self.remote_field.model\n            )\n        related_fields = []\n        for index in range(len(self.from_fields)):\n            from_field_name = self.from_fields[index]\n            to_field_name = self.to_fields[index]\n            from_field = (\n                self\n                if from_field_name == RECURSIVE_RELATIONSHIP_CONSTANT\n                else self.opts.get_field(from_field_name)\n            )\n            to_field = (\n                self.remote_field.model._meta.pk\n                if to_field_name is None\n                else self.remote_field.model._meta.get_field(to_field_name)\n            )\n            related_fields.append((from_field, to_field))\n        return related_fields\n\n    @cached_property\n    def related_fields(self):\n        return self.resolve_related_fields()\n\n    @cached_property\n    def reverse_related_fields(self):\n        return [(rhs_field, lhs_field) for lhs_field, rhs_field in self.related_fields]",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 24787,
+                "end_index": 27735,
+                "start_line": 381,
+                "end_line": 739,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "import datetime\nimport posixpath\n\nfrom django import forms\nfrom django.core import checks\nfrom django.core.files.base import File\nfrom django.core.files.images import ImageFile\nfrom django.core.files.storage import Storage, default_storage\nfrom django.core.files.utils import validate_file_name\nfrom django.db.models import signals\nfrom django.db.models.fields import Field\nfrom django.db.models.query_utils import DeferredAttribute\nfrom django.db.models.utils import AltersData\nfrom django.utils.translation import gettext_lazy as _",
+                "filename": "django/db/models/fields/files.py",
+                "start_index": 0,
+                "end_index": 533,
+                "start_line": 1,
+                "end_line": 14,
+                "max_line": 511,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "def deconstruct(self):\n        name, path, args, kwargs = super().deconstruct()\n        # Handle the simpler arguments.\n        if self.db_table is not None:\n            kwargs[\"db_table\"] = self.db_table\n        if self.remote_field.db_constraint is not True:\n            kwargs[\"db_constraint\"] = self.remote_field.db_constraint\n        # Lowercase model names as they should be treated as case-insensitive.\n        if isinstance(self.remote_field.model, str):\n            if \".\" in self.remote_field.model:\n                app_label, model_name = self.remote_field.model.split(\".\")\n                kwargs[\"to\"] = \"%s.%s\" % (app_label, model_name.lower())\n            else:\n                kwargs[\"to\"] = self.remote_field.model.lower()\n        else:\n            kwargs[\"to\"] = self.remote_field.model._meta.label_lower\n        if getattr(self.remote_field, \"through\", None) is not None:\n            if isinstance(self.remote_field.through, str):\n                kwargs[\"through\"] = self.remote_field.through\n            elif not self.remote_field.through._meta.auto_created:\n                kwargs[\"through\"] = self.remote_field.through._meta.label\n        # If swappable is True, then see if we're actually pointing to the target\n        # of a swap.\n        swappable_setting = self.swappable_setting\n        if swappable_setting is not None:\n            # If it's already a settings reference, error.\n            if hasattr(kwargs[\"to\"], \"setting_name\"):\n                if kwargs[\"to\"].setting_name != swappable_setting:\n                    raise ValueError(\n                        \"Cannot deconstruct a ManyToManyField pointing to a \"\n                        \"model that is swapped in place of more than one model \"\n                        \"(%s and %s)\" % (kwargs[\"to\"].setting_name, swappable_setting)\n                    )\n\n            kwargs[\"to\"] = SettingsReference(\n                kwargs[\"to\"],\n                swappable_setting,\n            )\n        return name, path, args, kwargs",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 65152,
+                "end_index": 67151,
+                "start_line": 381,
+                "end_line": 1783,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            },
+            {
+                "code": "def pre_save(self, model_instance, add):\n        file = super().pre_save(model_instance, add)\n        if file and not file._committed:\n            # Commit the file to storage prior to saving the model\n            file.save(file.name, file.file, save=False)\n        return file\n\n    def contribute_to_class(self, cls, name, **kwargs):\n        super().contribute_to_class(cls, name, **kwargs)\n        setattr(cls, self.attname, self.descriptor_class(self))\n\n    def generate_filename(self, instance, filename):\n        \"\"\"\n        Apply (if callable) or prepend (if a string) upload_to to the filename,\n        then delegate further processing of the name to the storage backend.\n        Until the storage layer, all file paths are expected to be Unix style\n        (with forward slashes).\n        \"\"\"\n        if callable(self.upload_to):\n            filename = self.upload_to(instance, filename)\n        else:\n            dirname = datetime.datetime.now().strftime(str(self.upload_to))\n            filename = posixpath.join(dirname, filename)\n        filename = validate_file_name(filename, allow_relative_path=True)\n        return self.storage.generate_filename(filename)\n\n    def save_form_data(self, instance, data):\n        # Important: None means \"no change\", other false value means \"clear\"\n        # This subtle distinction (rather than a more explicit marker) is\n        # needed because we need to consume values that are also sane for a\n        # regular (non Model-) Form to find in its cleaned_data dictionary.\n        if data is not None:\n            # This value will be converted to str and stored in the\n            # database, so leaving False as-is is not acceptable.\n            setattr(instance, self.name, data or \"\")\n\n    def formfield(self, **kwargs):\n        return super().formfield(\n            **{\n                \"form_class\": forms.FileField,\n                \"max_length\": self.max_length,\n                **kwargs,\n            }\n        )",
+                "filename": "django/db/models/fields/files.py",
+                "start_index": 10849,
+                "end_index": 12817,
+                "start_line": 313,
+                "end_line": 511,
+                "max_line": 511,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/models/fields/files.py": [
+                {
+                    "chunk": {
+                        "code": "attr_class = FieldFile\n\n    # The descriptor to use for accessing the attribute off of the class.\n    descriptor_class = FileDescriptor\n\n    description = _(\"File\")\n\n    def __init__(\n        self, verbose_name=None, name=None, upload_to=\"\", storage=None, **kwargs\n    ):\n        self._primary_key_set_explicitly = \"primary_key\" in kwargs\n\n        self.storage = storage or default_storage\n        if callable(self.storage):\n            # Hold a reference to the callable for deconstruct().\n            self._storage_callable = self.storage\n            self.storage = self.storage()\n            if not isinstance(self.storage, Storage):\n                raise TypeError(\n                    \"%s.storage must be a subclass/instance of %s.%s\"\n                    % (\n                        self.__class__.__qualname__,\n                        Storage.__module__,\n                        Storage.__qualname__,\n                    )\n                )\n        self.upload_to = upload_to\n\n        kwargs.setdefault(\"max_length\", 100)\n        super().__init__(verbose_name, name, **kwargs)\n\n    def check(self, **kwargs):\n        return [\n            *super().check(**kwargs),\n            *self._check_primary_key(),\n            *self._check_upload_to(),\n        ]\n\n    def _check_primary_key(self):\n        if self._primary_key_set_explicitly:\n            return [\n                checks.Error(\n                    \"'primary_key' is not a valid argument for a %s.\"\n                    % self.__class__.__name__,\n                    obj=self,\n                    id=\"fields.E201\",\n                )\n            ]\n        else:\n            return []\n\n    def _check_upload_to(self):\n        if isinstance(self.upload_to, str) and self.upload_to.startswith(\"/\"):\n            return [\n                checks.Error(\n                    \"%s's 'upload_to' argument must be a relative path, not an \"\n                    \"absolute path.\" % self.__class__.__name__,\n                    obj=self,\n                    id=\"fields.E202\",\n                    hint=\"Remove the leading slash.\",\n                )\n            ]\n        else:\n            return []\n\n    def deconstruct(self):\n        name, path, args, kwargs = super().deconstruct()\n        if kwargs.get(\"max_length\") == 100:\n            del kwargs[\"max_length\"]\n        kwargs[\"upload_to\"] = self.upload_to\n        storage = getattr(self, \"_storage_callable\", self.storage)\n        if storage is not default_storage:\n            kwargs[\"storage\"] = storage\n        return name, path, args, kwargs\n\n    def get_internal_type(self):\n        return \"FileField\"\n\n    def get_prep_value(self, value):\n        value = super().get_prep_value(value)\n        # Need to convert File objects provided via a form to string for\n        # database insertion.\n        if value is None:\n            return None\n        return str(value)",
+                        "filename": "django/db/models/fields/files.py",
+                        "start_index": 7979,
+                        "end_index": 10843,
+                        "start_line": 227,
+                        "end_line": 311,
+                        "max_line": 511,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__5.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the deconstruct method of the FileField which is directly related to the issue of callable storage not being deconstructed properly when it returns default_storage."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `deconstruct` method in the `FileField` class within `django/db/models/fields/files.py` to ensure that the `storage` argument is consistently included in the deconstructed arguments when a callable is provided that sometimes returns `default_storage`.\n- The modification should check if `_storage_callable` is set and use it directly in the `kwargs` if it is not equal to `default_storage`.\n\n```python\ndef deconstruct(self):\n    name, path, args, kwargs = super().deconstruct()\n    if kwargs.get(\"max_length\") == 100:\n        del kwargs[\"max_length\"]\n    kwargs[\"upload_to\"] = self.upload_to\n    storage = getattr(self, \"_storage_callable\", self.storage)\n    if storage is not default_storage:\n        kwargs[\"storage\"] = storage\n    elif hasattr(self, '_storage_callable'):\n        kwargs['storage'] = self._storage_callable\n    return name, path, args, kwargs\n```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT. It suggests modifying the `deconstruct` method in the `FileField` class to ensure that the `storage` argument is consistently included when a callable is provided. The RESPONSE also includes a code snippet that demonstrates how to implement the proposed solution, which is directly relevant to the issue at hand. The RESPONSE correctly identifies the need to check for the `_storage_callable` attribute and includes it in the `kwargs` if it is not equal to `default_storage`. This directly addresses the bug where the callable that returns `default_storage` is not being deconstructed properly. The RESPONSE also provides a link to the relevant section of the code in the Django repository, which is useful for further investigation and verification of the solution.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711706273.1947541,
+        "result": "- Modify the `deconstruct` method in the `FileField` class within `django/db/models/fields/files.py` to ensure that the `storage` argument is consistently included in the deconstructed arguments when a callable is provided that sometimes returns `default_storage`.\n- The modification should check if `_storage_callable` is set and use it directly in the `kwargs` if it is not equal to `default_storage`.\n\n```python\ndef deconstruct(self):\n    name, path, args, kwargs = super().deconstruct()\n    if kwargs.get(\"max_length\") == 100:\n        del kwargs[\"max_length\"]\n    kwargs[\"upload_to\"] = self.upload_to\n    storage = getattr(self, \"_storage_callable\", self.storage)\n    if storage is not default_storage:\n        kwargs[\"storage\"] = storage\n    elif hasattr(self, '_storage_callable'):\n        kwargs['storage'] = self._storage_callable\n    return name, path, args, kwargs\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__5.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__5.0/tree//django/db/models) \u2192 [fields](https://github.com/testbed/django__django__5.0/tree//django/db/models/fields)- [Lines 227 - 311](https://github.com/testbed/django__django__5.0/blob//django/db/models/fields/files.py#L227-L311)\n\n This snippet contains the deconstruct method of the FileField which is directly related to the issue of callable storage not being deconstructed properly when it returns default_storage."
+    }
+}

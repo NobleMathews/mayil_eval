@@ -1,0 +1,189 @@
+{
+    "id": "django__django-13741",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 1374611112403161813,
+    "title": "Set disabled prop on ReadOnlyPasswordHashField",
+    "body": "Description\n\t\nCurrently the django.contrib.auth.forms.UserChangeForm defines a clean_password method that returns the initial password value to prevent (accidental) changes to the password value. It is also documented that custom forms for the User model need to define this method: \u200bhttps://docs.djangoproject.com/en/3.1/topics/auth/customizing/#a-full-example\nA while ago the forms.Field base class gained the \u200bdisabled argument to:\n[disable] a form field using the disabled HTML attribute so that it won\u2019t be editable by users. Even if a user tampers with the field\u2019s value submitted to the server, it will be ignored in favor of the value from the form\u2019s initial data.\nIt seems to me that this property could be set to True be default on the ReadOnlyPasswordHashField used to display the password hash. This way the clean_password is no longer necessary and the potential pitfall when using the ReadOnlyPasswordHashField without implementing clean_password is removed.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "To implement the feature request described in the ticket, you need to modify the `ReadOnlyPasswordHashField` class in the `django/contrib/auth/forms.py` file to set the `disabled` property to `True` by default. This will ensure that the password field is not editable and its value is ignored if tampered with by the user.\n\nHere's how you can implement the feature:\n\n- Open the `django/contrib/auth/forms.py` file.\n- Locate the `ReadOnlyPasswordHashField` class definition.\n- In the `__init__` method of the `ReadOnlyPasswordHashField` class, set the `disabled` keyword argument to `True` by default.\n\nHere is the updated `ReadOnlyPasswordHashField` class:\n\n```python\nclass ReadOnlyPasswordHashField(forms.Field):\n    widget = ReadOnlyPasswordHashWidget\n\n    def __init__(self, *args, **kwargs):\n        kwargs.setdefault(\"required\", False)\n        kwargs.setdefault(\"disabled\", True)  # Set disabled to True by default\n        super().__init__(*args, **kwargs)\n```\n\nBy making this change, the `ReadOnlyPasswordHashField` will render as a disabled field in the HTML form, preventing users from modifying its value. The `clean_password` method in the `UserChangeForm` will no longer be necessary to prevent password changes, as the field is now inherently read-only due to the `disabled` attribute.\n\nAfter making the change, you should run your test suite to ensure that this change does not introduce any regressions. If there are no existing tests for this behavior, it would be a good idea to write some tests to verify that the password field is indeed disabled and that its value is ignored if submitted with a different value.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.2/tree//django/contrib/auth)- [Lines 1 - 367](https://github.com/testbed/django__django__3.2/blob//django/contrib/auth/forms.py#L1-L367)\n\n This snippet contains the ReadOnlyPasswordHashField class where the 'disabled' property should be set to True by default, which is directly related to the issue. \n\n\n   - [Lines 170 - 506](https://github.com/testbed/django__django__3.2/blob//django/contrib/auth/forms.py#L170-L506)\n\n This snippet shows the use of ReadOnlyPasswordHashField in the UserChangeForm class, which is relevant to understand how the field is currently being used and to verify the impact of the change.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003035,
+        "snippet_processor": 0.055850000000000004,
+        "issue_star_creation": 0.02406,
+        "issue_star_solver": 0.03527,
+        "bouncer": 0.01812
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711725112.8999271,
+        "relevant_snippets": [
+            {
+                "code": "class UserChangeForm(forms.ModelForm):\n    password = ReadOnlyPasswordHashField(\n        label=_(\"Password\"),\n        help_text=_(\n            \"Raw passwords are not stored, so there is no way to see this \"\n            \"user\u2019s password, but you can change the password using \"\n            '<a href=\"{}\">this form</a>.'\n        ),\n    )\n\n    class Meta:\n        model = User\n        fields = \"__all__\"\n        field_classes = {\"username\": UsernameField}\n\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n        password = self.fields.get(\"password\")\n        if password:\n            password.help_text = password.help_text.format(\n                f\"../../{self.instance.pk}/password/\"\n            )\n        user_permissions = self.fields.get(\"user_permissions\")\n        if user_permissions:\n            user_permissions.queryset = user_permissions.queryset.select_related(\n                \"content_type\"\n            )\n\n\nc",
+                "filename": "django/contrib/auth/forms.py",
+                "start_index": 5614,
+                "end_index": 6569,
+                "start_line": 170,
+                "end_line": 506,
+                "max_line": 510,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import unicodedata\n\nfrom django import forms\nfrom django.contrib.auth import authenticate, get_user_model, password_validation\nfrom django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX, identify_hasher\nfrom django.contrib.auth.models import User\nfrom django.contrib.auth.tokens import default_token_generator\nfrom django.contrib.sites.shortcuts import get_current_site\nfrom django.core.exceptions import ValidationError\nfrom django.core.mail import EmailMultiAlternatives\nfrom django.template import loader\nfrom django.utils.encoding import force_bytes\nfrom django.utils.http import urlsafe_base64_encode\nfrom django.utils.text import capfirst\nfrom django.utils.translation import gettext\nfrom django.utils.translation import gettext_lazy as _\n\nUserModel = get_user_model()\n\n\ndef _unicode_ci_compare(s1, s2):\n    \"\"\"\n    Perform case-insensitive comparison of two identifiers, using the\n    recommended algorithm from Unicode Technical Report 36, section\n    2.11.2(B)(2).\n    \"\"\"\n    return (\n        unicodedata.normalize(\"NFKC\", s1).casefold()\n        == unicodedata.normalize(\"NFKC\", s2).casefold()\n    )\n\n\nclass ReadOnlyPasswordHashWidget(forms.Widget):\n    template_name = \"auth/widgets/read_only_password_hash.html\"\n    read_only = True\n\n    def get_context(self, name, value, attrs):\n        context = super().get_context(name, value, attrs)\n        summary = []\n        if not value or value.startswith(UNUSABLE_PASSWORD_PREFIX):\n            summary.append({\"label\": gettext(\"No password set.\")})\n        else:\n            try:\n                hasher = identify_hasher(value)\n            except ValueError:\n                summary.append(\n                    {\n                        \"label\": gettext(\n                            \"Invalid password format or unknown hashing algorithm.\"\n                        )\n                    }\n                )\n            else:\n                for key, value_ in hasher.safe_summary(value).items():\n                    summary.append({\"label\": gettext(key), \"value\": value_})\n        context[\"summary\"] = summary\n        return context\n\n    def id_for_label(self, id_):\n        return None\n\n\nclass ReadOnlyPasswordHashField(forms.Field):\n    widget = ReadOnlyPasswordHashWidget\n\n    def __init__(self, *args, **kwargs):\n        kwargs.setdefault(\"required\", False)\n        kwargs.setdefault(\"disabled\", True)\n        super().__init__(*args, **kwargs)\n\n\nclass UsernameField(forms.CharField):\n    def to_python(self, value):\n        return unicodedata.normalize(\"NFKC\", super().to_python(value))\n\n    def widget_attrs(self, widget):\n        return {\n            **super().widget_attrs(widget),\n            \"autocapitalize\": \"none\",\n            \"autocomplete\": \"username\",\n        }",
+                "filename": "django/contrib/auth/forms.py",
+                "start_index": 0,
+                "end_index": 2738,
+                "start_line": 1,
+                "end_line": 367,
+                "max_line": 510,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class AdminReadonlyField:",
+                "filename": "django/contrib/admin/helpers.py",
+                "start_index": 5639,
+                "end_index": 5664,
+                "start_line": 195,
+                "end_line": 195,
+                "max_line": 552,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "lass SetPasswordForm(forms.Form):\n    \"\"\"\n    A form that lets a user set their password without entering the old\n    password\n    \"\"\"\n\n    error_messages = {\n        \"password_mismatch\": _(\"The two password fields didn\u2019t match.\"),\n    }\n    new_password1 = forms.CharField(\n        label=_(\"New password\"),\n        widget=forms.PasswordInput(attrs={\"autocomplete\": \"new-password\"}),\n        strip=False,\n        help_text=password_validation.password_validators_help_text_html(),\n    )\n    new_password2 = forms.CharField(\n        label=_(\"New password confirmation\"),\n        strip=False,\n        widget=forms.PasswordInput(attrs={\"autocomplete\": \"new-password\"}),\n    )\n\n    def __init__(self, user, *args, **kwargs):\n        self.user = user\n        super().__init__(*args, **kwargs)\n\n    def clean_new_password2(self):\n        password1 = self.cleaned_data.get(\"new_password1\")\n        password2 = self.cleaned_data.get(\"new_password2\")\n        if password1 and password2 and password1 != password2:\n            raise ValidationError(\n                self.error_messages[\"password_mismatch\"],\n                code=\"password_mismatch\",\n            )\n        password_validation.validate_password(password2, self.user)\n        return password2\n\n    def save(self, commit=True):\n        password = self.cleaned_data[\"new_password1\"]\n        self.user.set_password(password)\n        if commit:\n            self.user.save()\n        return self.user\n\n\nclass PasswordChangeForm(SetPasswordForm):\n    \"\"\"\n    A form that lets a user change their password by entering their old\n    password.\n    \"\"\"\n\n    error_messages = {\n        **SetPasswordForm.error_messages,\n        \"password_incorrect\": _(\n            \"Your old password was entered incorrectly. Please enter it again.\"\n        ),\n    }\n    old_password = forms.CharField(\n        label=_(\"Old password\"),\n        strip=False,\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"current-password\", \"autofocus\": True}\n        ),\n    )\n\n    field_order = [\"old_password\", \"new_password1\", \"new_password2\"]\n\n    def clean_old_password(self):\n        \"\"\"\n        Validate that the old_password field is correct.\n        \"\"\"\n        old_password = self.cleaned_data[\"old_password\"]\n        if not self.user.check_password(old_password):\n            raise ValidationError(\n                self.error_messages[\"password_incorrect\"],\n                code=\"password_incorrect\",\n            )\n        return old_password\n\n\ncla",
+                "filename": "django/contrib/auth/forms.py",
+                "start_index": 12892,
+                "end_index": 15383,
+                "start_line": 378,
+                "end_line": 465,
+                "max_line": 510,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.contrib.auth.forms import AuthenticationForm, PasswordChangeForm\nfrom django.core.exceptions import ValidationError\nfrom django.utils.translation import gettext_lazy as _\n\n\nclass AdminAuthenticationForm(AuthenticationForm):\n    \"\"\"\n    A custom authentication form used in the admin app.\n    \"\"\"\n\n    error_messages = {\n        **AuthenticationForm.error_messages,\n        \"invalid_login\": _(\n            \"Please enter the correct %(username)s and password for a staff \"\n            \"account. Note that both fields may be case-sensitive.\"\n        ),\n    }\n    required_css_class = \"required\"\n\n    def confirm_login_allowed(self, user):\n        super().confirm_login_allowed(user)\n        if not user.is_staff:\n            raise ValidationError(\n                self.error_messages[\"invalid_login\"],\n                code=\"invalid_login\",\n                params={\"username\": self.username_field.verbose_name},\n            )\n\n\nclass AdminPasswordChangeForm(PasswordChangeForm):\n    required_css_class = \"required\"",
+                "filename": "django/contrib/admin/forms.py",
+                "start_index": 0,
+                "end_index": 1022,
+                "start_line": 1,
+                "end_line": 31,
+                "max_line": 31,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class UnsaltedSHA1PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    Very insecure algorithm that you should *never* use; store SHA1 hashes\n    with an empty salt.\n\n    This class is implemented because Django used to accept such password\n    hashes. Some older Django installs still have these values lingering\n    around so we need to handle and upgrade them properly.\n    \"\"\"\n\n    algorithm = \"unsalted_sha1\"\n\n    def __init__(self, *args, **kwargs):\n        warnings.warn(\n            \"django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher is deprecated.\",\n            RemovedInDjango51Warning,\n            stacklevel=2,\n        )\n        super().__init__(*args, **kwargs)\n\n    def salt(self):\n        return \"\"\n\n    def encode(self, password, salt):\n        if salt != \"\":\n            raise ValueError(\"salt must be empty.\")\n        hash = hashlib.sha1(password.encode()).hexdigest()\n        return \"sha1$$%s\" % hash\n\n    def decode(self, encoded):\n        assert encoded.startswith(\"sha1$$\")\n        return {\n            \"algorithm\": self.algorithm,\n            \"hash\": encoded[6:],\n            \"salt\": None,\n        }\n\n    def verify(self, password, encoded):\n        encoded_2 = self.encode(password, \"\")\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def harden_runtime(self, password, encoded):\n        pass\n\n\n# RemovedInDjango51Warning.",
+                "filename": "django/contrib/auth/hashers.py",
+                "start_index": 24661,
+                "end_index": 26226,
+                "start_line": 738,
+                "end_line": 790,
+                "max_line": 842,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "# by adding to ModelAdmin.formfield_overrides.\n\nFORMFIELD_FOR_DBFIELD_DEFAULTS = {\n    models.DateTimeField: {\n        \"form_class\": forms.SplitDateTimeField,\n        \"widget\": widgets.AdminSplitDateTime,\n    },\n    models.DateField: {\"widget\": widgets.AdminDateWidget},\n    models.TimeField: {\"widget\": widgets.AdminTimeWidget},\n    models.TextField: {\"widget\": widgets.AdminTextareaWidget},\n    models.URLField: {\"widget\": widgets.AdminURLFieldWidget},\n    models.IntegerField: {\"widget\": widgets.AdminIntegerFieldWidget},\n    models.BigIntegerField: {\"widget\": widgets.AdminBigIntegerFieldWidget},\n    models.CharField: {\"widget\": widgets.AdminTextInputWidget},\n    models.ImageField: {\"widget\": widgets.AdminFileWidget},\n    models.FileField: {\"widget\": widgets.AdminFileWidget},\n    models.EmailField: {\"widget\": widgets.AdminEmailInputWidget},\n    models.UUIDField: {\"widget\": widgets.AdminUUIDInputWidget},\n}\n\ncsrf_protect_m = method_decorator(csrf_protect)",
+                "filename": "django/contrib/admin/options.py",
+                "start_index": 2992,
+                "end_index": 3956,
+                "start_line": 101,
+                "end_line": 121,
+                "max_line": 2529,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class SHA1PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    The SHA1 password hashing algorithm (not recommended)\n    \"\"\"\n\n    algorithm = \"sha1\"\n\n    def __init__(self, *args, **kwargs):\n        warnings.warn(\n            \"django.contrib.auth.hashers.SHA1PasswordHasher is deprecated.\",\n            RemovedInDjango51Warning,\n            stacklevel=2,\n        )\n        super().__init__(*args, **kwargs)\n\n    def encode(self, password, salt):\n        self._check_encode_args(password, salt)\n        hash = hashlib.sha1((salt + password).encode()).hexdigest()\n        return \"%s$%s$%s\" % (self.algorithm, salt, hash)\n\n    def decode(self, encoded):\n        algorithm, salt, hash = encoded.split(\"$\", 2)\n        assert algorithm == self.algorithm\n        return {\n            \"algorithm\": algorithm,\n            \"hash\": hash,\n            \"salt\": salt,\n        }\n\n    def verify(self, password, encoded):\n        decoded = self.decode(encoded)\n        encoded_2 = self.encode(password, decoded[\"salt\"])\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"salt\"): mask_hash(decoded[\"salt\"], show=2),\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def must_update(self, encoded):\n        decoded = self.decode(encoded)\n        return must_update_salt(decoded[\"salt\"], self.salt_entropy)\n\n    def harden_runtime(self, password, encoded):\n        pass\n\n\nclass MD5PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    The Salted MD5 password hashing algorithm (not recommended)\n    \"\"\"\n\n    algorithm = \"md5\"\n\n    def encode(self, password, salt):\n        self._check_encode_args(password, salt)\n        hash = hashlib.md5((salt + password).encode()).hexdigest()\n        return \"%s$%s$%s\" % (self.algorithm, salt, hash)\n\n    def decode(self, encoded):\n        algorithm, salt, hash = encoded.split(\"$\", 2)\n        assert algorithm == self.algorithm\n        return {\n            \"algorithm\": algorithm,\n            \"hash\": hash,\n            \"salt\": salt,\n        }\n\n    def verify(self, password, encoded):\n        decoded = self.decode(encoded)\n        encoded_2 = self.encode(password, decoded[\"salt\"])\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"salt\"): mask_hash(decoded[\"salt\"], show=2),\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def must_update(self, encoded):\n        decoded = self.decode(encoded)\n        return must_update_salt(decoded[\"salt\"], self.salt_entropy)\n\n    def harden_runtime(self, password, encoded):\n        pass\n\n\n# RemovedInDjango51Warning.",
+                "filename": "django/contrib/auth/hashers.py",
+                "start_index": 21832,
+                "end_index": 24660,
+                "start_line": 645,
+                "end_line": 790,
+                "max_line": 842,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def __init__(self, form, field, is_first, model_admin=None):\n        # Make self.field look a little bit like a field. This means that\n        # {{ field.name }} must be a useful class name to identify the field.\n        # For convenience, store other field-related data here too.\n        if callable(field):\n            class_name = field.__name__ if field.__name__ != \"<lambda>\" else \"\"\n        else:\n            class_name = field\n\n        if form._meta.labels and class_name in form._meta.labels:\n            label = form._meta.labels[class_name]\n        else:\n            label = label_for_field(field, form._meta.model, model_admin, form=form)\n\n        if form._meta.help_texts and class_name in form._meta.help_texts:\n            help_text = form._meta.help_texts[class_name]\n        else:\n            help_text = help_text_for_field(class_name, form._meta.model)\n\n        if field in form.fields:\n            is_hidden = form.fields[field].widget.is_hidden\n        else:\n            is_hidden = False\n\n        self.field = {\n            \"name\": class_name,\n            \"label\": label,\n            \"help_text\": help_text,\n            \"field\": field,\n            \"is_hidden\": is_hidden,\n        }\n        self.form = form\n        self.model_admin = model_admin\n        self.is_first = is_first\n        self.is_checkbox = False\n        self.is_readonly = True\n        self.empty_value_display = model_admin.get_empty_value_display()\n\n    def label_tag(self):\n        attrs = {}\n        if not self.is_first:\n            attrs[\"class\"] = \"inline\"\n        label = self.field[\"label\"]\n        return format_html(\n            \"<label{}>{}{}</label>\",\n            flatatt(attrs),\n            capfirst(label),\n            self.form.label_suffix,\n        )\n\n    def get_admin_url(self, remote_field, remote_obj):\n        url_name = \"admin:%s_%s_change\" % (\n            remote_field.model._meta.app_label,\n            remote_field.model._meta.model_name,\n        )\n        try:\n            url = reverse(\n                url_name,\n                args=[quote(remote_obj.pk)],\n                current_app=self.model_admin.admin_site.name,\n            )\n            return format_html('<a href=\"{}\">{}</a>', url, remote_obj)\n        except NoReverseMatch:\n            return str(remote_obj)",
+                "filename": "django/contrib/admin/helpers.py",
+                "start_index": 5669,
+                "end_index": 7954,
+                "start_line": 196,
+                "end_line": 259,
+                "max_line": 552,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "ss AdminPasswordChangeForm(forms.Form):\n    \"\"\"\n    A form used to change the password of a user in the admin interface.\n    \"\"\"\n\n    error_messages = {\n        \"password_mismatch\": _(\"The two password fields didn\u2019t match.\"),\n    }\n    required_css_class = \"required\"\n    password1 = forms.CharField(\n        label=_(\"Password\"),\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"new-password\", \"autofocus\": True}\n        ),\n        strip=False,\n        help_text=password_validation.password_validators_help_text_html(),\n    )\n    password2 = forms.CharField(\n        label=_(\"Password (again)\"),\n        widget=forms.PasswordInput(attrs={\"autocomplete\": \"new-password\"}),\n        strip=False,\n        help_text=_(\"Enter the same password as before, for verification.\"),\n    )\n\n    def __init__(self, user, *args, **kwargs):\n        self.user = user\n        super().__init__(*args, **kwargs)\n\n    def clean_password2(self):\n        password1 = self.cleaned_data.get(\"password1\")\n        password2 = self.cleaned_data.get(\"password2\")\n        if password1 and password2 and password1 != password2:\n            raise ValidationError(\n                self.error_messages[\"password_mismatch\"],\n                code=\"password_mismatch\",\n            )\n        password_validation.validate_password(password2, self.user)\n        return password2\n\n    def save(self, commit=True):\n        \"\"\"Save the new password.\"\"\"\n        password = self.cleaned_data[\"password1\"]\n        self.user.set_password(password)\n        if commit:\n            self.user.save()\n        return self.user\n\n    @property\n    def changed_data(self):\n        data = super().changed_data\n        for name in self.fields:\n            if name not in data:\n                return []\n        return [\"password\"]",
+                "filename": "django/contrib/auth/forms.py",
+                "start_index": 15383,
+                "end_index": 17178,
+                "start_line": 457,
+                "end_line": 510,
+                "max_line": 510,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "feature request",
+        "snippet_processor_task": {
+            "django/contrib/auth/forms.py": [
+                {
+                    "chunk": {
+                        "code": "import unicodedata\n\nfrom django import forms\nfrom django.contrib.auth import authenticate, get_user_model, password_validation\nfrom django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX, identify_hasher\nfrom django.contrib.auth.models import User\nfrom django.contrib.auth.tokens import default_token_generator\nfrom django.contrib.sites.shortcuts import get_current_site\nfrom django.core.exceptions import ValidationError\nfrom django.core.mail import EmailMultiAlternatives\nfrom django.template import loader\nfrom django.utils.encoding import force_bytes\nfrom django.utils.http import urlsafe_base64_encode\nfrom django.utils.text import capfirst\nfrom django.utils.translation import gettext\nfrom django.utils.translation import gettext_lazy as _\n\nUserModel = get_user_model()\n\n\ndef _unicode_ci_compare(s1, s2):\n    \"\"\"\n    Perform case-insensitive comparison of two identifiers, using the\n    recommended algorithm from Unicode Technical Report 36, section\n    2.11.2(B)(2).\n    \"\"\"\n    return (\n        unicodedata.normalize(\"NFKC\", s1).casefold()\n        == unicodedata.normalize(\"NFKC\", s2).casefold()\n    )\n\n\nclass ReadOnlyPasswordHashWidget(forms.Widget):\n    template_name = \"auth/widgets/read_only_password_hash.html\"\n    read_only = True\n\n    def get_context(self, name, value, attrs):\n        context = super().get_context(name, value, attrs)\n        summary = []\n        if not value or value.startswith(UNUSABLE_PASSWORD_PREFIX):\n            summary.append({\"label\": gettext(\"No password set.\")})\n        else:\n            try:\n                hasher = identify_hasher(value)\n            except ValueError:\n                summary.append(\n                    {\n                        \"label\": gettext(\n                            \"Invalid password format or unknown hashing algorithm.\"\n                        )\n                    }\n                )\n            else:\n                for key, value_ in hasher.safe_summary(value).items():\n                    summary.append({\"label\": gettext(key), \"value\": value_})\n        context[\"summary\"] = summary\n        return context\n\n    def id_for_label(self, id_):\n        return None\n\n\nclass ReadOnlyPasswordHashField(forms.Field):\n    widget = ReadOnlyPasswordHashWidget\n\n    def __init__(self, *args, **kwargs):\n        kwargs.setdefault(\"required\", False)\n        kwargs.setdefault(\"disabled\", True)\n        super().__init__(*args, **kwargs)\n\n\nclass UsernameField(forms.CharField):\n    def to_python(self, value):\n        return unicodedata.normalize(\"NFKC\", super().to_python(value))\n\n    def widget_attrs(self, widget):\n        return {\n            **super().widget_attrs(widget),\n            \"autocapitalize\": \"none\",\n            \"autocomplete\": \"username\",\n        }",
+                        "filename": "django/contrib/auth/forms.py",
+                        "start_index": 0,
+                        "end_index": 2738,
+                        "start_line": 1,
+                        "end_line": 367,
+                        "max_line": 510,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the ReadOnlyPasswordHashField class where the 'disabled' property should be set to True by default, which is directly related to the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "class UserChangeForm(forms.ModelForm):\n    password = ReadOnlyPasswordHashField(\n        label=_(\"Password\"),\n        help_text=_(\n            \"Raw passwords are not stored, so there is no way to see this \"\n            \"user\u2019s password, but you can change the password using \"\n            '<a href=\"{}\">this form</a>.'\n        ),\n    )\n\n    class Meta:\n        model = User\n        fields = \"__all__\"\n        field_classes = {\"username\": UsernameField}\n\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n        password = self.fields.get(\"password\")\n        if password:\n            password.help_text = password.help_text.format(\n                f\"../../{self.instance.pk}/password/\"\n            )\n        user_permissions = self.fields.get(\"user_permissions\")\n        if user_permissions:\n            user_permissions.queryset = user_permissions.queryset.select_related(\n                \"content_type\"\n            )\n\n\nc",
+                        "filename": "django/contrib/auth/forms.py",
+                        "start_index": 5614,
+                        "end_index": 6569,
+                        "start_line": 170,
+                        "end_line": 506,
+                        "max_line": 510,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the use of ReadOnlyPasswordHashField in the UserChangeForm class, which is relevant to understand how the field is currently being used and to verify the impact of the change."
+                }
+            ]
+        },
+        "solution_task": "To implement the feature request described in the ticket, you need to modify the `ReadOnlyPasswordHashField` class in the `django/contrib/auth/forms.py` file to set the `disabled` property to `True` by default. This will ensure that the password field is not editable and its value is ignored if tampered with by the user.\n\nHere's how you can implement the feature:\n\n- Open the `django/contrib/auth/forms.py` file.\n- Locate the `ReadOnlyPasswordHashField` class definition.\n- In the `__init__` method of the `ReadOnlyPasswordHashField` class, set the `disabled` keyword argument to `True` by default.\n\nHere is the updated `ReadOnlyPasswordHashField` class:\n\n```python\nclass ReadOnlyPasswordHashField(forms.Field):\n    widget = ReadOnlyPasswordHashWidget\n\n    def __init__(self, *args, **kwargs):\n        kwargs.setdefault(\"required\", False)\n        kwargs.setdefault(\"disabled\", True)  # Set disabled to True by default\n        super().__init__(*args, **kwargs)\n```\n\nBy making this change, the `ReadOnlyPasswordHashField` will render as a disabled field in the HTML form, preventing users from modifying its value. The `clean_password` method in the `UserChangeForm` will no longer be necessary to prevent password changes, as the field is now inherently read-only due to the `disabled` attribute.\n\nAfter making the change, you should run your test suite to ensure that this change does not introduce any regressions. If there are no existing tests for this behavior, it would be a good idea to write some tests to verify that the password field is indeed disabled and that its value is ignored if submitted with a different value.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant suggestions that can directly lead to the successful implementation or improvement of the requested feature.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable step-by-step guide on how to implement the feature request by modifying the ReadOnlyPasswordHashField class to set the disabled property to True. It specifies the exact file and class where the changes need to be made and even includes the updated class definition with the necessary changes. Additionally, the RESPONSE advises running a test suite to check for regressions and suggests writing new tests if none exist, which is a best practice in software development. The inclusion of code snippets to check further adds value by directing the developer to the relevant sections of the codebase.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711725339.7947671,
+        "result": "To implement the feature request described in the ticket, you need to modify the `ReadOnlyPasswordHashField` class in the `django/contrib/auth/forms.py` file to set the `disabled` property to `True` by default. This will ensure that the password field is not editable and its value is ignored if tampered with by the user.\n\nHere's how you can implement the feature:\n\n- Open the `django/contrib/auth/forms.py` file.\n- Locate the `ReadOnlyPasswordHashField` class definition.\n- In the `__init__` method of the `ReadOnlyPasswordHashField` class, set the `disabled` keyword argument to `True` by default.\n\nHere is the updated `ReadOnlyPasswordHashField` class:\n\n```python\nclass ReadOnlyPasswordHashField(forms.Field):\n    widget = ReadOnlyPasswordHashWidget\n\n    def __init__(self, *args, **kwargs):\n        kwargs.setdefault(\"required\", False)\n        kwargs.setdefault(\"disabled\", True)  # Set disabled to True by default\n        super().__init__(*args, **kwargs)\n```\n\nBy making this change, the `ReadOnlyPasswordHashField` will render as a disabled field in the HTML form, preventing users from modifying its value. The `clean_password` method in the `UserChangeForm` will no longer be necessary to prevent password changes, as the field is now inherently read-only due to the `disabled` attribute.\n\nAfter making the change, you should run your test suite to ensure that this change does not introduce any regressions. If there are no existing tests for this behavior, it would be a good idea to write some tests to verify that the password field is indeed disabled and that its value is ignored if submitted with a different value.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.2/tree//django/contrib/auth)- [Lines 1 - 367](https://github.com/testbed/django__django__3.2/blob//django/contrib/auth/forms.py#L1-L367)\n\n This snippet contains the ReadOnlyPasswordHashField class where the 'disabled' property should be set to True by default, which is directly related to the issue. \n\n\n   - [Lines 170 - 506](https://github.com/testbed/django__django__3.2/blob//django/contrib/auth/forms.py#L170-L506)\n\n This snippet shows the use of ReadOnlyPasswordHashField in the UserChangeForm class, which is relevant to understand how the field is currently being used and to verify the impact of the change."
+    }
+}

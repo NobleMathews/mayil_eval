@@ -1,0 +1,327 @@
+{
+    "id": "pytest-dev__pytest-8250",
+    "repo_name": "testbed/pytest-dev__pytest__6.3",
+    "task_id": 4108161573222356784,
+    "title": "Problem with faulthandler when used with Twisted Logger and \"pytest --capture=no\"",
+    "body": "Dear `pytest` developers,\r\n\r\nthanks a stack for conceiving and maintaining this excellent package. I never expected to file an issue or submit a patch here, but here we go.\r\n\r\n### Introduction\r\nOn behalf of https://github.com/daq-tools/kotori/pull/38, we are currently in the progress of finally upgrading [Kotori](https://getkotori.org/) to Python 3. Kotori is based on Twisted and uses `pytest` for testing. Within [`kotori.util.logger`](https://github.com/daq-tools/kotori/blob/master/kotori/util/logger.py), we tried hard to apply some magic to make everything work together on all occasions with respect to appropriately configuring `twisted.logger` to our needs.\r\n\r\n### Environment\r\nWe are on macOS 10.13.6.\r\n```\r\n$ pip list\r\npytest                        6.2.1\r\npytest-twisted                1.13.2\r\nTwisted                       20.3.0\r\n```\r\n\r\n### Details\r\nThe background on this is that the Twisted Logger intercepts the logging by providing a file-like wrapper around the `STDERR` stream, which is obviously not an actual stream. In this case, when running with `pytest capture=no`, `pytest`'s `faulthandler` fails when trying to restore the `stderr` stream through `sys.stderr.fileno()` at [1] as this will actually return `-1`, in turn signaling an invalid file descriptor [2].\r\n\r\nIt will a) raise the exception outlined below and b) won't stop the process on teardown.\r\n\r\n[1] https://github.com/pytest-dev/pytest/blob/6.2.1/src/_pytest/faulthandler.py#L69-L77\r\n[2] https://github.com/twisted/twisted/blob/twisted-20.3.0/src/twisted/logger/_io.py#L132-L139\r\n\r\n#### Traceback\r\n```\r\nTraceback (most recent call last):\r\n  File \"/path/to/.venv/bin/pytest\", line 8, in <module>\r\n    sys.exit(console_main())\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/_pytest/config/__init__.py\", line 185, in console_main\r\n    code = main()\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/_pytest/config/__init__.py\", line 162, in main\r\n    ret: Union[ExitCode, int] = config.hook.pytest_cmdline_main(\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/hooks.py\", line 286, in __call__\r\n    return self._hookexec(self, self.get_hookimpls(), kwargs)\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/manager.py\", line 93, in _hookexec\r\n    return self._inner_hookexec(hook, methods, kwargs)\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/manager.py\", line 84, in <lambda>\r\n    self._inner_hookexec = lambda hook, methods, kwargs: hook.multicall(\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/callers.py\", line 208, in _multicall\r\n    return outcome.get_result()\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/callers.py\", line 80, in get_result\r\n    raise ex[1].with_traceback(ex[2])\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/callers.py\", line 187, in _multicall\r\n    res = hook_impl.function(*args)\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/_pytest/main.py\", line 316, in pytest_cmdline_main\r\n    return wrap_session(config, _main)\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/_pytest/main.py\", line 311, in wrap_session\r\n    config._ensure_unconfigure()\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/_pytest/config/__init__.py\", line 987, in _ensure_unconfigure\r\n    self.hook.pytest_unconfigure(config=self)\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/hooks.py\", line 286, in __call__\r\n    return self._hookexec(self, self.get_hookimpls(), kwargs)\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/manager.py\", line 93, in _hookexec\r\n    return self._inner_hookexec(hook, methods, kwargs)\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/manager.py\", line 84, in <lambda>\r\n    self._inner_hookexec = lambda hook, methods, kwargs: hook.multicall(\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/callers.py\", line 208, in _multicall\r\n    return outcome.get_result()\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/callers.py\", line 80, in get_result\r\n    raise ex[1].with_traceback(ex[2])\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/pluggy/callers.py\", line 187, in _multicall\r\n    res = hook_impl.function(*args)\r\n  File \"/path/to/.venv/lib/python3.8/site-packages/_pytest/faulthandler.py\", line 69, in pytest_unconfigure\r\n    faulthandler.enable(file=self._get_stderr_fileno())\r\nValueError: file is not a valid file descripter\r\n```\r\n\r\n### Patch\r\nThis problem is mitigated by #8250.\r\n\r\nWith kind regards,\r\nAndreas.\r\n\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/pytest-dev__pytest__6.3.git",
+    "requested_commit": "",
+    "mayil_response": "- Review the `faulthandler.py` and `_io.py` files for the use of `sys.stderr.fileno()` and ensure that it is only called when `sys.stderr` is attached to a valid file descriptor.\n- If `twisted.logger` is replacing `sys.stderr` with an instance of `FakeFileWrapper` that returns an invalid file descriptor, modify the `pytest_unconfigure` function to check if `sys.stderr` has a valid file descriptor before calling `faulthandler.enable`.\n- Implement a check in `pytest_unconfigure` to determine if `sys.stderr` is an instance of `FakeFileWrapper` or similar, and if so, avoid calling `faulthandler.enable` with `sys.stderr.fileno()`.\n- Alternatively, modify the `FakeFileWrapper` class to return a valid file descriptor if possible, or to raise a more informative exception when its `fileno()` method is called.\n- Ensure that the `pytest_unconfigure` function gracefully handles the `ValueError` by either logging an appropriate message or by skipping the call to `faulthandler.enable` when `--capture=no` is used with Twisted Logger.\n- Apply the patch referenced as `#8250` if it addresses the issue and has been accepted into the codebase after proper review.\n\n### Code snippets to check\n\n-  \u2192 [.github](https://github.com/testbed/pytest-dev__pytest__6.3/tree//.github) \u2192 [ISSUE_TEMPLATE](https://github.com/testbed/pytest-dev__pytest__6.3/tree//.github/ISSUE_TEMPLATE)- [Lines 1 - 5](https://github.com/testbed/pytest-dev__pytest__6.3/blob//.github/ISSUE_TEMPLATE/config.yml#L1-L5)\n\n This snippet is not relevant to the issue as it pertains to the configuration of issue templates on GitHub, which is unrelated to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [.github](https://github.com/testbed/pytest-dev__pytest__6.3/tree//.github)- [Lines 1 - 2](https://github.com/testbed/pytest-dev__pytest__6.3/blob//.github/config.yml#L1-L2)\n\n This snippet is not relevant to the issue as it contains configuration for Read the Docs, which is unrelated to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [src](https://github.com/testbed/pytest-dev__pytest__6.3/tree//src)- [Lines 1 - 10](https://github.com/testbed/pytest-dev__pytest__6.3/blob//src/py.py#L1-L10)\n\n This snippet is not relevant to the issue as it deals with the shim for pylib and does not pertain to the interaction between faulthandler, Twisted Logger, and pytest.\n-  \u2192 [extra](https://github.com/testbed/pytest-dev__pytest__6.3/tree//extra)- [Lines 1 - 85](https://github.com/testbed/pytest-dev__pytest__6.3/blob//extra/get_issues.py#L1-L85)\n\n This snippet is not relevant to the issue as it is a script for getting GitHub issues and has no connection to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [scripts](https://github.com/testbed/pytest-dev__pytest__6.3/tree//scripts)- [Lines 1 - 17](https://github.com/testbed/pytest-dev__pytest__6.3/blob//scripts/towncrier-draft-to-file.py#L1-L17)\n\n This snippet is not relevant to the issue as it is a script for towncrier, which is used for managing changelogs and does not relate to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [scripts](https://github.com/testbed/pytest-dev__pytest__6.3/tree//scripts)- [Lines 1 - 46](https://github.com/testbed/pytest-dev__pytest__6.3/blob//scripts/prepare-release-pr.py#L1-L46)\n\n This snippet is not relevant to the issue as it is a script for preparing release PRs and does not address the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [bench](https://github.com/testbed/pytest-dev__pytest__6.3/tree//bench)- [Lines 1 - 13](https://github.com/testbed/pytest-dev__pytest__6.3/blob//bench/bench.py#L1-L13)\n\n This snippet is not relevant to the issue as it is a benchmarking script for pytest and does not involve the interaction between faulthandler, Twisted Logger, and pytest.\n-  \u2192 [bench](https://github.com/testbed/pytest-dev__pytest__6.3/tree//bench)- [Lines 1 - 14](https://github.com/testbed/pytest-dev__pytest__6.3/blob//bench/manyparam.py#L1-L14)\n\n This snippet is not relevant to the issue as it is a test file with parameterized fixtures and does not relate to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [.github](https://github.com/testbed/pytest-dev__pytest__6.3/tree//.github)- [Lines 1 - 5](https://github.com/testbed/pytest-dev__pytest__6.3/blob//.github/FUNDING.yml#L1-L5)\n\n This snippet is not relevant to the issue as it pertains to funding configuration for the pytest repository and is unrelated to the problem with faulthandler, Twisted Logger, and pytest.\n- - [Lines 73 - 108](https://github.com/testbed/pytest-dev__pytest__6.3/blob//.pre-commit-config.yaml#L73-L108)\n\n This snippet is not relevant to the issue as it is a configuration file for pre-commit hooks and does not pertain to the interaction between faulthandler, Twisted Logger, and pytest.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000784,
+        "snippet_processor": 0.050530000000000005,
+        "issue_star_creation": 0.03726,
+        "issue_star_solver": 0.03486,
+        "bouncer": 0.04079
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711734564.883183,
+        "relevant_snippets": [
+            {
+                "code": "blank_issues_enabled: false\ncontact_links:\n  - name: \u2753 Support Question\n    url: https://github.com/pytest-dev/pytest/discussions\n    about: Use GitHub's new Discussions feature for questions",
+                "filename": ".github/ISSUE_TEMPLATE/config.yml",
+                "start_index": 0,
+                "end_index": 191,
+                "start_line": 1,
+                "end_line": 5,
+                "max_line": 5,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "rtd:\n  project: pytest",
+                "filename": ".github/config.yml",
+                "start_index": 0,
+                "end_index": 22,
+                "start_line": 1,
+                "end_line": 2,
+                "max_line": 2,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "# shim for pylib going away\n# if pylib is installed this file will get skipped\n# (`py/__init__.py` has higher precedence)\nimport sys\n\nimport _pytest._py.error as error\nimport _pytest._py.path as path\n\nsys.modules[\"py.error\"] = error\nsys.modules[\"py.path\"] = path",
+                "filename": "src/py.py",
+                "start_index": 0,
+                "end_index": 262,
+                "start_line": 1,
+                "end_line": 10,
+                "max_line": 10,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "import json\nfrom pathlib import Path\n\nimport requests\n\nissues_url = \"https://api.github.com/repos/pytest-dev/pytest/issues\"\n\n\ndef get_issues():\n    issues = []\n    url = issues_url\n    while 1:\n        get_data = {\"state\": \"all\"}\n        r = requests.get(url, params=get_data)\n        data = r.json()\n        if r.status_code == 403:\n            # API request limit exceeded\n            print(data[\"message\"])\n            exit(1)\n        issues.extend(data)\n\n        # Look for next page\n        links = requests.utils.parse_header_links(r.headers[\"Link\"])\n        another_page = False\n        for link in links:\n            if link[\"rel\"] == \"next\":\n                url = link[\"url\"]\n                another_page = True\n        if not another_page:\n            return issues\n\n\ndef main(args):\n    cachefile = Path(args.cache)\n    if not cachefile.exists() or args.refresh:\n        issues = get_issues()\n        cachefile.write_text(json.dumps(issues), \"utf-8\")\n    else:\n        issues = json.loads(cachefile.read_text(\"utf-8\"))\n\n    open_issues = [x for x in issues if x[\"state\"] == \"open\"]\n\n    open_issues.sort(key=lambda x: x[\"number\"])\n    report(open_issues)\n\n\ndef _get_kind(issue):\n    labels = [label[\"name\"] for label in issue[\"labels\"]]\n    for key in (\"bug\", \"enhancement\", \"proposal\"):\n        if key in labels:\n            return key\n    return \"issue\"\n\n\ndef report(issues):\n    for issue in issues:\n        title = issue[\"title\"]\n        # body = issue[\"body\"]\n        kind = _get_kind(issue)\n        status = issue[\"state\"]\n        number = issue[\"number\"]\n        link = \"https://github.com/pytest-dev/pytest/issues/%s/\" % number\n        print(\"----\")\n        print(status, kind, link)\n        print(title)\n        # print()\n        # lines = body.split(\"\\n\")\n        # print(\"\\n\".join(lines[:3]))\n        # if len(lines) > 3 or len(body) > 240:\n        #    print(\"...\")\n    print(\"\\n\\nFound %s open issues\" % len(issues))\n\n\nif __name__ == \"__main__\":\n    import argparse\n\n    parser = argparse.ArgumentParser(\"process bitbucket issues\")\n    parser.add_argument(\n        \"--refresh\", action=\"store_true\", help=\"invalidate cache, refresh issues\"\n    )\n    parser.add_argument(\n        \"--cache\", action=\"store\", default=\"issues.json\", help=\"cache file\"\n    )\n    args = parser.parse_args()\n    main(args)",
+                "filename": "extra/get_issues.py",
+                "start_index": 0,
+                "end_index": 2321,
+                "start_line": 1,
+                "end_line": 85,
+                "max_line": 85,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "import sys\nfrom subprocess import call\n\n\ndef main():\n    \"\"\"\n    Platform agnostic wrapper script for towncrier.\n    Fixes the issue (#7251) where windows users are unable to natively run tox -e docs to build pytest docs.\n    \"\"\"\n    with open(\n        \"doc/en/_changelog_towncrier_draft.rst\", \"w\", encoding=\"utf-8\"\n    ) as draft_file:\n        return call((\"towncrier\", \"--draft\"), stdout=draft_file)\n\n\nif __name__ == \"__main__\":\n    sys.exit(main())",
+                "filename": "scripts/towncrier-draft-to-file.py",
+                "start_index": 0,
+                "end_index": 451,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 17,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nThis script is part of the pytest release process which is triggered manually in the Actions\ntab of the repository.\n\nThe user will need to enter the base branch to start the release from (for example\n``6.1.x`` or ``main``) and if it should be a major release.\n\nThe appropriate version will be obtained based on the given branch automatically.\n\nAfter that, it will create a release using the `release` tox environment, and push a new PR.\n\n**Token**: currently the token from the GitHub Actions is used, pushed with\n`pytest bot <pytestbot@gmail.com>` commit author.\n\"\"\"\nimport argparse\nimport re\nfrom pathlib import Path\nfrom subprocess import check_call\nfrom subprocess import check_output\nfrom subprocess import run\n\nfrom colorama import Fore\nfrom colorama import init\nfrom github3.repos import Repository\n\n\nclass InvalidFeatureRelease(Exception):\n    pass\n\n\nSLUG = \"pytest-dev/pytest\"\n\nPR_BODY = \"\"\"\\\nCreated automatically from manual trigger.\n\nOnce all builds pass and it has been **approved** by one or more maintainers, the build\ncan be released by pushing a tag `{version}` to this repository.\n\"\"\"\n\n\ndef login(token: str) -> Repository:\n    import github3\n\n    github = github3.login(token=token)\n    owner, repo = SLUG.split(\"/\")\n    return github.repository(owner, repo)",
+                "filename": "scripts/prepare-release-pr.py",
+                "start_index": 0,
+                "end_index": 1281,
+                "start_line": 1,
+                "end_line": 46,
+                "max_line": 174,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "import sys\n\nif __name__ == \"__main__\":\n    import cProfile\n    import pytest  # NOQA\n    import pstats\n\n    script = sys.argv[1:] if len(sys.argv) > 1 else [\"empty.py\"]\n    cProfile.run(\"pytest.cmdline.main(%r)\" % script, \"prof\")\n    p = pstats.Stats(\"prof\")\n    p.strip_dirs()\n    p.sort_stats(\"cumulative\")\n    print(p.print_stats(500))",
+                "filename": "bench/bench.py",
+                "start_index": 0,
+                "end_index": 338,
+                "start_line": 1,
+                "end_line": 13,
+                "max_line": 13,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "import pytest\n\n\n@pytest.fixture(scope=\"module\", params=range(966))\ndef foo(request):\n    return request.param\n\n\ndef test_it(foo):\n    pass\n\n\ndef test_it2(foo):\n    pass",
+                "filename": "bench/manyparam.py",
+                "start_index": 0,
+                "end_index": 168,
+                "start_line": 1,
+                "end_line": 14,
+                "max_line": 14,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "# info:\n# * https://help.github.com/en/articles/displaying-a-sponsor-button-in-your-repository\n# * https://tidelift.com/subscription/how-to-connect-tidelift-with-github\ntidelift: pypi/pytest\nopen_collective: pytest",
+                "filename": ".github/FUNDING.yml",
+                "start_index": 0,
+                "end_index": 214,
+                "start_line": 1,
+                "end_line": 5,
+                "max_line": 5,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            },
+            {
+                "code": "-   repo: local\n    hooks:\n    -   id: rst\n        name: rst\n        entry: rst-lint --encoding utf-8\n        files: ^(RELEASING.rst|README.rst|TIDELIFT.rst)$\n        language: python\n        additional_dependencies: [pygments, restructuredtext_lint]\n    -   id: changelogs-rst\n        name: changelog filenames\n        language: fail\n        entry: 'changelog files must be named ####.(breaking|bugfix|deprecation|doc|feature|improvement|trivial|vendor).rst'\n        exclude: changelog/(\\d+\\.(breaking|bugfix|deprecation|doc|feature|improvement|trivial|vendor).rst|README.rst|_template.rst)\n        files: ^changelog/\n    -   id: py-deprecated\n        name: py library is deprecated\n        language: pygrep\n        entry: >\n            (?x)\\bpy\\.(\n                _code\\.|\n                builtin\\.|\n                code\\.|\n                io\\.|\n                path\\.local\\.sysfind|\n                process\\.|\n                std\\.|\n                error\\.|\n                xml\\.\n            )\n        types: [python]\n    -   id: py-path-deprecated\n        name: py.path usage is deprecated\n        exclude: docs|src/_pytest/deprecated.py|testing/deprecated_test.py|src/_pytest/legacypath.py\n        language: pygrep\n        entry: \\bpy\\.path\\.local\n        types: [python]",
+                "filename": ".pre-commit-config.yaml",
+                "start_index": 2166,
+                "end_index": 3442,
+                "start_line": 73,
+                "end_line": 108,
+                "max_line": 108,
+                "git_instance": "github",
+                "repo_name": "testbed/pytest-dev__pytest__6.3",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            ".github/ISSUE_TEMPLATE/config.yml": [
+                {
+                    "chunk": {
+                        "code": "blank_issues_enabled: false\ncontact_links:\n  - name: \u2753 Support Question\n    url: https://github.com/pytest-dev/pytest/discussions\n    about: Use GitHub's new Discussions feature for questions",
+                        "filename": ".github/ISSUE_TEMPLATE/config.yml",
+                        "start_index": 0,
+                        "end_index": 191,
+                        "start_line": 1,
+                        "end_line": 5,
+                        "max_line": 5,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it pertains to the configuration of issue templates on GitHub, which is unrelated to the problem with faulthandler, Twisted Logger, and pytest."
+                }
+            ],
+            ".github/config.yml": [
+                {
+                    "chunk": {
+                        "code": "rtd:\n  project: pytest",
+                        "filename": ".github/config.yml",
+                        "start_index": 0,
+                        "end_index": 22,
+                        "start_line": 1,
+                        "end_line": 2,
+                        "max_line": 2,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it contains configuration for Read the Docs, which is unrelated to the problem with faulthandler, Twisted Logger, and pytest."
+                }
+            ],
+            "src/py.py": [
+                {
+                    "chunk": {
+                        "code": "# shim for pylib going away\n# if pylib is installed this file will get skipped\n# (`py/__init__.py` has higher precedence)\nimport sys\n\nimport _pytest._py.error as error\nimport _pytest._py.path as path\n\nsys.modules[\"py.error\"] = error\nsys.modules[\"py.path\"] = path",
+                        "filename": "src/py.py",
+                        "start_index": 0,
+                        "end_index": 262,
+                        "start_line": 1,
+                        "end_line": 10,
+                        "max_line": 10,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it deals with the shim for pylib and does not pertain to the interaction between faulthandler, Twisted Logger, and pytest."
+                }
+            ],
+            "extra/get_issues.py": [
+                {
+                    "chunk": {
+                        "code": "import json\nfrom pathlib import Path\n\nimport requests\n\nissues_url = \"https://api.github.com/repos/pytest-dev/pytest/issues\"\n\n\ndef get_issues():\n    issues = []\n    url = issues_url\n    while 1:\n        get_data = {\"state\": \"all\"}\n        r = requests.get(url, params=get_data)\n        data = r.json()\n        if r.status_code == 403:\n            # API request limit exceeded\n            print(data[\"message\"])\n            exit(1)\n        issues.extend(data)\n\n        # Look for next page\n        links = requests.utils.parse_header_links(r.headers[\"Link\"])\n        another_page = False\n        for link in links:\n            if link[\"rel\"] == \"next\":\n                url = link[\"url\"]\n                another_page = True\n        if not another_page:\n            return issues\n\n\ndef main(args):\n    cachefile = Path(args.cache)\n    if not cachefile.exists() or args.refresh:\n        issues = get_issues()\n        cachefile.write_text(json.dumps(issues), \"utf-8\")\n    else:\n        issues = json.loads(cachefile.read_text(\"utf-8\"))\n\n    open_issues = [x for x in issues if x[\"state\"] == \"open\"]\n\n    open_issues.sort(key=lambda x: x[\"number\"])\n    report(open_issues)\n\n\ndef _get_kind(issue):\n    labels = [label[\"name\"] for label in issue[\"labels\"]]\n    for key in (\"bug\", \"enhancement\", \"proposal\"):\n        if key in labels:\n            return key\n    return \"issue\"\n\n\ndef report(issues):\n    for issue in issues:\n        title = issue[\"title\"]\n        # body = issue[\"body\"]\n        kind = _get_kind(issue)\n        status = issue[\"state\"]\n        number = issue[\"number\"]\n        link = \"https://github.com/pytest-dev/pytest/issues/%s/\" % number\n        print(\"----\")\n        print(status, kind, link)\n        print(title)\n        # print()\n        # lines = body.split(\"\\n\")\n        # print(\"\\n\".join(lines[:3]))\n        # if len(lines) > 3 or len(body) > 240:\n        #    print(\"...\")\n    print(\"\\n\\nFound %s open issues\" % len(issues))\n\n\nif __name__ == \"__main__\":\n    import argparse\n\n    parser = argparse.ArgumentParser(\"process bitbucket issues\")\n    parser.add_argument(\n        \"--refresh\", action=\"store_true\", help=\"invalidate cache, refresh issues\"\n    )\n    parser.add_argument(\n        \"--cache\", action=\"store\", default=\"issues.json\", help=\"cache file\"\n    )\n    args = parser.parse_args()\n    main(args)",
+                        "filename": "extra/get_issues.py",
+                        "start_index": 0,
+                        "end_index": 2321,
+                        "start_line": 1,
+                        "end_line": 85,
+                        "max_line": 85,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it is a script for getting GitHub issues and has no connection to the problem with faulthandler, Twisted Logger, and pytest."
+                }
+            ],
+            "scripts/towncrier-draft-to-file.py": [
+                {
+                    "chunk": {
+                        "code": "import sys\nfrom subprocess import call\n\n\ndef main():\n    \"\"\"\n    Platform agnostic wrapper script for towncrier.\n    Fixes the issue (#7251) where windows users are unable to natively run tox -e docs to build pytest docs.\n    \"\"\"\n    with open(\n        \"doc/en/_changelog_towncrier_draft.rst\", \"w\", encoding=\"utf-8\"\n    ) as draft_file:\n        return call((\"towncrier\", \"--draft\"), stdout=draft_file)\n\n\nif __name__ == \"__main__\":\n    sys.exit(main())",
+                        "filename": "scripts/towncrier-draft-to-file.py",
+                        "start_index": 0,
+                        "end_index": 451,
+                        "start_line": 1,
+                        "end_line": 17,
+                        "max_line": 17,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it is a script for towncrier, which is used for managing changelogs and does not relate to the problem with faulthandler, Twisted Logger, and pytest."
+                }
+            ],
+            "scripts/prepare-release-pr.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nThis script is part of the pytest release process which is triggered manually in the Actions\ntab of the repository.\n\nThe user will need to enter the base branch to start the release from (for example\n``6.1.x`` or ``main``) and if it should be a major release.\n\nThe appropriate version will be obtained based on the given branch automatically.\n\nAfter that, it will create a release using the `release` tox environment, and push a new PR.\n\n**Token**: currently the token from the GitHub Actions is used, pushed with\n`pytest bot <pytestbot@gmail.com>` commit author.\n\"\"\"\nimport argparse\nimport re\nfrom pathlib import Path\nfrom subprocess import check_call\nfrom subprocess import check_output\nfrom subprocess import run\n\nfrom colorama import Fore\nfrom colorama import init\nfrom github3.repos import Repository\n\n\nclass InvalidFeatureRelease(Exception):\n    pass\n\n\nSLUG = \"pytest-dev/pytest\"\n\nPR_BODY = \"\"\"\\\nCreated automatically from manual trigger.\n\nOnce all builds pass and it has been **approved** by one or more maintainers, the build\ncan be released by pushing a tag `{version}` to this repository.\n\"\"\"\n\n\ndef login(token: str) -> Repository:\n    import github3\n\n    github = github3.login(token=token)\n    owner, repo = SLUG.split(\"/\")\n    return github.repository(owner, repo)",
+                        "filename": "scripts/prepare-release-pr.py",
+                        "start_index": 0,
+                        "end_index": 1281,
+                        "start_line": 1,
+                        "end_line": 46,
+                        "max_line": 174,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it is a script for preparing release PRs and does not address the problem with faulthandler, Twisted Logger, and pytest."
+                }
+            ],
+            "bench/bench.py": [
+                {
+                    "chunk": {
+                        "code": "import sys\n\nif __name__ == \"__main__\":\n    import cProfile\n    import pytest  # NOQA\n    import pstats\n\n    script = sys.argv[1:] if len(sys.argv) > 1 else [\"empty.py\"]\n    cProfile.run(\"pytest.cmdline.main(%r)\" % script, \"prof\")\n    p = pstats.Stats(\"prof\")\n    p.strip_dirs()\n    p.sort_stats(\"cumulative\")\n    print(p.print_stats(500))",
+                        "filename": "bench/bench.py",
+                        "start_index": 0,
+                        "end_index": 338,
+                        "start_line": 1,
+                        "end_line": 13,
+                        "max_line": 13,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it is a benchmarking script for pytest and does not involve the interaction between faulthandler, Twisted Logger, and pytest."
+                }
+            ],
+            "bench/manyparam.py": [
+                {
+                    "chunk": {
+                        "code": "import pytest\n\n\n@pytest.fixture(scope=\"module\", params=range(966))\ndef foo(request):\n    return request.param\n\n\ndef test_it(foo):\n    pass\n\n\ndef test_it2(foo):\n    pass",
+                        "filename": "bench/manyparam.py",
+                        "start_index": 0,
+                        "end_index": 168,
+                        "start_line": 1,
+                        "end_line": 14,
+                        "max_line": 14,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it is a test file with parameterized fixtures and does not relate to the problem with faulthandler, Twisted Logger, and pytest."
+                }
+            ],
+            ".github/FUNDING.yml": [
+                {
+                    "chunk": {
+                        "code": "# info:\n# * https://help.github.com/en/articles/displaying-a-sponsor-button-in-your-repository\n# * https://tidelift.com/subscription/how-to-connect-tidelift-with-github\ntidelift: pypi/pytest\nopen_collective: pytest",
+                        "filename": ".github/FUNDING.yml",
+                        "start_index": 0,
+                        "end_index": 214,
+                        "start_line": 1,
+                        "end_line": 5,
+                        "max_line": 5,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it pertains to funding configuration for the pytest repository and is unrelated to the problem with faulthandler, Twisted Logger, and pytest."
+                }
+            ],
+            ".pre-commit-config.yaml": [
+                {
+                    "chunk": {
+                        "code": "-   repo: local\n    hooks:\n    -   id: rst\n        name: rst\n        entry: rst-lint --encoding utf-8\n        files: ^(RELEASING.rst|README.rst|TIDELIFT.rst)$\n        language: python\n        additional_dependencies: [pygments, restructuredtext_lint]\n    -   id: changelogs-rst\n        name: changelog filenames\n        language: fail\n        entry: 'changelog files must be named ####.(breaking|bugfix|deprecation|doc|feature|improvement|trivial|vendor).rst'\n        exclude: changelog/(\\d+\\.(breaking|bugfix|deprecation|doc|feature|improvement|trivial|vendor).rst|README.rst|_template.rst)\n        files: ^changelog/\n    -   id: py-deprecated\n        name: py library is deprecated\n        language: pygrep\n        entry: >\n            (?x)\\bpy\\.(\n                _code\\.|\n                builtin\\.|\n                code\\.|\n                io\\.|\n                path\\.local\\.sysfind|\n                process\\.|\n                std\\.|\n                error\\.|\n                xml\\.\n            )\n        types: [python]\n    -   id: py-path-deprecated\n        name: py.path usage is deprecated\n        exclude: docs|src/_pytest/deprecated.py|testing/deprecated_test.py|src/_pytest/legacypath.py\n        language: pygrep\n        entry: \\bpy\\.path\\.local\n        types: [python]",
+                        "filename": ".pre-commit-config.yaml",
+                        "start_index": 2166,
+                        "end_index": 3442,
+                        "start_line": 73,
+                        "end_line": 108,
+                        "max_line": 108,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pytest-dev__pytest__6.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is not relevant to the issue as it is a configuration file for pre-commit hooks and does not pertain to the interaction between faulthandler, Twisted Logger, and pytest."
+                }
+            ]
+        },
+        "solution_task": "- Review the `faulthandler.py` and `_io.py` files for the use of `sys.stderr.fileno()` and ensure that it is only called when `sys.stderr` is attached to a valid file descriptor.\n- If `twisted.logger` is replacing `sys.stderr` with an instance of `FakeFileWrapper` that returns an invalid file descriptor, modify the `pytest_unconfigure` function to check if `sys.stderr` has a valid file descriptor before calling `faulthandler.enable`.\n- Implement a check in `pytest_unconfigure` to determine if `sys.stderr` is an instance of `FakeFileWrapper` or similar, and if so, avoid calling `faulthandler.enable` with `sys.stderr.fileno()`.\n- Alternatively, modify the `FakeFileWrapper` class to return a valid file descriptor if possible, or to raise a more informative exception when its `fileno()` method is called.\n- Ensure that the `pytest_unconfigure` function gracefully handles the `ValueError` by either logging an appropriate message or by skipping the call to `faulthandler.enable` when `--capture=no` is used with Twisted Logger.\n- Apply the patch referenced as `#8250` if it addresses the issue and has been accepted into the codebase after proper review.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a comprehensive set of actionable steps to address the issue with `pytest`'s `faulthandler` when used with Twisted Logger and the `--capture=no` option. It suggests reviewing the relevant code files for improper use of `sys.stderr.fileno()`, implementing checks to ensure that `sys.stderr` is attached to a valid file descriptor before enabling `faulthandler`, and handling the `ValueError` gracefully. Additionally, it advises applying a patch if it has been accepted into the codebase. The RESPONSE also correctly identifies the provided code snippets as irrelevant to the issue, which shows a clear understanding of the problem context. The only reason it does not score a 10 is that it does not address all aspects of the described bug, such as providing a specific solution for the `FakeFileWrapper` class to return a valid file descriptor or a more informative exception.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711734680.887291,
+        "result": "- Review the `faulthandler.py` and `_io.py` files for the use of `sys.stderr.fileno()` and ensure that it is only called when `sys.stderr` is attached to a valid file descriptor.\n- If `twisted.logger` is replacing `sys.stderr` with an instance of `FakeFileWrapper` that returns an invalid file descriptor, modify the `pytest_unconfigure` function to check if `sys.stderr` has a valid file descriptor before calling `faulthandler.enable`.\n- Implement a check in `pytest_unconfigure` to determine if `sys.stderr` is an instance of `FakeFileWrapper` or similar, and if so, avoid calling `faulthandler.enable` with `sys.stderr.fileno()`.\n- Alternatively, modify the `FakeFileWrapper` class to return a valid file descriptor if possible, or to raise a more informative exception when its `fileno()` method is called.\n- Ensure that the `pytest_unconfigure` function gracefully handles the `ValueError` by either logging an appropriate message or by skipping the call to `faulthandler.enable` when `--capture=no` is used with Twisted Logger.\n- Apply the patch referenced as `#8250` if it addresses the issue and has been accepted into the codebase after proper review.\n\n### Code snippets to check\n\n-  \u2192 [.github](https://github.com/testbed/pytest-dev__pytest__6.3/tree//.github) \u2192 [ISSUE_TEMPLATE](https://github.com/testbed/pytest-dev__pytest__6.3/tree//.github/ISSUE_TEMPLATE)- [Lines 1 - 5](https://github.com/testbed/pytest-dev__pytest__6.3/blob//.github/ISSUE_TEMPLATE/config.yml#L1-L5)\n\n This snippet is not relevant to the issue as it pertains to the configuration of issue templates on GitHub, which is unrelated to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [.github](https://github.com/testbed/pytest-dev__pytest__6.3/tree//.github)- [Lines 1 - 2](https://github.com/testbed/pytest-dev__pytest__6.3/blob//.github/config.yml#L1-L2)\n\n This snippet is not relevant to the issue as it contains configuration for Read the Docs, which is unrelated to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [src](https://github.com/testbed/pytest-dev__pytest__6.3/tree//src)- [Lines 1 - 10](https://github.com/testbed/pytest-dev__pytest__6.3/blob//src/py.py#L1-L10)\n\n This snippet is not relevant to the issue as it deals with the shim for pylib and does not pertain to the interaction between faulthandler, Twisted Logger, and pytest.\n-  \u2192 [extra](https://github.com/testbed/pytest-dev__pytest__6.3/tree//extra)- [Lines 1 - 85](https://github.com/testbed/pytest-dev__pytest__6.3/blob//extra/get_issues.py#L1-L85)\n\n This snippet is not relevant to the issue as it is a script for getting GitHub issues and has no connection to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [scripts](https://github.com/testbed/pytest-dev__pytest__6.3/tree//scripts)- [Lines 1 - 17](https://github.com/testbed/pytest-dev__pytest__6.3/blob//scripts/towncrier-draft-to-file.py#L1-L17)\n\n This snippet is not relevant to the issue as it is a script for towncrier, which is used for managing changelogs and does not relate to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [scripts](https://github.com/testbed/pytest-dev__pytest__6.3/tree//scripts)- [Lines 1 - 46](https://github.com/testbed/pytest-dev__pytest__6.3/blob//scripts/prepare-release-pr.py#L1-L46)\n\n This snippet is not relevant to the issue as it is a script for preparing release PRs and does not address the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [bench](https://github.com/testbed/pytest-dev__pytest__6.3/tree//bench)- [Lines 1 - 13](https://github.com/testbed/pytest-dev__pytest__6.3/blob//bench/bench.py#L1-L13)\n\n This snippet is not relevant to the issue as it is a benchmarking script for pytest and does not involve the interaction between faulthandler, Twisted Logger, and pytest.\n-  \u2192 [bench](https://github.com/testbed/pytest-dev__pytest__6.3/tree//bench)- [Lines 1 - 14](https://github.com/testbed/pytest-dev__pytest__6.3/blob//bench/manyparam.py#L1-L14)\n\n This snippet is not relevant to the issue as it is a test file with parameterized fixtures and does not relate to the problem with faulthandler, Twisted Logger, and pytest.\n-  \u2192 [.github](https://github.com/testbed/pytest-dev__pytest__6.3/tree//.github)- [Lines 1 - 5](https://github.com/testbed/pytest-dev__pytest__6.3/blob//.github/FUNDING.yml#L1-L5)\n\n This snippet is not relevant to the issue as it pertains to funding configuration for the pytest repository and is unrelated to the problem with faulthandler, Twisted Logger, and pytest.\n- - [Lines 73 - 108](https://github.com/testbed/pytest-dev__pytest__6.3/blob//.pre-commit-config.yaml#L73-L108)\n\n This snippet is not relevant to the issue as it is a configuration file for pre-commit hooks and does not pertain to the interaction between faulthandler, Twisted Logger, and pytest."
+    }
+}

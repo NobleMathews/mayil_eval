@@ -1,0 +1,204 @@
+{
+    "id": "matplotlib__matplotlib-25785",
+    "repo_name": "testbed/matplotlib__matplotlib__3.7",
+    "task_id": 8757468705753547654,
+    "title": "automatic papersize selection by ps backend is almost certainly broken",
+    "body": "No minimal example, but the relevant chunk (`backend_ps.py`) is\r\n```python\r\npapersize = {'letter': (8.5,11),\r\n             'legal': (8.5,14),\r\n             'ledger': (11,17),\r\n             'a0': (33.11,46.81),\r\n             'a1': (23.39,33.11),\r\n             <elided>\r\n             'a10': (1.02,1.457),\r\n             'b0': (40.55,57.32),\r\n             'b1': (28.66,40.55),\r\n             <elided>\r\n             'b10': (1.26,1.76)}\r\n\r\ndef _get_papertype(w, h):\r\n    keys = list(six.iterkeys(papersize))\r\n    keys.sort()\r\n    keys.reverse()\r\n    for key in keys:\r\n        if key.startswith('l'): continue\r\n        pw, ph = papersize[key]\r\n        if (w < pw) and (h < ph): return key\r\n    else:\r\n        return 'a0'\r\n```\r\n\r\nNote that the sorting is by name, which means that the size is the first one among \"a9, a8, ..., a2, a10, a1, b9, b8, ..., b2, b10, b1\" (in that order) that is larger than the requested size -- which makes no sense.\r\n\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/matplotlib__matplotlib__3.7.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `_get_papertype` function to sort the `papersize` dictionary based on the dimensions (area) of the paper sizes rather than their names.\n- Remove the conditional check that skips paper sizes starting with 'l'.\n\n```python\ndef _get_papertype(w, h):\n    sorted_papers = sorted(papersize.items(), key=lambda item: item[1][0] * item[1][1])\n    for key, (pw, ph) in sorted_papers:\n        if w <= pw and h <= ph:\n            return key\n    return 'a0'\n```\n\n### Code snippets to check\n\n-  \u2192 [lib](https://github.com/testbed/matplotlib__matplotlib__3.7/tree//lib) \u2192 [matplotlib](https://github.com/testbed/matplotlib__matplotlib__3.7/tree//lib/matplotlib) \u2192 [backends](https://github.com/testbed/matplotlib__matplotlib__3.7/tree//lib/matplotlib/backends)- [Lines 1 - 92](https://github.com/testbed/matplotlib__matplotlib__3.7/blob//lib/matplotlib/backends/backend_ps.py#L1-L92)\n\n This snippet contains the 'papersize' dictionary and the '_get_papertype' function which are directly related to the issue of automatic paper size selection. The sorting and selection logic in '_get_papertype' needs to be reviewed and potentially corrected. \n\n\n   - [Lines 807 - 854](https://github.com/testbed/matplotlib__matplotlib__3.7/blob//lib/matplotlib/backends/backend_ps.py#L807-L854)\n\n This snippet includes the '_print_ps' method where 'papertype' is determined and used. It is necessary to understand how the paper size is being set and passed to the printing function, which may need to be modified to fix the issue. \n\n\n   - [Lines 215 - 1081](https://github.com/testbed/matplotlib__matplotlib__3.7/blob//lib/matplotlib/backends/backend_ps.py#L215-L1081)\n\n This snippet shows the use of '_get_papertype' to determine 'papertype' when it is set to 'auto'. It is relevant because it shows the context in which the paper size selection is applied and may need to be changed as part of the fix.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0020835,
+        "snippet_processor": 0.04882,
+        "issue_star_creation": 0.03102,
+        "issue_star_solver": 0.09436,
+        "bouncer": 0.029380000000000003
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711696493.447045,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"\nA PostScript backend, which can produce both PostScript .ps and .eps.\n\"\"\"\n\nimport codecs\nimport datetime\nfrom enum import Enum\nimport functools\nfrom io import StringIO\nimport itertools\nimport logging\nimport os\nimport pathlib\nimport shutil\nfrom tempfile import TemporaryDirectory\nimport time\n\nimport numpy as np\n\nimport matplotlib as mpl\nfrom matplotlib import _api, cbook, _path, _text_helpers\nfrom matplotlib._afm import AFM\nfrom matplotlib.backend_bases import (\n    _Backend, FigureCanvasBase, FigureManagerBase, RendererBase)\nfrom matplotlib.cbook import is_writable_file_like, file_requires_unicode\nfrom matplotlib.font_manager import get_font\nfrom matplotlib.ft2font import LOAD_NO_SCALE, FT2Font\nfrom matplotlib._ttconv import convert_ttf_to_ps\nfrom matplotlib._mathtext_data import uni2type1\nfrom matplotlib.path import Path\nfrom matplotlib.texmanager import TexManager\nfrom matplotlib.transforms import Affine2D\nfrom matplotlib.backends.backend_mixed import MixedModeRenderer\nfrom . import _backend_pdf_ps\n\n\n_log = logging.getLogger(__name__)\ndebugPS = False\n\n\n@_api.deprecated(\"3.7\")\nclass PsBackendHelper:\n    def __init__(self):\n        self._cached = {}\n\n\n@_api.caching_module_getattr\nclass __getattr__:\n    # module-level deprecations\n    ps_backend_helper = _api.deprecated(\"3.7\", obj_type=\"\")(\n        property(lambda self: PsBackendHelper()))\n    psDefs = _api.deprecated(\"3.8\", obj_type=\"\")(property(lambda self: _psDefs))\n\n\npapersize = {'letter': (8.5, 11),\n             'legal': (8.5, 14),\n             'ledger': (11, 17),\n             'a0': (33.11, 46.81),\n             'a1': (23.39, 33.11),\n             'a2': (16.54, 23.39),\n             'a3': (11.69, 16.54),\n             'a4': (8.27, 11.69),\n             'a5': (5.83, 8.27),\n             'a6': (4.13, 5.83),\n             'a7': (2.91, 4.13),\n             'a8': (2.05, 2.91),\n             'a9': (1.46, 2.05),\n             'a10': (1.02, 1.46),\n             'b0': (40.55, 57.32),\n             'b1': (28.66, 40.55),\n             'b2': (20.27, 28.66),\n             'b3': (14.33, 20.27),\n             'b4': (10.11, 14.33),\n             'b5': (7.16, 10.11),\n             'b6': (5.04, 7.16),\n             'b7': (3.58, 5.04),\n             'b8': (2.51, 3.58),\n             'b9': (1.76, 2.51),\n             'b10': (1.26, 1.76)}\n\n\ndef _get_papertype(w, h):\n    for key, (pw, ph) in sorted(papersize.items(), reverse=True):\n        if key.startswith('l'):\n            continue\n        if w < pw and h < ph:\n            return key\n    return 'a0'\n\n\ndef _nums_to_str(*args, sep=\" \"):\n    return sep.join(f\"{arg:1.3f}\".rstrip(\"0\").rstrip(\".\") for arg in args)",
+                "filename": "lib/matplotlib/backends/backend_ps.py",
+                "start_index": 0,
+                "end_index": 2621,
+                "start_line": 1,
+                "end_line": 92,
+                "max_line": 1346,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            },
+            {
+                "code": "class RendererPS(_backend_pdf_ps.RendererPDFPSBase):",
+                "filename": "lib/matplotlib/backends/backend_ps.py",
+                "start_index": 7303,
+                "end_index": 7355,
+                "start_line": 244,
+                "end_line": 244,
+                "max_line": 1346,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            },
+            {
+                "code": "fixed_dpi = 72\n    filetypes = {'ps': 'Postscript',\n                 'eps': 'Encapsulated Postscript'}\n\n    def get_default_filetype(self):\n        return 'ps'\n\n    def _print_ps(\n            self, fmt, outfile, *,\n            metadata=None, papertype=None, orientation='portrait',\n            bbox_inches_restore=None, **kwargs):\n\n        dpi = self.figure.dpi\n        self.figure.dpi = 72  # Override the dpi kwarg\n\n        dsc_comments = {}\n        if isinstance(outfile, (str, os.PathLike)):\n            filename = pathlib.Path(outfile).name\n            dsc_comments[\"Title\"] = \\\n                filename.encode(\"ascii\", \"replace\").decode(\"ascii\")\n        dsc_comments[\"Creator\"] = (metadata or {}).get(\n            \"Creator\",\n            f\"Matplotlib v{mpl.__version__}, https://matplotlib.org/\")\n        # See https://reproducible-builds.org/specs/source-date-epoch/\n        source_date_epoch = os.getenv(\"SOURCE_DATE_EPOCH\")\n        dsc_comments[\"CreationDate\"] = (\n            datetime.datetime.fromtimestamp(\n                int(source_date_epoch),\n                datetime.timezone.utc).strftime(\"%a %b %d %H:%M:%S %Y\")\n            if source_date_epoch\n            else time.ctime())\n        dsc_comments = \"\\n\".join(\n            f\"%%{k}: {v}\" for k, v in dsc_comments.items())\n\n        if papertype is None:\n            papertype = mpl.rcParams['ps.papersize']\n        papertype = papertype.lower()\n        _api.check_in_list(['figure', 'auto', *papersize], papertype=papertype)\n\n        orientation = _api.check_getitem(\n            _Orientation, orientation=orientation.lower())\n\n        printer = (self._print_figure_tex\n                   if mpl.rcParams['text.usetex'] else\n                   self._print_figure)\n        printer(fmt, outfile, dpi=dpi, dsc_comments=dsc_comments,\n                orientation=orientation, papertype=papertype,\n                bbox_inches_restore=bbox_inches_restore, **kwargs)",
+                "filename": "lib/matplotlib/backends/backend_ps.py",
+                "start_index": 27430,
+                "end_index": 29353,
+                "start_line": 807,
+                "end_line": 854,
+                "max_line": 1346,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            },
+            {
+                "code": "if __name__ == '__main__':\n    from argparse import ArgumentParser\n    import itertools\n\n    parser = ArgumentParser()\n    parser.add_argument(\"filename\")\n    parser.add_argument(\"dpi\", nargs=\"?\", type=float, default=None)\n    args = parser.parse_args()\n    with Dvi(args.filename, args.dpi) as dvi:\n        fontmap = PsfontsMap(find_tex_file('pdftex.map'))\n        for page in dvi:\n            print(f\"=== new page === \"\n                  f\"(w: {page.width}, h: {page.height}, d: {page.descent})\")\n            for font, group in itertools.groupby(\n                    page.text, lambda text: text.font):\n                print(f\"font: {font.texname.decode('latin-1')!r}\\t\"\n                      f\"scale: {font._scale / 2 ** 20}\")\n                print(\"x\", \"y\", \"glyph\", \"chr\", \"w\", \"(glyphs)\", sep=\"\\t\")\n                for text in group:\n                    print(text.x, text.y, text.glyph,\n                          chr(text.glyph) if chr(text.glyph).isprintable()\n                          else \".\",\n                          text.width, sep=\"\\t\")\n            if page.boxes:\n                print(\"x\", \"y\", \"h\", \"w\", \"\", \"(boxes)\", sep=\"\\t\")\n                for box in page.boxes:\n                    print(box.x, box.y, box.height, box.width, sep=\"\\t\")",
+                "filename": "lib/matplotlib/dviread.py",
+                "start_index": 40699,
+                "end_index": 41957,
+                "start_line": 1123,
+                "end_line": 1149,
+                "max_line": 1149,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            },
+            {
+                "code": "class RendererPdf(_backend_pdf_ps.RendererPDFPSBase):",
+                "filename": "lib/matplotlib/backends/backend_pdf.py",
+                "start_index": 72146,
+                "end_index": 72199,
+                "start_line": 1944,
+                "end_line": 1944,
+                "max_line": 2827,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            },
+            {
+                "code": "with TemporaryDirectory() as tmpdir:\n            tmppath = pathlib.Path(tmpdir, \"tmp.ps\")\n            tmppath.write_text(\n                f\"\"\"\\\n%!PS-Adobe-3.0 EPSF-3.0\n%%LanguageLevel: 3\n{dsc_comments}\n{get_bbox_header(bbox)[0]}\n%%EndComments\n%%BeginProlog\n/mpldict {len(_psDefs)} dict def\nmpldict begin\n{\"\".join(_psDefs)}\nend\n%%EndProlog\nmpldict begin\n{_nums_to_str(xo, yo)} translate\n0 0 {_nums_to_str(width*72, height*72)} rectclip\n{self._pswriter.getvalue()}\nend\nshowpage\n\"\"\",\n                encoding=\"latin-1\")\n\n            if orientation is _Orientation.landscape:  # now, ready to rotate\n                width, height = height, width\n                bbox = (lly, llx, ury, urx)\n\n            # set the paper size to the figure size if is_eps. The\n            # resulting ps file has the given size with correct bounding\n            # box so that there is no need to call 'pstoeps'\n            if is_eps or papertype == 'figure':\n                paper_width, paper_height = orientation.swap_if_landscape(\n                    self.figure.get_size_inches())\n            else:\n                if papertype == 'auto':\n                    _api.warn_deprecated(\"3.8\", name=\"papertype='auto'\",\n                                         addendum=\"Pass an explicit paper type, or \"\n                                         \"omit the *papertype* argument entirely.\")\n                    papertype = _get_papertype(width, height)\n                paper_width, paper_height = papersize[papertype]\n\n            psfrag_rotated = _convert_psfrags(\n                tmppath, ps_renderer.psfrag, paper_width, paper_height,\n                orientation.name)\n\n            if (mpl.rcParams['ps.usedistiller'] == 'ghostscript'\n                    or mpl.rcParams['text.usetex']):\n                _try_distill(gs_distill,\n                             tmppath, is_eps, ptype=papertype, bbox=bbox,\n                             rotated=psfrag_rotated)\n            elif mpl.rcParams['ps.usedistiller'] == 'xpdf':\n                _try_distill(xpdf_distill,\n                             tmppath, is_eps, ptype=papertype, bbox=bbox,\n                             rotated=psfrag_rotated)\n\n            _move_path_to_path_or_stream(tmppath, outfile)",
+                "filename": "lib/matplotlib/backends/backend_ps.py",
+                "start_index": 36196,
+                "end_index": 38415,
+                "start_line": 215,
+                "end_line": 1081,
+                "max_line": 1346,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            },
+            {
+                "code": "_psDefs = [\n    # name proc  *_d*  -\n    # Note that this cannot be bound to /d, because when embedding a Type3 font\n    # we may want to define a \"d\" glyph using \"/d{...} d\" which would locally\n    # overwrite the definition.\n    \"/_d { bind def } bind def\",\n    # x y  *m*  -\n    \"/m { moveto } _d\",\n    # x y  *l*  -\n    \"/l { lineto } _d\",\n    # x y  *r*  -\n    \"/r { rlineto } _d\",\n    # x1 y1 x2 y2 x y *c*  -\n    \"/c { curveto } _d\",\n    # *cl*  -\n    \"/cl { closepath } _d\",\n    # *ce*  -\n    \"/ce { closepath eofill } _d\",\n    # wx wy llx lly urx ury  *setcachedevice*  -\n    \"/sc { setcachedevice } _d\",\n]\n\n\n@_Backend.export\nclass _BackendPS(_Backend):\n    backend_version = 'Level II'\n    FigureCanvas = FigureCanvasPS",
+                "filename": "lib/matplotlib/backends/backend_ps.py",
+                "start_index": 47512,
+                "end_index": 48241,
+                "start_line": 1320,
+                "end_line": 1346,
+                "max_line": 1346,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            },
+            {
+                "code": "def xpdf_distill(tmpfile, eps=False, ptype='letter', bbox=None, rotated=False):\n    \"\"\"\n    Use ghostscript's ps2pdf and xpdf's/poppler's pdftops to distill a file.\n    This yields smaller files without illegal encapsulated postscript\n    operators. This distiller is preferred, generating high-level postscript\n    output that treats text as text.\n    \"\"\"\n    mpl._get_executable_info(\"gs\")  # Effectively checks for ps2pdf.\n    mpl._get_executable_info(\"pdftops\")\n\n    if eps:\n        paper_option = [\"-dEPSCrop\"]\n    elif ptype == \"figure\":\n        # The bbox will have its lower-left corner at (0, 0), so upper-right\n        # corner corresponds with paper size.\n        paper_option = [f\"-dDEVICEWIDTHPOINTS#{bbox[2]}\",\n                        f\"-dDEVICEHEIGHTPOINTS#{bbox[3]}\"]\n    else:\n        paper_option = [f\"-sPAPERSIZE#{ptype}\"]\n\n    with TemporaryDirectory() as tmpdir:\n        tmppdf = pathlib.Path(tmpdir, \"tmp.pdf\")\n        tmpps = pathlib.Path(tmpdir, \"tmp.ps\")\n        # Pass options as `-foo#bar` instead of `-foo=bar` to keep Windows\n        # happy (https://ghostscript.com/doc/9.56.1/Use.htm#MS_Windows).\n        cbook._check_and_log_subprocess(\n            [\"ps2pdf\",\n             \"-dAutoFilterColorImages#false\",\n             \"-dAutoFilterGrayImages#false\",\n             \"-sAutoRotatePages#None\",\n             \"-sGrayImageFilter#FlateEncode\",\n             \"-sColorImageFilter#FlateEncode\",\n             *paper_option,\n             tmpfile, tmppdf], _log)\n        cbook._check_and_log_subprocess(\n            [\"pdftops\", \"-paper\", \"match\", \"-level3\", tmppdf, tmpps], _log)\n        shutil.move(tmpps, tmpfile)\n    if eps:\n        pstoeps(tmpfile)\n\n\ndef get_bbox_header(lbrt, rotated=False):\n    \"\"\"\n    Return a postscript header string for the given bbox lbrt=(l, b, r, t).\n    Optionally, return rotate command.\n    \"\"\"\n\n    l, b, r, t = lbrt\n    if rotated:\n        rotate = f\"{l+r:.2f} {0:.2f} translate\\n90 rotate\"\n    else:\n        rotate = \"\"\n    bbox_info = '%%%%BoundingBox: %d %d %d %d' % (l, b, np.ceil(r), np.ceil(t))\n    hires_bbox_info = f'%%HiResBoundingBox: {l:.6f} {b:.6f} {r:.6f} {t:.6f}'\n\n    return '\\n'.join([bbox_info, hires_bbox_info]), rotate",
+                "filename": "lib/matplotlib/backends/backend_ps.py",
+                "start_index": 42518,
+                "end_index": 44707,
+                "start_line": 1186,
+                "end_line": 1241,
+                "max_line": 1346,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            },
+            {
+                "code": "def print_figure_impl(fh):\n            # write the PostScript headers\n            if is_eps:\n                print(\"%!PS-Adobe-3.0 EPSF-3.0\", file=fh)\n            else:\n                print(\"%!PS-Adobe-3.0\", file=fh)\n                if papertype != 'figure':\n                    print(f\"%%DocumentPaperSizes: {papertype}\", file=fh)\n                print(\"%%Pages: 1\", file=fh)\n            print(f\"%%LanguageLevel: 3\\n\"\n                  f\"{dsc_comments}\\n\"\n                  f\"%%Orientation: {orientation.name}\\n\"\n                  f\"{get_bbox_header(bbox)[0]}\\n\"\n                  f\"%%EndComments\\n\",\n                  end=\"\", file=fh)\n\n            Ndict = len(_psDefs)\n            print(\"%%BeginProlog\", file=fh)\n            if not mpl.rcParams['ps.useafm']:\n                Ndict += len(ps_renderer._character_tracker.used)\n            print(\"/mpldict %d dict def\" % Ndict, file=fh)\n            print(\"mpldict begin\", file=fh)\n            print(\"\\n\".join(_psDefs), file=fh)\n            if not mpl.rcParams['ps.useafm']:\n                for font_path, chars \\\n                        in ps_renderer._character_tracker.used.items():\n                    if not chars:\n                        continue\n                    fonttype = mpl.rcParams['ps.fonttype']\n                    # Can't use more than 255 chars from a single Type 3 font.\n                    if len(chars) > 255:\n                        fonttype = 42\n                    fh.flush()\n                    if fonttype == 3:\n                        fh.write(_font_to_ps_type3(font_path, chars))\n                    else:  # Type 42 only.\n                        _font_to_ps_type42(font_path, chars, fh)\n            print(\"end\", file=fh)\n            print(\"%%EndProlog\", file=fh)\n\n            if not is_eps:\n                print(\"%%Page: 1 1\", file=fh)\n            print(\"mpldict begin\", file=fh)\n\n            print(\"%s translate\" % _nums_to_str(xo, yo), file=fh)\n            if rotation:\n                print(\"%d rotate\" % rotation, file=fh)\n            print(f\"0 0 {_nums_to_str(width*72, height*72)} rectclip\", file=fh)\n\n            # write the figure\n            print(self._pswriter.getvalue(), file=fh)\n\n            # write the trailer\n            print(\"end\", file=fh)\n            print(\"showpage\", file=fh)\n            if not is_eps:\n                print(\"%%EOF\", file=fh)\n            fh.flush()",
+                "filename": "lib/matplotlib/backends/backend_ps.py",
+                "start_index": 31530,
+                "end_index": 33898,
+                "start_line": 911,
+                "end_line": 968,
+                "max_line": 1346,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            },
+            {
+                "code": "class RendererPDFPSBase(RendererBase):\n    # The following attributes must be defined by the subclasses:\n    # - _afm_font_dir\n    # - _use_afm_rc_name\n\n    def __init__(self, width, height):\n        super().__init__()\n        self.width = width\n        self.height = height\n\n    def flipy(self):\n        # docstring inherited\n        return False  # y increases from bottom to top.\n\n    def option_scale_image(self):\n        # docstring inherited\n        return True  # PDF and PS support arbitrary image scaling.\n\n    def option_image_nocomposite(self):\n        # docstring inherited\n        # Decide whether to composite image based on rcParam value.\n        return not mpl.rcParams[\"image.composite_image\"]\n\n    def get_canvas_width_height(self):\n        # docstring inherited\n        return self.width * 72.0, self.height * 72.0\n\n    def get_text_width_height_descent(self, s, prop, ismath):\n        # docstring inherited\n        if ismath == \"TeX\":\n            return super().get_text_width_height_descent(s, prop, ismath)\n        elif ismath:\n            parse = self._text2path.mathtext_parser.parse(s, 72, prop)\n            return parse.width, parse.height, parse.depth\n        elif mpl.rcParams[self._use_afm_rc_name]:\n            font = self._get_font_afm(prop)\n            l, b, w, h, d = font.get_str_bbox_and_descent(s)\n            scale = prop.get_size_in_points() / 1000\n            w *= scale\n            h *= scale\n            d *= scale\n            return w, h, d\n        else:\n            font = self._get_font_ttf(prop)\n            font.set_text(s, 0.0, flags=ft2font.LOAD_NO_HINTING)\n            w, h = font.get_width_height()\n            d = font.get_descent()\n            scale = 1 / 64\n            w *= scale\n            h *= scale\n            d *= scale\n            return w, h, d\n\n    def _get_font_afm(self, prop):\n        fname = font_manager.findfont(\n            prop, fontext=\"afm\", directory=self._afm_font_dir)\n        return _cached_get_afm_from_fname(fname)\n\n    def _get_font_ttf(self, prop):\n        fnames = font_manager.fontManager._find_fonts_by_props(prop)\n        font = font_manager.get_font(fnames)\n        font.clear()\n        font.set_size(prop.get_size_in_points(), 72)\n        return font",
+                "filename": "lib/matplotlib/backends/_backend_pdf_ps.py",
+                "start_index": 2204,
+                "end_index": 4441,
+                "start_line": 82,
+                "end_line": 145,
+                "max_line": 145,
+                "git_instance": "github",
+                "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "lib/matplotlib/backends/backend_ps.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nA PostScript backend, which can produce both PostScript .ps and .eps.\n\"\"\"\n\nimport codecs\nimport datetime\nfrom enum import Enum\nimport functools\nfrom io import StringIO\nimport itertools\nimport logging\nimport os\nimport pathlib\nimport shutil\nfrom tempfile import TemporaryDirectory\nimport time\n\nimport numpy as np\n\nimport matplotlib as mpl\nfrom matplotlib import _api, cbook, _path, _text_helpers\nfrom matplotlib._afm import AFM\nfrom matplotlib.backend_bases import (\n    _Backend, FigureCanvasBase, FigureManagerBase, RendererBase)\nfrom matplotlib.cbook import is_writable_file_like, file_requires_unicode\nfrom matplotlib.font_manager import get_font\nfrom matplotlib.ft2font import LOAD_NO_SCALE, FT2Font\nfrom matplotlib._ttconv import convert_ttf_to_ps\nfrom matplotlib._mathtext_data import uni2type1\nfrom matplotlib.path import Path\nfrom matplotlib.texmanager import TexManager\nfrom matplotlib.transforms import Affine2D\nfrom matplotlib.backends.backend_mixed import MixedModeRenderer\nfrom . import _backend_pdf_ps\n\n\n_log = logging.getLogger(__name__)\ndebugPS = False\n\n\n@_api.deprecated(\"3.7\")\nclass PsBackendHelper:\n    def __init__(self):\n        self._cached = {}\n\n\n@_api.caching_module_getattr\nclass __getattr__:\n    # module-level deprecations\n    ps_backend_helper = _api.deprecated(\"3.7\", obj_type=\"\")(\n        property(lambda self: PsBackendHelper()))\n    psDefs = _api.deprecated(\"3.8\", obj_type=\"\")(property(lambda self: _psDefs))\n\n\npapersize = {'letter': (8.5, 11),\n             'legal': (8.5, 14),\n             'ledger': (11, 17),\n             'a0': (33.11, 46.81),\n             'a1': (23.39, 33.11),\n             'a2': (16.54, 23.39),\n             'a3': (11.69, 16.54),\n             'a4': (8.27, 11.69),\n             'a5': (5.83, 8.27),\n             'a6': (4.13, 5.83),\n             'a7': (2.91, 4.13),\n             'a8': (2.05, 2.91),\n             'a9': (1.46, 2.05),\n             'a10': (1.02, 1.46),\n             'b0': (40.55, 57.32),\n             'b1': (28.66, 40.55),\n             'b2': (20.27, 28.66),\n             'b3': (14.33, 20.27),\n             'b4': (10.11, 14.33),\n             'b5': (7.16, 10.11),\n             'b6': (5.04, 7.16),\n             'b7': (3.58, 5.04),\n             'b8': (2.51, 3.58),\n             'b9': (1.76, 2.51),\n             'b10': (1.26, 1.76)}\n\n\ndef _get_papertype(w, h):\n    for key, (pw, ph) in sorted(papersize.items(), reverse=True):\n        if key.startswith('l'):\n            continue\n        if w < pw and h < ph:\n            return key\n    return 'a0'\n\n\ndef _nums_to_str(*args, sep=\" \"):\n    return sep.join(f\"{arg:1.3f}\".rstrip(\"0\").rstrip(\".\") for arg in args)",
+                        "filename": "lib/matplotlib/backends/backend_ps.py",
+                        "start_index": 0,
+                        "end_index": 2621,
+                        "start_line": 1,
+                        "end_line": 92,
+                        "max_line": 1346,
+                        "git_instance": "github",
+                        "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'papersize' dictionary and the '_get_papertype' function which are directly related to the issue of automatic paper size selection. The sorting and selection logic in '_get_papertype' needs to be reviewed and potentially corrected."
+                },
+                {
+                    "chunk": {
+                        "code": "fixed_dpi = 72\n    filetypes = {'ps': 'Postscript',\n                 'eps': 'Encapsulated Postscript'}\n\n    def get_default_filetype(self):\n        return 'ps'\n\n    def _print_ps(\n            self, fmt, outfile, *,\n            metadata=None, papertype=None, orientation='portrait',\n            bbox_inches_restore=None, **kwargs):\n\n        dpi = self.figure.dpi\n        self.figure.dpi = 72  # Override the dpi kwarg\n\n        dsc_comments = {}\n        if isinstance(outfile, (str, os.PathLike)):\n            filename = pathlib.Path(outfile).name\n            dsc_comments[\"Title\"] = \\\n                filename.encode(\"ascii\", \"replace\").decode(\"ascii\")\n        dsc_comments[\"Creator\"] = (metadata or {}).get(\n            \"Creator\",\n            f\"Matplotlib v{mpl.__version__}, https://matplotlib.org/\")\n        # See https://reproducible-builds.org/specs/source-date-epoch/\n        source_date_epoch = os.getenv(\"SOURCE_DATE_EPOCH\")\n        dsc_comments[\"CreationDate\"] = (\n            datetime.datetime.fromtimestamp(\n                int(source_date_epoch),\n                datetime.timezone.utc).strftime(\"%a %b %d %H:%M:%S %Y\")\n            if source_date_epoch\n            else time.ctime())\n        dsc_comments = \"\\n\".join(\n            f\"%%{k}: {v}\" for k, v in dsc_comments.items())\n\n        if papertype is None:\n            papertype = mpl.rcParams['ps.papersize']\n        papertype = papertype.lower()\n        _api.check_in_list(['figure', 'auto', *papersize], papertype=papertype)\n\n        orientation = _api.check_getitem(\n            _Orientation, orientation=orientation.lower())\n\n        printer = (self._print_figure_tex\n                   if mpl.rcParams['text.usetex'] else\n                   self._print_figure)\n        printer(fmt, outfile, dpi=dpi, dsc_comments=dsc_comments,\n                orientation=orientation, papertype=papertype,\n                bbox_inches_restore=bbox_inches_restore, **kwargs)",
+                        "filename": "lib/matplotlib/backends/backend_ps.py",
+                        "start_index": 27430,
+                        "end_index": 29353,
+                        "start_line": 807,
+                        "end_line": 854,
+                        "max_line": 1346,
+                        "git_instance": "github",
+                        "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the '_print_ps' method where 'papertype' is determined and used. It is necessary to understand how the paper size is being set and passed to the printing function, which may need to be modified to fix the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "with TemporaryDirectory() as tmpdir:\n            tmppath = pathlib.Path(tmpdir, \"tmp.ps\")\n            tmppath.write_text(\n                f\"\"\"\\\n%!PS-Adobe-3.0 EPSF-3.0\n%%LanguageLevel: 3\n{dsc_comments}\n{get_bbox_header(bbox)[0]}\n%%EndComments\n%%BeginProlog\n/mpldict {len(_psDefs)} dict def\nmpldict begin\n{\"\".join(_psDefs)}\nend\n%%EndProlog\nmpldict begin\n{_nums_to_str(xo, yo)} translate\n0 0 {_nums_to_str(width*72, height*72)} rectclip\n{self._pswriter.getvalue()}\nend\nshowpage\n\"\"\",\n                encoding=\"latin-1\")\n\n            if orientation is _Orientation.landscape:  # now, ready to rotate\n                width, height = height, width\n                bbox = (lly, llx, ury, urx)\n\n            # set the paper size to the figure size if is_eps. The\n            # resulting ps file has the given size with correct bounding\n            # box so that there is no need to call 'pstoeps'\n            if is_eps or papertype == 'figure':\n                paper_width, paper_height = orientation.swap_if_landscape(\n                    self.figure.get_size_inches())\n            else:\n                if papertype == 'auto':\n                    _api.warn_deprecated(\"3.8\", name=\"papertype='auto'\",\n                                         addendum=\"Pass an explicit paper type, or \"\n                                         \"omit the *papertype* argument entirely.\")\n                    papertype = _get_papertype(width, height)\n                paper_width, paper_height = papersize[papertype]\n\n            psfrag_rotated = _convert_psfrags(\n                tmppath, ps_renderer.psfrag, paper_width, paper_height,\n                orientation.name)\n\n            if (mpl.rcParams['ps.usedistiller'] == 'ghostscript'\n                    or mpl.rcParams['text.usetex']):\n                _try_distill(gs_distill,\n                             tmppath, is_eps, ptype=papertype, bbox=bbox,\n                             rotated=psfrag_rotated)\n            elif mpl.rcParams['ps.usedistiller'] == 'xpdf':\n                _try_distill(xpdf_distill,\n                             tmppath, is_eps, ptype=papertype, bbox=bbox,\n                             rotated=psfrag_rotated)\n\n            _move_path_to_path_or_stream(tmppath, outfile)",
+                        "filename": "lib/matplotlib/backends/backend_ps.py",
+                        "start_index": 36196,
+                        "end_index": 38415,
+                        "start_line": 215,
+                        "end_line": 1081,
+                        "max_line": 1346,
+                        "git_instance": "github",
+                        "repo_name": "testbed/matplotlib__matplotlib__3.7",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the use of '_get_papertype' to determine 'papertype' when it is set to 'auto'. It is relevant because it shows the context in which the paper size selection is applied and may need to be changed as part of the fix."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `_get_papertype` function to sort the `papersize` dictionary based on the dimensions (area) of the paper sizes rather than their names.\n- Remove the conditional check that skips paper sizes starting with 'l'.\n\n```python\ndef _get_papertype(w, h):\n    sorted_papers = sorted(papersize.items(), key=lambda item: item[1][0] * item[1][1])\n    for key, (pw, ph) in sorted_papers:\n        if w <= pw and h <= ph:\n            return key\n    return 'a0'\n```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT. It suggests modifying the '_get_papertype' function to sort the 'papersize' dictionary based on the area of the paper sizes, which is a logical approach to fixing the sorting issue that was causing incorrect paper size selection. Additionally, the RESPONSE recommends removing the conditional check that skips paper sizes starting with 'l', which is a valid suggestion as the PROMPT indicates that the sorting by name is the root of the problem. The provided code snippet is a direct and relevant fix to the described bug. The RESPONSE also includes references to specific code snippets in the repository that should be reviewed and potentially corrected, which is helpful for locating the relevant sections of code that may need to be modified. This demonstrates a comprehensive understanding of the issue and provides a practical solution.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711696596.997733,
+        "result": "- Modify the `_get_papertype` function to sort the `papersize` dictionary based on the dimensions (area) of the paper sizes rather than their names.\n- Remove the conditional check that skips paper sizes starting with 'l'.\n\n```python\ndef _get_papertype(w, h):\n    sorted_papers = sorted(papersize.items(), key=lambda item: item[1][0] * item[1][1])\n    for key, (pw, ph) in sorted_papers:\n        if w <= pw and h <= ph:\n            return key\n    return 'a0'\n```\n\n### Code snippets to check\n\n-  \u2192 [lib](https://github.com/testbed/matplotlib__matplotlib__3.7/tree//lib) \u2192 [matplotlib](https://github.com/testbed/matplotlib__matplotlib__3.7/tree//lib/matplotlib) \u2192 [backends](https://github.com/testbed/matplotlib__matplotlib__3.7/tree//lib/matplotlib/backends)- [Lines 1 - 92](https://github.com/testbed/matplotlib__matplotlib__3.7/blob//lib/matplotlib/backends/backend_ps.py#L1-L92)\n\n This snippet contains the 'papersize' dictionary and the '_get_papertype' function which are directly related to the issue of automatic paper size selection. The sorting and selection logic in '_get_papertype' needs to be reviewed and potentially corrected. \n\n\n   - [Lines 807 - 854](https://github.com/testbed/matplotlib__matplotlib__3.7/blob//lib/matplotlib/backends/backend_ps.py#L807-L854)\n\n This snippet includes the '_print_ps' method where 'papertype' is determined and used. It is necessary to understand how the paper size is being set and passed to the printing function, which may need to be modified to fix the issue. \n\n\n   - [Lines 215 - 1081](https://github.com/testbed/matplotlib__matplotlib__3.7/blob//lib/matplotlib/backends/backend_ps.py#L215-L1081)\n\n This snippet shows the use of '_get_papertype' to determine 'papertype' when it is set to 'auto'. It is relevant because it shows the context in which the paper size selection is applied and may need to be changed as part of the fix."
+    }
+}

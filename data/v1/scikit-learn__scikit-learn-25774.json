@@ -1,0 +1,189 @@
+{
+    "id": "scikit-learn__scikit-learn-25774",
+    "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+    "task_id": 776092412729608754,
+    "title": "FIX ignore nan values in partial dependence computation",
+    "body": "closes #25401 \r\n\r\nThis PR implements the default behaviour suggested in https://github.com/scikit-learn/scikit-learn/issues/25401#issuecomment-1383989717 that is ignoring `nan` values in both numerical and categorical features.\r\n\r\nUp to now, there is a bug since the computation of the percentile is impacted by the `nan` values for numerical features. In addition, introducing `nan` in the grid will potentially introduce a bias in the partial dependence computation depending on how missing values are handled in the model. Therefore, it is safe to remove them.\r\n\r\nTo be consistent, then it is also safe to not include it as a category in the categorical features. In the future, we can think of adding an option to define the expected behaviour.\r\n\r\nI expect this PR to fail because we use `nanpercentile` instead of `mquantile` that does not use the same interpolation to compute the quantiles.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/scikit-learn__scikit-learn__1.3.git",
+    "requested_commit": "",
+    "mayil_response": "- Replace the use of `nanpercentile` with `mquantiles` from `scipy.stats.mstats`, which can handle `nan` values appropriately.\n- Ensure that `nan` values are filtered out before computing the percentiles if `mquantiles` does not meet the requirements.\n- Modify the `PartialDependenceDisplay` class or the function that computes the partial dependence to use `mquantiles` instead of `nanpercentile`.\n- Update the code where the percentile computation is affected by `nan` values, likely in the `for fxs, cats in zip(features, is_categorical):` loop where `deciles` are computed.\n- If `mquantiles` is not directly compatible, consider using `np.nanpercentile` after filtering out `nan` values from the feature columns.\n- Ensure that the handling of `nan` values is consistent for both numerical and categorical features during the partial dependence computation.\n- Test the changes to verify that the issue with `nan` values affecting the percentile computation is resolved.\n\n### Code snippets to check\n\n-  \u2192 [sklearn](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn) \u2192 [inspection](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn/inspection) \u2192 [_plot](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn/inspection/_plot)- [Lines 605 - 680](https://github.com/testbed/scikit-learn__scikit-learn__1.3/blob//sklearn/inspection/_plot/partial_dependence.py#L605-L680)\n\n This snippet is relevant because it deals with the handling of categorical features in partial dependence plots, which is directly related to the issue of ignoring `nan` values in both numerical and categorical features. \n\n\n   - [Lines 741 - 1471](https://github.com/testbed/scikit-learn__scikit-learn__1.3/blob//sklearn/inspection/_plot/partial_dependence.py#L741-L1471)\n\n This snippet is relevant as it mentions the use of `mquantiles` which is brought up in the issue description. It is likely that changes will need to be made here to handle `nan` values appropriately.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003495,
+        "snippet_processor": 0.04503,
+        "issue_star_creation": 0.0381,
+        "issue_star_solver": 0.06981000000000001,
+        "bouncer": 0.02748
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711737893.086266,
+        "relevant_snippets": [
+            {
+                "code": "categorical_features = np.array(categorical_features, copy=False)\n            if categorical_features.dtype.kind == \"b\":\n                # categorical features provided as a list of boolean\n                if categorical_features.size != n_features:\n                    raise ValueError(\n                        \"When `categorical_features` is a boolean array-like, \"\n                        \"the array should be of shape (n_features,). Got \"\n                        f\"{categorical_features.size} elements while `X` contains \"\n                        f\"{n_features} features.\"\n                    )\n                is_categorical = [\n                    tuple(categorical_features[fx] for fx in fxs) for fxs in features\n                ]\n            elif categorical_features.dtype.kind in (\"i\", \"O\", \"U\"):\n                # categorical features provided as a list of indices or feature names\n                categorical_features_idx = [\n                    _get_feature_index(cat, feature_names=feature_names)\n                    for cat in categorical_features\n                ]\n                is_categorical = [\n                    tuple([idx in categorical_features_idx for idx in fxs])\n                    for fxs in features\n                ]\n            else:\n                raise ValueError(\n                    \"Expected `categorical_features` to be an array-like of boolean,\"\n                    f\" integer, or string. Got {categorical_features.dtype} instead.\"\n                )\n\n            for cats in is_categorical:\n                if np.size(cats) == 2 and (cats[0] != cats[1]):\n                    raise ValueError(\n                        \"Two-way partial dependence plots are not supported for pairs\"\n                        \" of continuous and categorical features.\"\n                    )\n\n            # collect the indices of the categorical features targeted by the partial\n            # dependence computation\n            categorical_features_targeted = set(\n                [\n                    fx\n                    for fxs, cats in zip(features, is_categorical)\n                    for fx in fxs\n                    if any(cats)\n                ]\n            )\n            if categorical_features_targeted:\n                min_n_cats = min(\n                    [\n                        len(_unique(_safe_indexing(X, idx, axis=1)))\n                        for idx in categorical_features_targeted\n                    ]\n                )\n                if grid_resolution < min_n_cats:\n                    raise ValueError(\n                        \"The resolution of the computed grid is less than the \"\n                        \"minimum number of categories in the targeted categorical \"\n                        \"features. Expect the `grid_resolution` to be greater than \"\n                        f\"{min_n_cats}. Got {grid_resolution} instead.\"\n                    )",
+                "filename": "sklearn/inspection/_plot/partial_dependence.py",
+                "start_index": 26606,
+                "end_index": 29502,
+                "start_line": 605,
+                "end_line": 680,
+                "max_line": 1473,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"Univariate features selection.\"\"\"\n\n# Authors: V. Michel, B. Thirion, G. Varoquaux, A. Gramfort, E. Duchesnay.\n#          L. Buitinck, A. Joly\n# License: BSD 3 clause\n\n\nimport warnings\nfrom numbers import Integral, Real\n\nimport numpy as np\nfrom scipy import special, stats\nfrom scipy.sparse import issparse\n\nfrom ..base import BaseEstimator, _fit_context\nfrom ..preprocessing import LabelBinarizer\nfrom ..utils import as_float_array, check_array, check_X_y, safe_mask, safe_sqr\nfrom ..utils._param_validation import Interval, StrOptions, validate_params\nfrom ..utils.extmath import row_norms, safe_sparse_dot\nfrom ..utils.validation import check_is_fitted\nfrom ._base import SelectorMixin\n\n\ndef _clean_nans(scores):\n    \"\"\"\n    Fixes Issue #1240: NaNs can't be properly compared, so change them to the\n    smallest value of scores's dtype. -inf seems to be unreliable.\n    \"\"\"\n    # XXX where should this function be called? fit? scoring functions\n    # themselves?\n    scores = as_float_array(scores, copy=True)\n    scores[np.isnan(scores)] = np.finfo(scores.dtype).min\n    return scores\n\n\n######################################################################\n# Scoring functions\n\n\n# The following function is a rewriting of scipy.stats.f_oneway\n# Contrary to the scipy.stats.f_oneway implementation it does not\n# copy the data while keeping the inputs unchanged.",
+                "filename": "sklearn/feature_selection/_univariate_selection.py",
+                "start_index": 0,
+                "end_index": 1367,
+                "start_line": 1,
+                "end_line": 42,
+                "max_line": 1084,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            },
+            {
+                "code": "# Authors: Nicolas Tresegnie <nicolas.tresegnie@gmail.com>\n#          Sergey Feldman <sergeyfeldman@gmail.com>\n# License: BSD 3 clause\n\nimport numbers\nimport warnings\nfrom collections import Counter\n\nimport numpy as np\nimport numpy.ma as ma\nfrom scipy import sparse as sp\n\nfrom ..base import BaseEstimator, TransformerMixin, _fit_context\nfrom ..utils import _is_pandas_na, is_scalar_nan\nfrom ..utils._mask import _get_mask\nfrom ..utils._param_validation import MissingValues, StrOptions\nfrom ..utils.fixes import _mode\nfrom ..utils.sparsefuncs import _get_median\nfrom ..utils.validation import FLOAT_DTYPES, _check_feature_names_in, check_is_fitted\n\n\ndef _check_inputs_dtype(X, missing_values):\n    if _is_pandas_na(missing_values):\n        # Allow using `pd.NA` as missing values to impute numerical arrays.\n        return\n    if X.dtype.kind in (\"f\", \"i\", \"u\") and not isinstance(missing_values, numbers.Real):\n        raise ValueError(\n            \"'X' and 'missing_values' types are expected to be\"\n            \" both numerical. Got X.dtype={} and \"\n            \" type(missing_values)={}.\".format(X.dtype, type(missing_values))\n        )\n\n\ndef _most_frequent(array, extra_value, n_repeat):\n    \"\"\"Compute the most frequent value in a 1d array extended with\n    [extra_value] * n_repeat, where extra_value is assumed to be not part\n    of the array.\"\"\"\n    # Compute the most frequent value in array only\n    if array.size > 0:\n        if array.dtype == object:\n            # scipy.stats.mode is slow with object dtype array.\n            # Python Counter is more efficient\n            counter = Counter(array)\n            most_frequent_count = counter.most_common(1)[0][1]\n            # tie breaking similarly to scipy.stats.mode\n            most_frequent_value = min(\n                value\n                for value, count in counter.items()\n                if count == most_frequent_count\n            )\n        else:\n            mode = _mode(array)\n            most_frequent_value = mode[0][0]\n            most_frequent_count = mode[1][0]\n    else:\n        most_frequent_value = 0\n        most_frequent_count = 0\n\n    # Compare to array + [extra_value] * n_repeat\n    if most_frequent_count == 0 and n_repeat == 0:\n        return np.nan\n    elif most_frequent_count < n_repeat:\n        return extra_value\n    elif most_frequent_count > n_repeat:\n        return most_frequent_value\n    elif most_frequent_count == n_repeat:\n        # tie breaking similarly to scipy.stats.mode\n        return min(most_frequent_value, extra_value)",
+                "filename": "sklearn/impute/_base.py",
+                "start_index": 0,
+                "end_index": 2533,
+                "start_line": 1,
+                "end_line": 68,
+                "max_line": 1053,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            },
+            {
+                "code": "# Authors: Ashim Bhattarai <ashimb9@gmail.com>\n#          Thomas J Fan <thomasjpfan@gmail.com>\n# License: BSD 3 clause\n\nfrom numbers import Integral\n\nimport numpy as np\n\nfrom ..base import _fit_context\nfrom ..metrics import pairwise_distances_chunked\nfrom ..metrics.pairwise import _NAN_METRICS\nfrom ..neighbors._base import _get_weights\nfrom ..utils import is_scalar_nan\nfrom ..utils._mask import _get_mask\nfrom ..utils._param_validation import Hidden, Interval, StrOptions\nfrom ..utils.validation import FLOAT_DTYPES, _check_feature_names_in, check_is_fitted\nfrom ._base import _BaseImputer",
+                "filename": "sklearn/impute/_knn.py",
+                "start_index": 0,
+                "end_index": 592,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 392,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            },
+            {
+                "code": "@ignore_warnings(category=FutureWarning)\ndef check_estimators_partial_fit_n_features(name, estimator_orig):\n    # check if number of features changes between calls to partial_fit.\n    if not hasattr(estimator_orig, \"partial_fit\"):\n        return\n    estimator = clone(estimator_orig)\n    X, y = make_blobs(n_samples=50, random_state=1)\n    X = _enforce_estimator_tags_X(estimator_orig, X)\n    y = _enforce_estimator_tags_y(estimator_orig, y)\n\n    try:\n        if is_classifier(estimator):\n            classes = np.unique(y)\n            estimator.partial_fit(X, y, classes=classes)\n        else:\n            estimator.partial_fit(X, y)\n    except NotImplementedError:\n        return\n\n    with raises(\n        ValueError,\n        err_msg=(\n            f\"The estimator {name} does not raise an error when the \"\n            \"number of features changes between calls to partial_fit.\"\n        ),\n    ):\n        estimator.partial_fit(X[:, :-1], y)",
+                "filename": "sklearn/utils/estimator_checks.py",
+                "start_index": 72345,
+                "end_index": 73285,
+                "start_line": 181,
+                "end_line": 2142,
+                "max_line": 4639,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            },
+            {
+                "code": "def _get_support_mask(self):\n        check_is_fitted(self)\n\n        # Cater for NaNs\n        if self.percentile == 100:\n            return np.ones(len(self.scores_), dtype=bool)\n        elif self.percentile == 0:\n            return np.zeros(len(self.scores_), dtype=bool)\n\n        scores = _clean_nans(self.scores_)\n        threshold = np.percentile(scores, 100 - self.percentile)\n        mask = scores > threshold\n        ties = np.where(scores == threshold)[0]\n        if len(ties):\n            max_feats = int(len(scores) * self.percentile / 100)\n            kept_ties = ties[: max_feats - mask.sum()]\n            mask[kept_ties] = True\n        return mask",
+                "filename": "sklearn/feature_selection/_univariate_selection.py",
+                "start_index": 20864,
+                "end_index": 21523,
+                "start_line": 602,
+                "end_line": 722,
+                "max_line": 1084,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            },
+            {
+                "code": "def evaluate_model_and_store(name, pipe):\n    result = cross_validate(\n        pipe,\n        X,\n        y,\n        scoring=\"neg_root_mean_squared_error\",\n        cv=n_cv_folds,\n        return_train_score=True,\n    )\n    rmse_test_score = -result[\"test_score\"]\n    rmse_train_score = -result[\"train_score\"]\n    results.append(\n        {\n            \"preprocessor\": name,\n            \"rmse_test_mean\": rmse_test_score.mean(),\n            \"rmse_test_std\": rmse_train_score.std(),\n            \"rmse_train_mean\": rmse_train_score.mean(),\n            \"rmse_train_std\": rmse_train_score.std(),\n        }\n    )\n\n\nfor name, categorical_preprocessor in categorical_preprocessors:\n    preprocessor = ColumnTransformer(\n        [\n            (\"numerical\", \"passthrough\", numerical_features),\n            (\"categorical\", categorical_preprocessor, categorical_features),\n        ]\n    )\n    pipe = make_pipeline(\n        preprocessor, HistGradientBoostingRegressor(random_state=0, max_iter=max_iter)\n    )\n    evaluate_model_and_store(name, pipe)\n\n\n# %%\n# Native Categorical Feature Support\n# ==================================\n# In this section, we build and evaluate a pipeline that uses native categorical\n# feature support in :class:`~sklearn.ensemble.HistGradientBoostingRegressor`,\n# which only supports up to 255 unique categories. In our dataset, the most of\n# the categorical features have more than 255 unique categories:\nn_unique_categories = df[categorical_features].nunique().sort_values(ascending=False)\nn_unique_categories\n\n# %%\n# To workaround the limitation above, we group the categorical features into\n# low cardinality and high cardinality features. The high cardinality features\n# will be target encoded and the low cardinality features will use the native\n# categorical feature in gradient boosting.\nhigh_cardinality_features = n_unique_categories[n_unique_categories > 255].index\nlow_cardinality_features = n_unique_categories[n_unique_categories <= 255].index\nmixed_encoded_preprocessor = ColumnTransformer(\n    [\n        (\"numerical\", \"passthrough\", numerical_features),\n        (\n            \"high_cardinality\",\n            TargetEncoder(target_type=\"continuous\"),\n            high_cardinality_features,\n        ),\n        (\n            \"low_cardinality\",\n            OrdinalEncoder(handle_unknown=\"use_encoded_value\", unknown_value=-1),\n            low_cardinality_features,\n        ),\n    ],\n    verbose_feature_names_out=False,\n)\n\n# The output of the of the preprocessor must be set to pandas so the\n# gradient boosting model can detect the low cardinality features.\nmixed_encoded_preprocessor.set_output(transform=\"pandas\")\nmixed_pipe = make_pipeline(\n    mixed_encoded_preprocessor,\n    HistGradientBoostingRegressor(\n        random_state=0, max_iter=max_iter, categorical_features=low_cardinality_features\n    ),\n)\nmixed_pipe\n\n# %%\n# Finally, we evaluate the pipeline using cross validation and record the results:\nevaluate_model_and_store(\"mixed_target\", mixed_pipe)\n\n# %%",
+                "filename": "examples/preprocessing/plot_target_encoder.py",
+                "start_index": 2501,
+                "end_index": 5492,
+                "start_line": 81,
+                "end_line": 201,
+                "max_line": 225,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            },
+            {
+                "code": "for fxs, cats in zip(features, is_categorical):\n            for fx, cat in zip(fxs, cats):\n                if not cat and fx not in deciles:\n                    X_col = _safe_indexing(X, fx, axis=1)\n                    deciles[fx] = mquantiles(X_col, prob=np.arange(0.1, 1.0, 0.1))\n\n        display = PartialDependenceDisplay(\n            pd_results=pd_results,\n            features=features,\n            feature_names=feature_names,\n            target_idx=target_idx,\n            deciles=deciles,\n            kind=kind,\n            subsample=subsample,\n            random_state=random_state,\n            is_categorical=is_categorical,\n        )\n        return display.plot(\n            ax=ax,\n            n_cols=n_cols,\n            line_kw=line_kw,\n            ice_lines_kw=ice_lines_kw,\n            pd_line_kw=pd_line_kw,\n            contour_kw=contour_kw,\n            centered=centered,\n        )",
+                "filename": "sklearn/inspection/_plot/partial_dependence.py",
+                "start_index": 32641,
+                "end_index": 33540,
+                "start_line": 741,
+                "end_line": 1471,
+                "max_line": 1473,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            },
+            {
+                "code": "@ignore_warnings(category=FutureWarning)\ndef check_estimators_empty_data_messages(name, estimator_orig):\n    e = clone(estimator_orig)\n    set_random_state(e, 1)\n\n    X_zero_samples = np.empty(0).reshape(0, 3)\n    # The precise message can change depending on whether X or y is\n    # validated first. Let us test the type of exception only:\n    err_msg = (\n        f\"The estimator {name} does not raise a ValueError when an \"\n        \"empty data is used to train. Perhaps use check_array in train.\"\n    )\n    with raises(ValueError, err_msg=err_msg):\n        e.fit(X_zero_samples, [])\n\n    X_zero_features = np.empty(0).reshape(12, 0)\n    # the following y should be accepted by both classifiers and regressors\n    # and ignored by unsupervised models\n    y = _enforce_estimator_tags_y(e, np.array([1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]))\n    msg = r\"0 feature\\(s\\) \\(shape=\\(\\d*, 0\\)\\) while a minimum of \\d* \" \"is required.\"\n    with raises(ValueError, match=msg):\n        e.fit(X_zero_features, y)\n\n\n@ignore_warnings(category=FutureWarning)\ndef check_estimators_nan_inf(name, estimator_orig):\n    # Checks that Estimator X's do not contain NaN or inf.\n    rnd = np.random.RandomState(0)\n    X_train_finite = _enforce_estimator_tags_X(\n        estimator_orig, rnd.uniform(size=(10, 3))\n    )\n    X_train_nan = rnd.uniform(size=(10, 3))\n    X_train_nan[0, 0] = np.nan\n    X_train_inf = rnd.uniform(size=(10, 3))\n    X_train_inf[0, 0] = np.inf\n    y = np.ones(10)\n    y[:5] = 0\n    y = _enforce_estimator_tags_y(estimator_orig, y)\n    error_string_fit = f\"Estimator {name} doesn't check for NaN and inf in fit.\"\n    error_string_predict = f\"Estimator {name} doesn't check for NaN and inf in predict.\"\n    error_string_transform = (\n        f\"Estimator {name} doesn't check for NaN and inf in transform.\"\n    )\n    for X_train in [X_train_nan, X_train_inf]:\n        # catch deprecation warnings\n        with ignore_warnings(category=FutureWarning):\n            estimator = clone(estimator_orig)\n            set_random_state(estimator, 1)\n            # try to fit\n            with raises(ValueError, match=[\"inf\", \"NaN\"], err_msg=error_string_fit):\n                estimator.fit(X_train, y)\n            # actually fit\n            estimator.fit(X_train_finite, y)\n\n            # predict\n            if hasattr(estimator, \"predict\"):\n                with raises(\n                    ValueError,\n                    match=[\"inf\", \"NaN\"],\n                    err_msg=error_string_predict,\n                ):\n                    estimator.predict(X_train)\n\n            # transform\n            if hasattr(estimator, \"transform\"):\n                with raises(\n                    ValueError,\n                    match=[\"inf\", \"NaN\"],\n                    err_msg=error_string_transform,\n                ):\n                    estimator.transform(X_train)",
+                "filename": "sklearn/utils/estimator_checks.py",
+                "start_index": 67270,
+                "end_index": 70112,
+                "start_line": 181,
+                "end_line": 2043,
+                "max_line": 4639,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            },
+            {
+                "code": "# scales and forgetting to preprocess the numeric feature would lead to a very\n# poor model.\n#\n# It would be possible to get even higher predictive performance with a larger\n# neural network but the training would also be significantly more expensive.\n#\n# Note that it is important to check that the model is accurate enough on a\n# test set before plotting the partial dependence since there would be little\n# use in explaining the impact of a given feature on the prediction function of\n# a model with poor predictive performance. In this regard, our MLP model works\n# reasonably well.\n#\n# We will plot the averaged partial dependence.\nimport matplotlib.pyplot as plt\n\nfrom sklearn.inspection import PartialDependenceDisplay\n\ncommon_params = {\n    \"subsample\": 50,\n    \"n_jobs\": 2,\n    \"grid_resolution\": 20,\n    \"random_state\": 0,\n}\n\nprint(\"Computing partial dependence plots...\")\nfeatures_info = {\n    # features of interest\n    \"features\": [\"temp\", \"humidity\", \"windspeed\", \"season\", \"weather\", \"hour\"],\n    # type of partial dependence plot\n    \"kind\": \"average\",\n    # information regarding categorical features\n    \"categorical_features\": categorical_features,\n}\ntic = time()\n_, ax = plt.subplots(ncols=3, nrows=2, figsize=(9, 8), constrained_layout=True)\ndisplay = PartialDependenceDisplay.from_estimator(\n    mlp_model,\n    X_train,\n    **features_info,\n    ax=ax,\n    **common_params,\n)\nprint(f\"done in {time() - tic:.3f}s\")\n_ = display.figure_.suptitle(\n    (\n        \"Partial dependence of the number of bike rentals\\n\"\n        \"for the bike rental dataset with an MLPRegressor\"\n    ),\n    fontsize=16,\n)\n\n# %%\n# Gradient boosting\n# ~~~~~~~~~~~~~~~~~\n#\n# Let's now fit a :class:`~sklearn.ensemble.HistGradientBoostingRegressor` and\n# compute the partial dependence on the same features. We also use the\n# specific preprocessor we created for this model.\nfrom sklearn.ensemble import HistGradientBoostingRegressor\n\nprint(\"Training HistGradientBoostingRegressor...\")\ntic = time()\nhgbdt_model = make_pipeline(\n    hgbdt_preprocessor,\n    HistGradientBoostingRegressor(\n        categorical_features=categorical_features,\n        random_state=0,\n        max_iter=50,\n    ),\n)\nhgbdt_model.fit(X_train, y_train)\nprint(f\"done in {time() - tic:.3f}s\")\nprint(f\"Test R2 score: {hgbdt_model.score(X_test, y_test):.2f}\")\n\n# %%\n# Here, we used the default hyperparameters for the gradient boosting model\n# without any preprocessing as tree-based models are naturally robust to\n# monotonic transformations of numerical features.\n#\n# Note that on this tabular dataset, Gradient Boosting Machines are both\n# significantly faster to train and more accurate than neural networks. It is\n# also significantly cheaper to tune their hyperparameters (the defaults tend\n# to work well while this is not often the case for neural networks).\n#\n# We will plot the partial dependence for some of the numerical and categorical\n# features.\nprint(\"Computing partial dependence plots...\")\ntic = time()",
+                "filename": "examples/inspection/plot_partial_dependence.py",
+                "start_index": 8897,
+                "end_index": 11877,
+                "start_line": 232,
+                "end_line": 514,
+                "max_line": 564,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "sklearn/inspection/_plot/partial_dependence.py": [
+                {
+                    "chunk": {
+                        "code": "categorical_features = np.array(categorical_features, copy=False)\n            if categorical_features.dtype.kind == \"b\":\n                # categorical features provided as a list of boolean\n                if categorical_features.size != n_features:\n                    raise ValueError(\n                        \"When `categorical_features` is a boolean array-like, \"\n                        \"the array should be of shape (n_features,). Got \"\n                        f\"{categorical_features.size} elements while `X` contains \"\n                        f\"{n_features} features.\"\n                    )\n                is_categorical = [\n                    tuple(categorical_features[fx] for fx in fxs) for fxs in features\n                ]\n            elif categorical_features.dtype.kind in (\"i\", \"O\", \"U\"):\n                # categorical features provided as a list of indices or feature names\n                categorical_features_idx = [\n                    _get_feature_index(cat, feature_names=feature_names)\n                    for cat in categorical_features\n                ]\n                is_categorical = [\n                    tuple([idx in categorical_features_idx for idx in fxs])\n                    for fxs in features\n                ]\n            else:\n                raise ValueError(\n                    \"Expected `categorical_features` to be an array-like of boolean,\"\n                    f\" integer, or string. Got {categorical_features.dtype} instead.\"\n                )\n\n            for cats in is_categorical:\n                if np.size(cats) == 2 and (cats[0] != cats[1]):\n                    raise ValueError(\n                        \"Two-way partial dependence plots are not supported for pairs\"\n                        \" of continuous and categorical features.\"\n                    )\n\n            # collect the indices of the categorical features targeted by the partial\n            # dependence computation\n            categorical_features_targeted = set(\n                [\n                    fx\n                    for fxs, cats in zip(features, is_categorical)\n                    for fx in fxs\n                    if any(cats)\n                ]\n            )\n            if categorical_features_targeted:\n                min_n_cats = min(\n                    [\n                        len(_unique(_safe_indexing(X, idx, axis=1)))\n                        for idx in categorical_features_targeted\n                    ]\n                )\n                if grid_resolution < min_n_cats:\n                    raise ValueError(\n                        \"The resolution of the computed grid is less than the \"\n                        \"minimum number of categories in the targeted categorical \"\n                        \"features. Expect the `grid_resolution` to be greater than \"\n                        f\"{min_n_cats}. Got {grid_resolution} instead.\"\n                    )",
+                        "filename": "sklearn/inspection/_plot/partial_dependence.py",
+                        "start_index": 26606,
+                        "end_index": 29502,
+                        "start_line": 605,
+                        "end_line": 680,
+                        "max_line": 1473,
+                        "git_instance": "github",
+                        "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is relevant because it deals with the handling of categorical features in partial dependence plots, which is directly related to the issue of ignoring `nan` values in both numerical and categorical features."
+                },
+                {
+                    "chunk": {
+                        "code": "for fxs, cats in zip(features, is_categorical):\n            for fx, cat in zip(fxs, cats):\n                if not cat and fx not in deciles:\n                    X_col = _safe_indexing(X, fx, axis=1)\n                    deciles[fx] = mquantiles(X_col, prob=np.arange(0.1, 1.0, 0.1))\n\n        display = PartialDependenceDisplay(\n            pd_results=pd_results,\n            features=features,\n            feature_names=feature_names,\n            target_idx=target_idx,\n            deciles=deciles,\n            kind=kind,\n            subsample=subsample,\n            random_state=random_state,\n            is_categorical=is_categorical,\n        )\n        return display.plot(\n            ax=ax,\n            n_cols=n_cols,\n            line_kw=line_kw,\n            ice_lines_kw=ice_lines_kw,\n            pd_line_kw=pd_line_kw,\n            contour_kw=contour_kw,\n            centered=centered,\n        )",
+                        "filename": "sklearn/inspection/_plot/partial_dependence.py",
+                        "start_index": 32641,
+                        "end_index": 33540,
+                        "start_line": 741,
+                        "end_line": 1471,
+                        "max_line": 1473,
+                        "git_instance": "github",
+                        "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is relevant as it mentions the use of `mquantiles` which is brought up in the issue description. It is likely that changes will need to be made here to handle `nan` values appropriately."
+                }
+            ]
+        },
+        "solution_task": "- Replace the use of `nanpercentile` with `mquantiles` from `scipy.stats.mstats`, which can handle `nan` values appropriately.\n- Ensure that `nan` values are filtered out before computing the percentiles if `mquantiles` does not meet the requirements.\n- Modify the `PartialDependenceDisplay` class or the function that computes the partial dependence to use `mquantiles` instead of `nanpercentile`.\n- Update the code where the percentile computation is affected by `nan` values, likely in the `for fxs, cats in zip(features, is_categorical):` loop where `deciles` are computed.\n- If `mquantiles` is not directly compatible, consider using `np.nanpercentile` after filtering out `nan` values from the feature columns.\n- Ensure that the handling of `nan` values is consistent for both numerical and categorical features during the partial dependence computation.\n- Test the changes to verify that the issue with `nan` values affecting the percentile computation is resolved.",
+        "bouncer_response": {
+            "score": 8,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a series of actionable steps that are directly related to the issue described in the PROMPT. It suggests replacing `nanpercentile` with `mquantiles` from `scipy.stats.mstats` to handle `nan` values, which is a specific and relevant solution. It also advises filtering out `nan` values before computing percentiles and updating the code where necessary, particularly in the loop where `deciles` are computed. The RESPONSE further recommends ensuring consistency in handling `nan` values for both numerical and categorical features and testing the changes to verify the resolution of the issue. The inclusion of code snippets to check adds value by pointing to the exact locations in the codebase where changes might be needed. The RESPONSE does not address all aspects of the PROMPT, such as the potential need for an option to define expected behavior in the future, which prevents it from scoring a 10.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711738092.940338,
+        "result": "- Replace the use of `nanpercentile` with `mquantiles` from `scipy.stats.mstats`, which can handle `nan` values appropriately.\n- Ensure that `nan` values are filtered out before computing the percentiles if `mquantiles` does not meet the requirements.\n- Modify the `PartialDependenceDisplay` class or the function that computes the partial dependence to use `mquantiles` instead of `nanpercentile`.\n- Update the code where the percentile computation is affected by `nan` values, likely in the `for fxs, cats in zip(features, is_categorical):` loop where `deciles` are computed.\n- If `mquantiles` is not directly compatible, consider using `np.nanpercentile` after filtering out `nan` values from the feature columns.\n- Ensure that the handling of `nan` values is consistent for both numerical and categorical features during the partial dependence computation.\n- Test the changes to verify that the issue with `nan` values affecting the percentile computation is resolved.\n\n### Code snippets to check\n\n-  \u2192 [sklearn](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn) \u2192 [inspection](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn/inspection) \u2192 [_plot](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn/inspection/_plot)- [Lines 605 - 680](https://github.com/testbed/scikit-learn__scikit-learn__1.3/blob//sklearn/inspection/_plot/partial_dependence.py#L605-L680)\n\n This snippet is relevant because it deals with the handling of categorical features in partial dependence plots, which is directly related to the issue of ignoring `nan` values in both numerical and categorical features. \n\n\n   - [Lines 741 - 1471](https://github.com/testbed/scikit-learn__scikit-learn__1.3/blob//sklearn/inspection/_plot/partial_dependence.py#L741-L1471)\n\n This snippet is relevant as it mentions the use of `mquantiles` which is brought up in the issue description. It is likely that changes will need to be made here to handle `nan` values appropriately."
+    }
+}

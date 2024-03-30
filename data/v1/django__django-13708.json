@@ -1,0 +1,204 @@
+{
+    "id": "django__django-13708",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 7970503657303265753,
+    "title": "Add a 'durable' flag to transaction.atomic()",
+    "body": "Description\n\t\nAs discussed \u200bon Twitter following \u200bDavid Seddon's blog post.\ntransaction.atomic() guarantees the wrapped database operations is *atomic* - at the end of its wrapped block, operations within that block will all be applied, or all rolled back. In some situations it's also useful to guarantee that the wrapped operations are *durable* - at the end of the wrapped block, all operations have definitely been committed. atomic() doesn't guarantee this at the moment since its use may be wrapped by *another* atomic() higher in the stack, delaying the commit.\nDavid Seddon's technique to guarantee durability is to wrap atomic() to first check if an atomic() is already active for the current connection (in other words, connection.get_autocommit() returns False), and raise an error if so.\nOn Twitter, Ian Foote suggested adding a durable flag to atomic() to add this behaviour to Django, to which Aymeric Augustin said it sounds like a good idea.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "To implement the requested feature, you will need to modify the `Atomic` class and the `atomic` function in the `django/db/transaction.py` file to support the `durable` flag. Here's how you can do it:\n\n- Modify the `Atomic` class's `__init__` method to accept a `durable` parameter and store it as an instance attribute.\n- In the `Atomic` class's `__enter__` method, add a check to raise a `RuntimeError` if the `durable` flag is set and the current connection is already inside an atomic block.\n- Update the `atomic` function to accept a `durable` parameter and pass it to the `Atomic` class constructor.\n\nHere's the modified code:\n\n```python\n# In django/db/transaction.py\n\nclass Atomic:\n    def __init__(self, using, savepoint, durable=False):\n        # ... existing code ...\n        self.durable = durable\n        # ... existing code ...\n\n    def __enter__(self):\n        connection = get_connection(self.using)\n\n        # Check for durability requirement\n        if self.durable and connection.in_atomic_block:\n            raise RuntimeError(\n                \"A durable atomic block cannot be nested within another atomic block.\"\n            )\n\n        # ... existing code ...\n\n# Modify the atomic function to accept the durable parameter\ndef atomic(using=None, savepoint=True, durable=False):\n    # ... existing code ...\n    if callable(using):\n        return Atomic(DEFAULT_DB_ALIAS, savepoint, durable)(using)\n    else:\n        return Atomic(using, savepoint, durable)\n```\n\nMake sure to add appropriate unit tests to verify that the `durable` flag behaves as expected:\n\n- When `durable=True`, a `RuntimeError` should be raised if the block is nested within another atomic block.\n- When `durable=False`, the behavior should remain unchanged.\n\nRemember to update the documentation to reflect the new `durable` parameter for the `atomic` function and the `Atomic` class.\n\nThis implementation assumes that the `durable` flag's purpose is to prevent nested atomic blocks and ensure that the database operations within the block are committed immediately upon successful completion of the block. If there are additional requirements for durability that are not covered by this implementation, those would need to be addressed separately.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.2/tree//django/db)- [Lines 13 - 180](https://github.com/testbed/django__django__3.2/blob//django/db/transaction.py#L13-L180)\n\n This snippet defines the Atomic class and its __init__ method, which is where the 'durable' flag would be added as a parameter, making it directly relevant to the issue. \n\n\n   - [Lines 182 - 222](https://github.com/testbed/django__django__3.2/blob//django/db/transaction.py#L182-L222)\n\n This snippet contains the __enter__ method of the Atomic class, which is where the logic to check for an existing atomic block and raise an error if the 'durable' flag is set would be implemented. \n\n\n   - [Lines 316 - 340](https://github.com/testbed/django__django__3.2/blob//django/db/transaction.py#L316-L340)\n\n This snippet defines the atomic function, which is the public API that will be modified to accept the new 'durable' flag as an argument, making it directly relevant to the issue.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003035,
+        "snippet_processor": 0.055850000000000004,
+        "issue_star_creation": 0.02406,
+        "issue_star_solver": 0.03527,
+        "bouncer": 0.01812
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711725112.92004,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"\n    Guarantee the atomic execution of a given block.\n\n    An instance can be used either as a decorator or as a context manager.\n\n    When it's used as a decorator, __call__ wraps the execution of the\n    decorated function in the instance itself, used as a context manager.\n\n    When it's used as a context manager, __enter__ creates a transaction or a\n    savepoint, depending on whether a transaction is already in progress, and\n    __exit__ commits the transaction or releases the savepoint on normal exit,\n    and rolls back the transaction or to the savepoint on exceptions.\n\n    It's possible to disable the creation of savepoints if the goal is to\n    ensure that some code runs within a transaction without creating overhead.\n\n    A stack of savepoints identifiers is maintained as an attribute of the\n    connection. None denotes the absence of a savepoint.\n\n    This allows reentrancy even if the same AtomicWrapper is reused. For\n    example, it's possible to define `oa = atomic('other')` and use `@oa` or\n    `with oa:` multiple times.\n\n    Since database connections are thread-local, this is thread-safe.\n\n    An atomic block can be tagged as durable. In this case, raise a\n    RuntimeError if it's nested within another atomic block. This guarantees\n    that database changes in a durable block are committed to the database when\n    the block exists without error.\n\n    This is a private API.\n    \"\"\"\n\n    def __init__(self, using, savepoint, durable):\n        self.using = using\n        self.savepoint = savepoint\n        self.durable = durable\n        self._from_testcase = False",
+                "filename": "django/db/transaction.py",
+                "start_index": 3995,
+                "end_index": 5598,
+                "start_line": 13,
+                "end_line": 180,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def __enter__(self):\n        connection = get_connection(self.using)\n\n        if (\n            self.durable\n            and connection.atomic_blocks\n            and not connection.atomic_blocks[-1]._from_testcase\n        ):\n            raise RuntimeError(\n                \"A durable atomic block cannot be nested within another \"\n                \"atomic block.\"\n            )\n        if not connection.in_atomic_block:\n            # Reset state when entering an outermost atomic block.\n            connection.commit_on_exit = True\n            connection.needs_rollback = False\n            if not connection.get_autocommit():\n                # Pretend we're already in an atomic block to bypass the code\n                # that disables autocommit to enter a transaction, and make a\n                # note to deal with this case in __exit__.\n                connection.in_atomic_block = True\n                connection.commit_on_exit = False\n\n        if connection.in_atomic_block:\n            # We're already in a transaction; create a savepoint, unless we\n            # were told not to or we're already waiting for a rollback. The\n            # second condition avoids creating useless savepoints and prevents\n            # overwriting needs_rollback until the rollback is performed.\n            if self.savepoint and not connection.needs_rollback:\n                sid = connection.savepoint()\n                connection.savepoint_ids.append(sid)\n            else:\n                connection.savepoint_ids.append(None)\n        else:\n            connection.set_autocommit(\n                False, force_begin_transaction_with_broken_autocommit=True\n            )\n            connection.in_atomic_block = True\n\n        if connection.in_atomic_block:\n            connection.atomic_blocks.append(self)",
+                "filename": "django/db/transaction.py",
+                "start_index": 5604,
+                "end_index": 7401,
+                "start_line": 182,
+                "end_line": 222,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def atomic(using=None, savepoint=True, durable=False):\n    # Bare decorator: @atomic -- although the first argument is called\n    # `using`, it's actually the function being decorated.\n    if callable(using):\n        return Atomic(DEFAULT_DB_ALIAS, savepoint, durable)(using)\n    # Decorator: @atomic(...) or context manager: with atomic(...): ...\n    else:\n        return Atomic(using, savepoint, durable)\n\n\ndef _non_atomic_requests(view, using):\n    try:\n        view._non_atomic_requests.add(using)\n    except AttributeError:\n        view._non_atomic_requests = {using}\n    return view\n\n\ndef non_atomic_requests(using=None):\n    if callable(using):\n        return _non_atomic_requests(using, DEFAULT_DB_ALIAS)\n    else:\n        if using is None:\n            using = DEFAULT_DB_ALIAS\n        return lambda view: _non_atomic_requests(view, using)",
+                "filename": "django/db/transaction.py",
+                "start_index": 11656,
+                "end_index": 12503,
+                "start_line": 316,
+                "end_line": 340,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "else:\n                # This flag will be set to True again if there isn't a savepoint\n                # allowing to perform the rollback at this level.\n                connection.needs_rollback = False\n                if connection.in_atomic_block:\n                    # Roll back to savepoint if there is one, mark for rollback\n                    # otherwise.\n                    if sid is None:\n                        connection.needs_rollback = True\n                    else:\n                        try:\n                            connection.savepoint_rollback(sid)\n                            # The savepoint won't be reused. Release it to\n                            # minimize overhead for the database server.\n                            connection.savepoint_commit(sid)\n                        except Error:\n                            # If rolling back to a savepoint fails, mark for\n                            # rollback at a higher level and avoid shadowing\n                            # the original exception.\n                            connection.needs_rollback = True\n                else:\n                    # Roll back transaction\n                    try:\n                        connection.rollback()\n                    except Error:\n                        # An error during rollback means that something\n                        # went wrong with the connection. Drop it.\n                        connection.close()",
+                "filename": "django/db/transaction.py",
+                "start_index": 9581,
+                "end_index": 11023,
+                "start_line": 113,
+                "end_line": 299,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "finally:\n            # Outermost block exit when autocommit was enabled.\n            if not connection.in_atomic_block:\n                if connection.closed_in_transaction:\n                    connection.connection = None\n                else:\n                    connection.set_autocommit(True)\n            # Outermost block exit when autocommit was disabled.\n            elif not connection.savepoint_ids and not connection.commit_on_exit:\n                if connection.closed_in_transaction:\n                    connection.connection = None\n                else:\n                    connection.in_atomic_block = False",
+                "filename": "django/db/transaction.py",
+                "start_index": 11033,
+                "end_index": 11653,
+                "start_line": 301,
+                "end_line": 313,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "@contextmanager\ndef mark_for_rollback_on_error(using=None):\n    \"\"\"\n    Internal low-level utility to mark a transaction as \"needs rollback\" when\n    an exception is raised while not enforcing the enclosed block to be in a\n    transaction. This is needed by Model.save() and friends to avoid starting a\n    transaction when in autocommit mode and a single query is executed.\n\n    It's equivalent to:\n\n        connection = get_connection(using)\n        if connection.get_autocommit():\n            yield\n        else:\n            with transaction.atomic(using=using, savepoint=False):\n                yield\n\n    but it uses low-level utilities to avoid performance overhead.\n    \"\"\"\n    try:\n        yield\n    except Exception as exc:\n        connection = get_connection(using)\n        if connection.in_atomic_block:\n            connection.needs_rollback = True\n            connection.rollback_exc = exc\n        raise\n\n\ndef on_commit(func, using=None, robust=False):\n    \"\"\"\n    Register `func` to be called when the current transaction is committed.\n    If the current transaction is rolled back, `func` will not be called.\n    \"\"\"\n    get_connection(using).on_commit(func, robust)\n\n\n#################################\n# Decorators / context managers #\n#################################",
+                "filename": "django/db/transaction.py",
+                "start_index": 2672,
+                "end_index": 3956,
+                "start_line": 100,
+                "end_line": 139,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "connection = get_connection(self.using)\n\n        if connection.in_atomic_block:\n            connection.atomic_blocks.pop()\n\n        if connection.savepoint_ids:\n            sid = connection.savepoint_ids.pop()\n        else:\n            # Prematurely unset this flag to allow using commit or rollback.\n            connection.in_atomic_block = False",
+                "filename": "django/db/transaction.py",
+                "start_index": 7467,
+                "end_index": 7814,
+                "start_line": 183,
+                "end_line": 313,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def set_autocommit(\n        self, autocommit, force_begin_transaction_with_broken_autocommit=False\n    ):\n        \"\"\"\n        Enable or disable autocommit.\n\n        The usual way to start a transaction is to turn autocommit off.\n        SQLite does not properly start a transaction when disabling\n        autocommit. To avoid this buggy behavior and to actually enter a new\n        transaction, an explicit BEGIN is required. Using\n        force_begin_transaction_with_broken_autocommit=True will issue an\n        explicit BEGIN with SQLite. This option will be ignored for other\n        backends.\n        \"\"\"\n        self.validate_no_atomic_block()\n        self.close_if_health_check_failed()\n        self.ensure_connection()\n\n        start_transaction_under_autocommit = (\n            force_begin_transaction_with_broken_autocommit\n            and not autocommit\n            and hasattr(self, \"_start_transaction_under_autocommit\")\n        )\n\n        if start_transaction_under_autocommit:\n            self._start_transaction_under_autocommit()\n        elif autocommit:\n            self._set_autocommit(autocommit)\n        else:\n            with debug_transaction(self, \"BEGIN\"):\n                self._set_autocommit(autocommit)\n        self.autocommit = autocommit\n\n        if autocommit and self.run_commit_hooks_on_set_autocommit_on:\n            self.run_and_clear_commit_hooks()\n            self.run_commit_hooks_on_set_autocommit_on = False\n\n    def get_rollback(self):\n        \"\"\"Get the \"needs rollback\" flag -- for *advanced use* only.\"\"\"\n        if not self.in_atomic_block:\n            raise TransactionManagementError(\n                \"The rollback flag doesn't work outside of an 'atomic' block.\"\n            )\n        return self.needs_rollback\n\n    def set_rollback(self, rollback):\n        \"\"\"\n        Set or unset the \"needs rollback\" flag -- for *advanced use* only.\n        \"\"\"\n        if not self.in_atomic_block:\n            raise TransactionManagementError(\n                \"The rollback flag doesn't work outside of an 'atomic' block.\"\n            )\n        self.needs_rollback = rollback\n\n    def validate_no_atomic_block(self):\n        \"\"\"Raise an error if an atomic block is active.\"\"\"\n        if self.in_atomic_block:\n            raise TransactionManagementError(\n                \"This is forbidden when an 'atomic' block is active.\"\n            )\n\n    def validate_no_broken_transaction(self):\n        if self.needs_rollback:\n            raise TransactionManagementError(\n                \"An error occurred in the current transaction. You can't \"\n                \"execute queries until the end of the 'atomic' block.\"\n            ) from self.rollback_exc\n\n    # ##### Foreign key constraints checks handling #####",
+                "filename": "django/db/backends/base/base.py",
+                "start_index": 16295,
+                "end_index": 19037,
+                "start_line": 453,
+                "end_line": 522,
+                "max_line": 788,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from contextlib import ContextDecorator, contextmanager\n\nfrom django.db import (\n    DEFAULT_DB_ALIAS,\n    DatabaseError,\n    Error,\n    ProgrammingError,\n    connections,\n)\n\n\nclass TransactionManagementError(ProgrammingError):\n    \"\"\"Transaction management is used improperly.\"\"\"\n\n    pass\n\n\ndef get_connection(using=None):\n    \"\"\"\n    Get a database connection by name, or the default database connection\n    if no name is provided. This is a private API.\n    \"\"\"\n    if using is None:\n        using = DEFAULT_DB_ALIAS\n    return connections[using]\n\n\ndef get_autocommit(using=None):\n    \"\"\"Get the autocommit status of the connection.\"\"\"\n    return get_connection(using).get_autocommit()\n\n\ndef set_autocommit(autocommit, using=None):\n    \"\"\"Set the autocommit status of the connection.\"\"\"\n    return get_connection(using).set_autocommit(autocommit)\n\n\ndef commit(using=None):\n    \"\"\"Commit a transaction.\"\"\"\n    get_connection(using).commit()\n\n\ndef rollback(using=None):\n    \"\"\"Roll back a transaction.\"\"\"\n    get_connection(using).rollback()\n\n\ndef savepoint(using=None):\n    \"\"\"\n    Create a savepoint (if supported and required by the backend) inside the\n    current transaction. Return an identifier for the savepoint that will be\n    used for the subsequent rollback or commit.\n    \"\"\"\n    return get_connection(using).savepoint()\n\n\ndef savepoint_rollback(sid, using=None):\n    \"\"\"\n    Roll back the most recent savepoint (if one exists). Do nothing if\n    savepoints are not supported.\n    \"\"\"\n    get_connection(using).savepoint_rollback(sid)\n\n\ndef savepoint_commit(sid, using=None):\n    \"\"\"\n    Commit the most recent savepoint (if one exists). Do nothing if\n    savepoints are not supported.\n    \"\"\"\n    get_connection(using).savepoint_commit(sid)\n\n\ndef clean_savepoints(using=None):\n    \"\"\"\n    Reset the counter used to generate unique savepoint ids in this thread.\n    \"\"\"\n    get_connection(using).clean_savepoints()\n\n\ndef get_rollback(using=None):\n    \"\"\"Get the \"needs rollback\" flag -- for *advanced use* only.\"\"\"\n    return get_connection(using).get_rollback()\n\n\ndef set_rollback(rollback, using=None):\n    \"\"\"\n    Set or unset the \"needs rollback\" flag -- for *advanced use* only.\n\n    When `rollback` is `True`, trigger a rollback when exiting the innermost\n    enclosing atomic block that has `savepoint=True` (that's the default). Use\n    this to force a rollback without raising an exception.\n\n    When `rollback` is `False`, prevent such a rollback. Use this only after\n    rolling back to a known-good state! Otherwise, you break the atomic block\n    and data corruption may occur.\n    \"\"\"\n    return get_connection(using).set_rollback(rollback)",
+                "filename": "django/db/transaction.py",
+                "start_index": 0,
+                "end_index": 2669,
+                "start_line": 1,
+                "end_line": 97,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import re\n\nfrom django.db.migrations.utils import get_migration_name_timestamp\nfrom django.db.transaction import atomic\n\nfrom .exceptions import IrreversibleError",
+                "filename": "django/db/migrations/migration.py",
+                "start_index": 0,
+                "end_index": 162,
+                "start_line": 1,
+                "end_line": 6,
+                "max_line": 239,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "feature request",
+        "snippet_processor_task": {
+            "django/db/transaction.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    Guarantee the atomic execution of a given block.\n\n    An instance can be used either as a decorator or as a context manager.\n\n    When it's used as a decorator, __call__ wraps the execution of the\n    decorated function in the instance itself, used as a context manager.\n\n    When it's used as a context manager, __enter__ creates a transaction or a\n    savepoint, depending on whether a transaction is already in progress, and\n    __exit__ commits the transaction or releases the savepoint on normal exit,\n    and rolls back the transaction or to the savepoint on exceptions.\n\n    It's possible to disable the creation of savepoints if the goal is to\n    ensure that some code runs within a transaction without creating overhead.\n\n    A stack of savepoints identifiers is maintained as an attribute of the\n    connection. None denotes the absence of a savepoint.\n\n    This allows reentrancy even if the same AtomicWrapper is reused. For\n    example, it's possible to define `oa = atomic('other')` and use `@oa` or\n    `with oa:` multiple times.\n\n    Since database connections are thread-local, this is thread-safe.\n\n    An atomic block can be tagged as durable. In this case, raise a\n    RuntimeError if it's nested within another atomic block. This guarantees\n    that database changes in a durable block are committed to the database when\n    the block exists without error.\n\n    This is a private API.\n    \"\"\"\n\n    def __init__(self, using, savepoint, durable):\n        self.using = using\n        self.savepoint = savepoint\n        self.durable = durable\n        self._from_testcase = False",
+                        "filename": "django/db/transaction.py",
+                        "start_index": 3995,
+                        "end_index": 5598,
+                        "start_line": 13,
+                        "end_line": 180,
+                        "max_line": 340,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the Atomic class and its __init__ method, which is where the 'durable' flag would be added as a parameter, making it directly relevant to the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "def __enter__(self):\n        connection = get_connection(self.using)\n\n        if (\n            self.durable\n            and connection.atomic_blocks\n            and not connection.atomic_blocks[-1]._from_testcase\n        ):\n            raise RuntimeError(\n                \"A durable atomic block cannot be nested within another \"\n                \"atomic block.\"\n            )\n        if not connection.in_atomic_block:\n            # Reset state when entering an outermost atomic block.\n            connection.commit_on_exit = True\n            connection.needs_rollback = False\n            if not connection.get_autocommit():\n                # Pretend we're already in an atomic block to bypass the code\n                # that disables autocommit to enter a transaction, and make a\n                # note to deal with this case in __exit__.\n                connection.in_atomic_block = True\n                connection.commit_on_exit = False\n\n        if connection.in_atomic_block:\n            # We're already in a transaction; create a savepoint, unless we\n            # were told not to or we're already waiting for a rollback. The\n            # second condition avoids creating useless savepoints and prevents\n            # overwriting needs_rollback until the rollback is performed.\n            if self.savepoint and not connection.needs_rollback:\n                sid = connection.savepoint()\n                connection.savepoint_ids.append(sid)\n            else:\n                connection.savepoint_ids.append(None)\n        else:\n            connection.set_autocommit(\n                False, force_begin_transaction_with_broken_autocommit=True\n            )\n            connection.in_atomic_block = True\n\n        if connection.in_atomic_block:\n            connection.atomic_blocks.append(self)",
+                        "filename": "django/db/transaction.py",
+                        "start_index": 5604,
+                        "end_index": 7401,
+                        "start_line": 182,
+                        "end_line": 222,
+                        "max_line": 340,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the __enter__ method of the Atomic class, which is where the logic to check for an existing atomic block and raise an error if the 'durable' flag is set would be implemented."
+                },
+                {
+                    "chunk": {
+                        "code": "def atomic(using=None, savepoint=True, durable=False):\n    # Bare decorator: @atomic -- although the first argument is called\n    # `using`, it's actually the function being decorated.\n    if callable(using):\n        return Atomic(DEFAULT_DB_ALIAS, savepoint, durable)(using)\n    # Decorator: @atomic(...) or context manager: with atomic(...): ...\n    else:\n        return Atomic(using, savepoint, durable)\n\n\ndef _non_atomic_requests(view, using):\n    try:\n        view._non_atomic_requests.add(using)\n    except AttributeError:\n        view._non_atomic_requests = {using}\n    return view\n\n\ndef non_atomic_requests(using=None):\n    if callable(using):\n        return _non_atomic_requests(using, DEFAULT_DB_ALIAS)\n    else:\n        if using is None:\n            using = DEFAULT_DB_ALIAS\n        return lambda view: _non_atomic_requests(view, using)",
+                        "filename": "django/db/transaction.py",
+                        "start_index": 11656,
+                        "end_index": 12503,
+                        "start_line": 316,
+                        "end_line": 340,
+                        "max_line": 340,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the atomic function, which is the public API that will be modified to accept the new 'durable' flag as an argument, making it directly relevant to the issue."
+                }
+            ]
+        },
+        "solution_task": "To implement the requested feature, you will need to modify the `Atomic` class and the `atomic` function in the `django/db/transaction.py` file to support the `durable` flag. Here's how you can do it:\n\n- Modify the `Atomic` class's `__init__` method to accept a `durable` parameter and store it as an instance attribute.\n- In the `Atomic` class's `__enter__` method, add a check to raise a `RuntimeError` if the `durable` flag is set and the current connection is already inside an atomic block.\n- Update the `atomic` function to accept a `durable` parameter and pass it to the `Atomic` class constructor.\n\nHere's the modified code:\n\n```python\n# In django/db/transaction.py\n\nclass Atomic:\n    def __init__(self, using, savepoint, durable=False):\n        # ... existing code ...\n        self.durable = durable\n        # ... existing code ...\n\n    def __enter__(self):\n        connection = get_connection(self.using)\n\n        # Check for durability requirement\n        if self.durable and connection.in_atomic_block:\n            raise RuntimeError(\n                \"A durable atomic block cannot be nested within another atomic block.\"\n            )\n\n        # ... existing code ...\n\n# Modify the atomic function to accept the durable parameter\ndef atomic(using=None, savepoint=True, durable=False):\n    # ... existing code ...\n    if callable(using):\n        return Atomic(DEFAULT_DB_ALIAS, savepoint, durable)(using)\n    else:\n        return Atomic(using, savepoint, durable)\n```\n\nMake sure to add appropriate unit tests to verify that the `durable` flag behaves as expected:\n\n- When `durable=True`, a `RuntimeError` should be raised if the block is nested within another atomic block.\n- When `durable=False`, the behavior should remain unchanged.\n\nRemember to update the documentation to reflect the new `durable` parameter for the `atomic` function and the `Atomic` class.\n\nThis implementation assumes that the `durable` flag's purpose is to prevent nested atomic blocks and ensure that the database operations within the block are committed immediately upon successful completion of the block. If there are additional requirements for durability that are not covered by this implementation, those would need to be addressed separately.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE must provide precise, actionable guidance and directly address all aspects of the described feature request to facilitate its successful implementation or improvement.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable guide on how to implement the 'durable' flag feature in Django's `transaction.atomic()` method. It outlines the necessary modifications to the `Atomic` class and the `atomic` function, including code snippets and the logic for raising a `RuntimeError` when the `durable` flag is set and an atomic block is already active. The RESPONSE also suggests updating the documentation and adding unit tests to ensure the feature works as expected. The inclusion of code snippets and links to the relevant sections of the Django codebase adds significant value to the RESPONSE. The only reason it does not score a 10 is that it does not explicitly mention the need to handle the commit operation to ensure durability, which is implied in the feature request but not directly addressed.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711725330.41126,
+        "result": "To implement the requested feature, you will need to modify the `Atomic` class and the `atomic` function in the `django/db/transaction.py` file to support the `durable` flag. Here's how you can do it:\n\n- Modify the `Atomic` class's `__init__` method to accept a `durable` parameter and store it as an instance attribute.\n- In the `Atomic` class's `__enter__` method, add a check to raise a `RuntimeError` if the `durable` flag is set and the current connection is already inside an atomic block.\n- Update the `atomic` function to accept a `durable` parameter and pass it to the `Atomic` class constructor.\n\nHere's the modified code:\n\n```python\n# In django/db/transaction.py\n\nclass Atomic:\n    def __init__(self, using, savepoint, durable=False):\n        # ... existing code ...\n        self.durable = durable\n        # ... existing code ...\n\n    def __enter__(self):\n        connection = get_connection(self.using)\n\n        # Check for durability requirement\n        if self.durable and connection.in_atomic_block:\n            raise RuntimeError(\n                \"A durable atomic block cannot be nested within another atomic block.\"\n            )\n\n        # ... existing code ...\n\n# Modify the atomic function to accept the durable parameter\ndef atomic(using=None, savepoint=True, durable=False):\n    # ... existing code ...\n    if callable(using):\n        return Atomic(DEFAULT_DB_ALIAS, savepoint, durable)(using)\n    else:\n        return Atomic(using, savepoint, durable)\n```\n\nMake sure to add appropriate unit tests to verify that the `durable` flag behaves as expected:\n\n- When `durable=True`, a `RuntimeError` should be raised if the block is nested within another atomic block.\n- When `durable=False`, the behavior should remain unchanged.\n\nRemember to update the documentation to reflect the new `durable` parameter for the `atomic` function and the `Atomic` class.\n\nThis implementation assumes that the `durable` flag's purpose is to prevent nested atomic blocks and ensure that the database operations within the block are committed immediately upon successful completion of the block. If there are additional requirements for durability that are not covered by this implementation, those would need to be addressed separately.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.2/tree//django/db)- [Lines 13 - 180](https://github.com/testbed/django__django__3.2/blob//django/db/transaction.py#L13-L180)\n\n This snippet defines the Atomic class and its __init__ method, which is where the 'durable' flag would be added as a parameter, making it directly relevant to the issue. \n\n\n   - [Lines 182 - 222](https://github.com/testbed/django__django__3.2/blob//django/db/transaction.py#L182-L222)\n\n This snippet contains the __enter__ method of the Atomic class, which is where the logic to check for an existing atomic block and raise an error if the 'durable' flag is set would be implemented. \n\n\n   - [Lines 316 - 340](https://github.com/testbed/django__django__3.2/blob//django/db/transaction.py#L316-L340)\n\n This snippet defines the atomic function, which is the public API that will be modified to accept the new 'durable' flag as an argument, making it directly relevant to the issue."
+    }
+}

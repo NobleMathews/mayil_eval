@@ -1,0 +1,189 @@
+{
+    "id": "django__django-16120",
+    "repo_name": "testbed/django__django__4.2",
+    "task_id": 9012856581193750341,
+    "title": "migrate --check still emits signals if database is up to date",
+    "body": "Description\n\t \n\t\t(last modified by Jacob Walls)\n\t \npre_migrate and post_migrate signals are emitted for migrate --check, but only if the database is up-to-date.\nA related side effect is that the logs also look like a like a real run, as it says \"Operations to perform:\" and \"Running migrations:\". The last sentence clarifies that nothing has been applied, but there is still the potential for a half-second of \"what have I just done?\".\n% python manage.py migrate --check\t\t \nOperations to perform:\n Apply all migrations: admin, auth, contenttypes, sessions, social_django\nRunning migrations:\n No migrations to apply.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `migrate` command to ensure that `pre_migrate` and `post_migrate` signals are not emitted when the `--check` flag is used and the database is not up-to-date.\n- Update the logging within the `migrate` command to clearly indicate when the command is being run in check mode.\n\n```python\n# Filename: django/core/management/commands/migrate.py\n\n# Modify the section where pre_migrate and post_migrate signals are emitted\n# to include a check for the 'check' flag and whether the database is up-to-date.\n\n# Before emitting pre_migrate signal\nif not options[\"check\"] or (options[\"check\"] and not plan):\n    emit_pre_migrate_signal(\n        self.verbosity,\n        self.interactive,\n        connection.alias,\n        stdout=self.stdout,\n        apps=pre_migrate_apps,\n        plan=plan,\n    )\n\n# ... (rest of the migration logic)\n\n# Before emitting post_migrate signal\nif not options[\"check\"] or (options[\"check\"] and not plan):\n    emit_post_migrate_signal(\n        self.verbosity,\n        self.interactive,\n        connection.alias,\n        stdout=self.stdout,\n        apps=post_migrate_apps,\n        plan=plan,\n    )\n\n# Update the logging to indicate check mode\nif options[\"check\"]:\n    if plan:\n        self.stdout.write(\"Migrations to apply (check mode):\")\n        # ... (output the migrations that would be applied)\n    else:\n        self.stdout.write(\"No migrations to apply (check mode).\")\nelse:\n    # ... (existing logging logic for actual migration)\n```\n\n- Ensure that the `sys.exit(1)` call is made when `--check` is used and there are migrations to apply, indicating a non-zero exit status for CI/CD pipelines.\n\n```python\n# Filename: django/core/management/commands/migrate.py\n\n# After determining if there are migrations to apply during check mode\nif options[\"check_unapplied\"]:\n    if plan:\n        self.stdout.write(\"Migrations to apply (check mode):\")\n        # ... (output the migrations that would be applied)\n        sys.exit(1)\n    else:\n        self.stdout.write(\"No migrations to apply (check mode).\")\n        return\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__4.2/tree//django/core) \u2192 [management](https://github.com/testbed/django__django__4.2/tree//django/core/management) \u2192 [commands](https://github.com/testbed/django__django__4.2/tree//django/core/management/commands)- [Lines 244 - 312](https://github.com/testbed/django__django__4.2/blob//django/core/management/commands/migrate.py#L244-L312)\n\n This snippet contains the logic for handling the '--check' option in the migrate command, which is directly related to the issue. \n\n\n   - [Lines 377 - 482](https://github.com/testbed/django__django__4.2/blob//django/core/management/commands/migrate.py#L377-L482)\n\n This snippet includes the call to emit_post_migrate_signal, which is relevant because the issue involves the post_migrate signal being emitted when it shouldn't.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00032649999999999997,
+        "snippet_processor": 0.052450000000000004,
+        "issue_star_creation": 0.04127,
+        "issue_star_solver": 0.06528,
+        "bouncer": 0.029540000000000004
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711706688.941521,
+        "relevant_snippets": [
+            {
+                "code": "if options[\"plan\"]:\n            self.stdout.write(\"Planned operations:\", self.style.MIGRATE_LABEL)\n            if not plan:\n                self.stdout.write(\"  No planned migration operations.\")\n            else:\n                for migration, backwards in plan:\n                    self.stdout.write(str(migration), self.style.MIGRATE_HEADING)\n                    for operation in migration.operations:\n                        message, is_error = self.describe_operation(\n                            operation, backwards\n                        )\n                        style = self.style.WARNING if is_error else None\n                        self.stdout.write(\"    \" + message, style)\n                if options[\"check_unapplied\"]:\n                    sys.exit(1)\n            return\n        if options[\"check_unapplied\"]:\n            if plan:\n                sys.exit(1)\n            return\n        if options[\"prune\"]:\n            return\n\n        # At this point, ignore run_syncdb if there aren't any apps to sync.\n        run_syncdb = options[\"run_syncdb\"] and executor.loader.unmigrated_apps\n        # Print some useful info\n        if self.verbosity >= 1:\n            self.stdout.write(self.style.MIGRATE_HEADING(\"Operations to perform:\"))\n            if run_syncdb:\n                if options[\"app_label\"]:\n                    self.stdout.write(\n                        self.style.MIGRATE_LABEL(\n                            \"  Synchronize unmigrated app: %s\" % app_label\n                        )\n                    )\n                else:\n                    self.stdout.write(\n                        self.style.MIGRATE_LABEL(\"  Synchronize unmigrated apps: \")\n                        + (\", \".join(sorted(executor.loader.unmigrated_apps)))\n                    )\n            if target_app_labels_only:\n                self.stdout.write(\n                    self.style.MIGRATE_LABEL(\"  Apply all migrations: \")\n                    + (\", \".join(sorted({a for a, n in targets})) or \"(none)\")\n                )\n            else:\n                if targets[0][1] is None:\n                    self.stdout.write(\n                        self.style.MIGRATE_LABEL(\"  Unapply all migrations: \")\n                        + str(targets[0][0])\n                    )\n                else:\n                    self.stdout.write(\n                        self.style.MIGRATE_LABEL(\"  Target specific migration: \")\n                        + \"%s, from %s\" % (targets[0][1], targets[0][0])\n                    )\n\n        pre_migrate_state = executor._create_project_state(with_applied_migrations=True)\n        pre_migrate_apps = pre_migrate_state.apps\n        emit_pre_migrate_signal(\n            self.verbosity,\n            self.interactive,\n            connection.alias,\n            stdout=self.stdout,\n            apps=pre_migrate_apps,\n            plan=plan,\n        )\n\n        # Run the syncdb phase.",
+                "filename": "django/core/management/commands/migrate.py",
+                "start_index": 10037,
+                "end_index": 12931,
+                "start_line": 244,
+                "end_line": 312,
+                "max_line": 511,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "if not changes:\n            # No changes? Tell them.\n            if self.verbosity >= 1:\n                if app_labels:\n                    if len(app_labels) == 1:\n                        self.log(\"No changes detected in app '%s'\" % app_labels.pop())\n                    else:\n                        self.log(\n                            \"No changes detected in apps '%s'\"\n                            % (\"', '\".join(app_labels))\n                        )\n                else:\n                    self.log(\"No changes detected\")\n        else:\n            if check_changes:\n                sys.exit(1)\n            if self.update:\n                self.write_to_last_migration_files(changes)\n            else:\n                self.write_migration_files(changes)",
+                "filename": "django/core/management/commands/makemigrations.py",
+                "start_index": 9050,
+                "end_index": 9810,
+                "start_line": 240,
+                "end_line": 259,
+                "max_line": 513,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0005_alter_user_last_login_null\"),\n        (\"contenttypes\", \"0002_remove_content_type_name\"),\n    ]\n\n    operations = [\n        # Ensure the contenttypes migration is applied before sending\n        # post_migrate signals (which create ContentTypes).\n    ]",
+                "filename": "django/contrib/auth/migrations/0006_require_contenttypes_0002.py",
+                "start_index": 0,
+                "end_index": 368,
+                "start_line": 1,
+                "end_line": 13,
+                "max_line": 13,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "for migration in app_migrations:\n                # Describe the migration",
+                "filename": "django/core/management/commands/makemigrations.py",
+                "start_index": 13742,
+                "end_index": 13815,
+                "start_line": 299,
+                "end_line": 341,
+                "max_line": 513,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "post_migrate_apps.render_multiple(\n            [ModelState.from_model(apps.get_model(*model)) for model in model_keys]\n        )\n\n        # Send the post_migrate signal, so individual apps can do whatever they need\n        # to do at this point.\n        emit_post_migrate_signal(\n            self.verbosity,\n            self.interactive,\n            connection.alias,\n            stdout=self.stdout,\n            apps=post_migrate_apps,\n            plan=plan,\n        )",
+                "filename": "django/core/management/commands/migrate.py",
+                "start_index": 15821,
+                "end_index": 16289,
+                "start_line": 377,
+                "end_line": 482,
+                "max_line": 511,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"admin\", \"0002_logentry_remove_auto_add\"),\n    ]\n\n    # No database changes; adds choices to action_flag.\n    operations = [\n        migrations.AlterField(\n            model_name=\"logentry\",\n            name=\"action_flag\",\n            field=models.PositiveSmallIntegerField(\n                choices=[(1, \"Addition\"), (2, \"Change\"), (3, \"Deletion\")],\n                verbose_name=\"action flag\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/admin/migrations/0003_logentry_add_action_flag_choices.py",
+                "start_index": 0,
+                "end_index": 537,
+                "start_line": 1,
+                "end_line": 19,
+                "max_line": 19,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "if not router.allow_migrate_model(db, cls):\n                continue\n            connection = connections[db]\n            if not (\n                connection.features.supports_table_check_constraints\n                or \"supports_table_check_constraints\" in cls._meta.required_db_features\n            ) and any(\n                isinstance(constraint, CheckConstraint)\n                for constraint in cls._meta.constraints\n            ):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support check constraints.\"\n                        % connection.display_name,\n                        hint=(\n                            \"A constraint won't be created. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W027\",\n                    )\n                )\n            if not (\n                connection.features.supports_partial_indexes\n                or \"supports_partial_indexes\" in cls._meta.required_db_features\n            ) and any(\n                isinstance(constraint, UniqueConstraint)\n                and constraint.condition is not None\n                for constraint in cls._meta.constraints\n            ):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support unique constraints with \"\n                        \"conditions.\" % connection.display_name,\n                        hint=(\n                            \"A constraint won't be created. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W036\",\n                    )\n                )\n            if not (\n                connection.features.supports_deferrable_unique_constraints\n                or \"supports_deferrable_unique_constraints\"\n                in cls._meta.required_db_features\n            ) and any(\n                isinstance(constraint, UniqueConstraint)\n                and constraint.deferrable is not None\n                for constraint in cls._meta.constraints\n            ):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support deferrable unique constraints.\"\n                        % connection.display_name,\n                        hint=(\n                            \"A constraint won't be created. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W038\",\n                    )\n                )",
+                "filename": "django/db/models/base.py",
+                "start_index": 92265,
+                "end_index": 95002,
+                "start_line": 1643,
+                "end_line": 2551,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "if run_syncdb:\n            if self.verbosity >= 1:\n                self.stdout.write(\n                    self.style.MIGRATE_HEADING(\"Synchronizing apps without migrations:\")\n                )\n            if options[\"app_label\"]:\n                self.sync_apps(connection, [app_label])\n            else:\n                self.sync_apps(connection, executor.loader.unmigrated_apps)\n\n        # Migrate!\n        if self.verbosity >= 1:\n            self.stdout.write(self.style.MIGRATE_HEADING(\"Running migrations:\"))\n        if not plan:\n            if self.verbosity >= 1:\n                self.stdout.write(\"  No migrations to apply.\")\n                # If there's changes that aren't in migrations yet, tell them\n                # how to fix it.\n                autodetector = MigrationAutodetector(\n                    executor.loader.project_state(),\n                    ProjectState.from_apps(apps),\n                )\n                changes = autodetector.changes(graph=executor.loader.graph)\n                if changes:\n                    self.stdout.write(\n                        self.style.NOTICE(\n                            \"  Your models in app(s): %s have changes that are not \"\n                            \"yet reflected in a migration, and so won't be \"\n                            \"applied.\" % \", \".join(repr(app) for app in sorted(changes))\n                        )\n                    )\n                    self.stdout.write(\n                        self.style.NOTICE(\n                            \"  Run 'manage.py makemigrations' to make new \"\n                            \"migrations, and then re-run 'manage.py migrate' to \"\n                            \"apply them.\"\n                        )\n                    )\n            fake = False\n            fake_initial = False\n        else:\n            fake = options[\"fake\"]\n            fake_initial = options[\"fake_initial\"]\n        post_migrate_state = executor.migrate(\n            targets,\n            plan=plan,\n            state=pre_migrate_state.clone(),\n            fake=fake,\n            fake_initial=fake_initial,\n        )\n        # post_migrate signals have access to all models. Ensure that all models\n        # are reloaded in case any are delayed.\n        post_migrate_state.clear_delayed_apps_cache()\n        post_migrate_apps = post_migrate_state.apps\n\n        # Re-render models of real apps to include relationships now that\n        # we've got a final state. This wouldn't be necessary if real apps\n        # models were rendered with relationships in the first place.\n        with post_migrate_apps.bulk_update():\n            model_keys = []\n            for model_state in post_migrate_apps.real_models:\n                model_key = model_state.app_label, model_state.name_lower\n                model_keys.append(model_key)\n                post_migrate_apps.unregister_model(*model_key)",
+                "filename": "django/core/management/commands/migrate.py",
+                "start_index": 12940,
+                "end_index": 15812,
+                "start_line": 145,
+                "end_line": 376,
+                "max_line": 511,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\nfrom django.utils import timezone\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"admin\", \"0001_initial\"),\n    ]\n\n    # No database changes; removes auto_add and adds default/editable.\n    operations = [\n        migrations.AlterField(\n            model_name=\"logentry\",\n            name=\"action_time\",\n            field=models.DateTimeField(\n                verbose_name=\"action time\",\n                default=timezone.now,\n                editable=False,\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/admin/migrations/0002_logentry_remove_auto_add.py",
+                "start_index": 0,
+                "end_index": 552,
+                "start_line": 1,
+                "end_line": 21,
+                "max_line": 21,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            },
+            {
+                "code": "database = options[\"database\"]\n        if not options[\"skip_checks\"]:\n            self.check(databases=[database])\n\n        self.verbosity = options[\"verbosity\"]\n        self.interactive = options[\"interactive\"]\n\n        # Import the 'management' module within each installed app, to register\n        # dispatcher events.\n        for app_config in apps.get_app_configs():\n            if module_has_submodule(app_config.module, \"management\"):\n                import_module(\".management\", app_config.name)\n\n        # Get the database we're operating from\n        connection = connections[database]\n\n        # Hook for backends needing any database preparation\n        connection.prepare_database()\n        # Work out which apps have migrations and which do not\n        executor = MigrationExecutor(connection, self.migration_progress_callback)\n\n        # Raise an error if any migrations are applied before their dependencies.\n        executor.loader.check_consistent_history(connection)\n\n        # Before anything else, see if there's conflicting apps and drop out\n        # hard if there are any\n        conflicts = executor.loader.detect_conflicts()\n        if conflicts:\n            name_str = \"; \".join(\n                \"%s in %s\" % (\", \".join(names), app) for app, names in conflicts.items()\n            )\n            raise CommandError(\n                \"Conflicting migrations detected; multiple leaf nodes in the \"\n                \"migration graph: (%s).\\nTo fix them run \"\n                \"'python manage.py makemigrations --merge'\" % name_str\n            )\n\n        # If they supplied command line arguments, work out what they mean.\n        run_syncdb = options[\"run_syncdb\"]\n        target_app_labels_only = True\n        if options[\"app_label\"]:\n            # Validate app_label.\n            app_label = options[\"app_label\"]\n            try:\n                apps.get_app_config(app_label)\n            except LookupError as err:\n                raise CommandError(str(err))\n            if run_syncdb:\n                if app_label in executor.loader.migrated_apps:\n                    raise CommandError(\n                        \"Can't use run_syncdb with app '%s' as it has migrations.\"\n                        % app_label\n                    )\n            elif app_label not in executor.loader.migrated_apps:\n                raise CommandError(\"App '%s' does not have migrations.\" % app_label)",
+                "filename": "django/core/management/commands/migrate.py",
+                "start_index": 3416,
+                "end_index": 5819,
+                "start_line": 98,
+                "end_line": 152,
+                "max_line": 511,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/core/management/commands/migrate.py": [
+                {
+                    "chunk": {
+                        "code": "if options[\"plan\"]:\n            self.stdout.write(\"Planned operations:\", self.style.MIGRATE_LABEL)\n            if not plan:\n                self.stdout.write(\"  No planned migration operations.\")\n            else:\n                for migration, backwards in plan:\n                    self.stdout.write(str(migration), self.style.MIGRATE_HEADING)\n                    for operation in migration.operations:\n                        message, is_error = self.describe_operation(\n                            operation, backwards\n                        )\n                        style = self.style.WARNING if is_error else None\n                        self.stdout.write(\"    \" + message, style)\n                if options[\"check_unapplied\"]:\n                    sys.exit(1)\n            return\n        if options[\"check_unapplied\"]:\n            if plan:\n                sys.exit(1)\n            return\n        if options[\"prune\"]:\n            return\n\n        # At this point, ignore run_syncdb if there aren't any apps to sync.\n        run_syncdb = options[\"run_syncdb\"] and executor.loader.unmigrated_apps\n        # Print some useful info\n        if self.verbosity >= 1:\n            self.stdout.write(self.style.MIGRATE_HEADING(\"Operations to perform:\"))\n            if run_syncdb:\n                if options[\"app_label\"]:\n                    self.stdout.write(\n                        self.style.MIGRATE_LABEL(\n                            \"  Synchronize unmigrated app: %s\" % app_label\n                        )\n                    )\n                else:\n                    self.stdout.write(\n                        self.style.MIGRATE_LABEL(\"  Synchronize unmigrated apps: \")\n                        + (\", \".join(sorted(executor.loader.unmigrated_apps)))\n                    )\n            if target_app_labels_only:\n                self.stdout.write(\n                    self.style.MIGRATE_LABEL(\"  Apply all migrations: \")\n                    + (\", \".join(sorted({a for a, n in targets})) or \"(none)\")\n                )\n            else:\n                if targets[0][1] is None:\n                    self.stdout.write(\n                        self.style.MIGRATE_LABEL(\"  Unapply all migrations: \")\n                        + str(targets[0][0])\n                    )\n                else:\n                    self.stdout.write(\n                        self.style.MIGRATE_LABEL(\"  Target specific migration: \")\n                        + \"%s, from %s\" % (targets[0][1], targets[0][0])\n                    )\n\n        pre_migrate_state = executor._create_project_state(with_applied_migrations=True)\n        pre_migrate_apps = pre_migrate_state.apps\n        emit_pre_migrate_signal(\n            self.verbosity,\n            self.interactive,\n            connection.alias,\n            stdout=self.stdout,\n            apps=pre_migrate_apps,\n            plan=plan,\n        )\n\n        # Run the syncdb phase.",
+                        "filename": "django/core/management/commands/migrate.py",
+                        "start_index": 10037,
+                        "end_index": 12931,
+                        "start_line": 244,
+                        "end_line": 312,
+                        "max_line": 511,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the logic for handling the '--check' option in the migrate command, which is directly related to the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "post_migrate_apps.render_multiple(\n            [ModelState.from_model(apps.get_model(*model)) for model in model_keys]\n        )\n\n        # Send the post_migrate signal, so individual apps can do whatever they need\n        # to do at this point.\n        emit_post_migrate_signal(\n            self.verbosity,\n            self.interactive,\n            connection.alias,\n            stdout=self.stdout,\n            apps=post_migrate_apps,\n            plan=plan,\n        )",
+                        "filename": "django/core/management/commands/migrate.py",
+                        "start_index": 15821,
+                        "end_index": 16289,
+                        "start_line": 377,
+                        "end_line": 482,
+                        "max_line": 511,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the call to emit_post_migrate_signal, which is relevant because the issue involves the post_migrate signal being emitted when it shouldn't."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `migrate` command to ensure that `pre_migrate` and `post_migrate` signals are not emitted when the `--check` flag is used and the database is not up-to-date.\n- Update the logging within the `migrate` command to clearly indicate when the command is being run in check mode.\n\n```python\n# Filename: django/core/management/commands/migrate.py\n\n# Modify the section where pre_migrate and post_migrate signals are emitted\n# to include a check for the 'check' flag and whether the database is up-to-date.\n\n# Before emitting pre_migrate signal\nif not options[\"check\"] or (options[\"check\"] and not plan):\n    emit_pre_migrate_signal(\n        self.verbosity,\n        self.interactive,\n        connection.alias,\n        stdout=self.stdout,\n        apps=pre_migrate_apps,\n        plan=plan,\n    )\n\n# ... (rest of the migration logic)\n\n# Before emitting post_migrate signal\nif not options[\"check\"] or (options[\"check\"] and not plan):\n    emit_post_migrate_signal(\n        self.verbosity,\n        self.interactive,\n        connection.alias,\n        stdout=self.stdout,\n        apps=post_migrate_apps,\n        plan=plan,\n    )\n\n# Update the logging to indicate check mode\nif options[\"check\"]:\n    if plan:\n        self.stdout.write(\"Migrations to apply (check mode):\")\n        # ... (output the migrations that would be applied)\n    else:\n        self.stdout.write(\"No migrations to apply (check mode).\")\nelse:\n    # ... (existing logging logic for actual migration)\n```\n\n- Ensure that the `sys.exit(1)` call is made when `--check` is used and there are migrations to apply, indicating a non-zero exit status for CI/CD pipelines.\n\n```python\n# Filename: django/core/management/commands/migrate.py\n\n# After determining if there are migrations to apply during check mode\nif options[\"check_unapplied\"]:\n    if plan:\n        self.stdout.write(\"Migrations to apply (check mode):\")\n        # ... (output the migrations that would be applied)\n        sys.exit(1)\n    else:\n        self.stdout.write(\"No migrations to apply (check mode).\")\n        return\n```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable solution to the problem described in the PROMPT. It suggests modifying the `migrate` command to prevent the `pre_migrate` and `post_migrate` signals from being emitted when the `--check` flag is used and the database is up-to-date. The RESPONSE also includes code snippets that show exactly where and how to implement the suggested changes, which is highly valuable for resolving the issue. Additionally, the RESPONSE addresses the logging concern by updating the logging to clearly indicate when the command is run in check mode. The RESPONSE also correctly suggests ensuring a `sys.exit(1)` call is made when `--check` is used and there are migrations to apply, which is important for CI/CD pipelines. The only reason it does not score a 10 is that it does not address the potential confusion caused by the logs looking like a real run, which was mentioned in the PROMPT as a related side effect.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711706792.485502,
+        "result": "- Modify the `migrate` command to ensure that `pre_migrate` and `post_migrate` signals are not emitted when the `--check` flag is used and the database is not up-to-date.\n- Update the logging within the `migrate` command to clearly indicate when the command is being run in check mode.\n\n```python\n# Filename: django/core/management/commands/migrate.py\n\n# Modify the section where pre_migrate and post_migrate signals are emitted\n# to include a check for the 'check' flag and whether the database is up-to-date.\n\n# Before emitting pre_migrate signal\nif not options[\"check\"] or (options[\"check\"] and not plan):\n    emit_pre_migrate_signal(\n        self.verbosity,\n        self.interactive,\n        connection.alias,\n        stdout=self.stdout,\n        apps=pre_migrate_apps,\n        plan=plan,\n    )\n\n# ... (rest of the migration logic)\n\n# Before emitting post_migrate signal\nif not options[\"check\"] or (options[\"check\"] and not plan):\n    emit_post_migrate_signal(\n        self.verbosity,\n        self.interactive,\n        connection.alias,\n        stdout=self.stdout,\n        apps=post_migrate_apps,\n        plan=plan,\n    )\n\n# Update the logging to indicate check mode\nif options[\"check\"]:\n    if plan:\n        self.stdout.write(\"Migrations to apply (check mode):\")\n        # ... (output the migrations that would be applied)\n    else:\n        self.stdout.write(\"No migrations to apply (check mode).\")\nelse:\n    # ... (existing logging logic for actual migration)\n```\n\n- Ensure that the `sys.exit(1)` call is made when `--check` is used and there are migrations to apply, indicating a non-zero exit status for CI/CD pipelines.\n\n```python\n# Filename: django/core/management/commands/migrate.py\n\n# After determining if there are migrations to apply during check mode\nif options[\"check_unapplied\"]:\n    if plan:\n        self.stdout.write(\"Migrations to apply (check mode):\")\n        # ... (output the migrations that would be applied)\n        sys.exit(1)\n    else:\n        self.stdout.write(\"No migrations to apply (check mode).\")\n        return\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__4.2/tree//django/core) \u2192 [management](https://github.com/testbed/django__django__4.2/tree//django/core/management) \u2192 [commands](https://github.com/testbed/django__django__4.2/tree//django/core/management/commands)- [Lines 244 - 312](https://github.com/testbed/django__django__4.2/blob//django/core/management/commands/migrate.py#L244-L312)\n\n This snippet contains the logic for handling the '--check' option in the migrate command, which is directly related to the issue. \n\n\n   - [Lines 377 - 482](https://github.com/testbed/django__django__4.2/blob//django/core/management/commands/migrate.py#L377-L482)\n\n This snippet includes the call to emit_post_migrate_signal, which is relevant because the issue involves the post_migrate signal being emitted when it shouldn't."
+    }
+}

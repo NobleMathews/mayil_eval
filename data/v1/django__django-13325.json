@@ -1,0 +1,189 @@
+{
+    "id": "django__django-13325",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 2306136357211619801,
+    "title": "Inconsistent key validation checks in cache backends.",
+    "body": "Description\n\t \n\t\t(last modified by Nick Pope)\n\t \nThe fix for CVE2020-13254 ensured that validate_key() was called for most cache-related operations to avoid a potential get/set key-clash.\nThere are some other operations that are not properly validated in some of the backend (sub)classes:\nLocMemcache.touch()\nBaseMemcachedCache.delete_many()\nMemcachedCache.touch()\nMemcachedCache.get()\nMemcachedCache.delete()\nPyLibMCCache.touch()\nThe fix to this should also include a test to ensure that self.validate_key(key) is called for all operations to avoid this issue in future.\nNote that this was originally raised via the security mailing list, but the decision was to handle this by raising a pull request.\nThe main concern here is the potential for data loss in the unvalidated delete() and delete_many() operations.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Add `self.validate_key(key)` call in `MemcachedCache.touch()` method.\n- Add `self.validate_key(key)` call in `MemcachedCache.get()` method.\n- Ensure `self.validate_key(key)` is called in `MemcachedCache.delete()` and `MemcachedCache.delete_many()` methods.\n- Add unit tests to verify that `validate_key()` is called in `touch()`, `get()`, `delete()`, and `delete_many()` methods for all cache backends.\n- Address the CVE-2020-13254 by ensuring that `validate_key()` properly checks for key validity and prevents any potential security issues related to key validation.\n- Review and update `PyLibMCCache.touch()` and other relevant methods in `PyLibMCCache` and `PyMemcacheCache` classes to ensure they call `self.validate_key(key)` before performing operations.\n- Check if `BaseMemcachedCache` class and its subclasses properly implement `validate_key()` calls for all operations that manipulate cache keys. If not, implement the missing calls.\n- Ensure that `validate_key()` raises `InvalidCacheKey` exception for invalid keys, which should be caught and handled appropriately in cache operation methods to prevent data loss.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [cache](https://github.com/testbed/django__django__3.2/tree//django/core/cache) \u2192 [backends](https://github.com/testbed/django__django__3.2/tree//django/core/cache/backends)- [Lines 88 - 141](https://github.com/testbed/django__django__3.2/blob//django/core/cache/backends/memcached.py#L88-L141)\n\n This snippet includes the implementation of 'delete' and 'delete_many' methods for the MemcachedCache backend, which are mentioned in the issue as needing validation checks. \n\n\n   - [Lines 144 - 188](https://github.com/testbed/django__django__3.2/blob//django/core/cache/backends/memcached.py#L144-L188)\n\n This snippet contains the 'touch' method for the PyLibMCCache backend, which is one of the methods mentioned in the issue that requires a validation check.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0002025,
+        "snippet_processor": 0.06689,
+        "issue_star_creation": 0.04074,
+        "issue_star_solver": 0.06449,
+        "bouncer": 0.02736
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711726930.234307,
+        "relevant_snippets": [
+            {
+                "code": "def delete(self, key, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        return bool(self._cache.delete(key))\n\n    def get_many(self, keys, version=None):\n        key_map = {\n            self.make_and_validate_key(key, version=version): key for key in keys\n        }\n        ret = self._cache.get_multi(key_map.keys())\n        return {key_map[k]: v for k, v in ret.items()}\n\n    def close(self, **kwargs):\n        # Many clients don't clean up connections properly.\n        self._cache.disconnect_all()\n\n    def incr(self, key, delta=1, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        try:\n            # Memcached doesn't support negative delta.\n            if delta < 0:\n                val = self._cache.decr(key, -delta)\n            else:\n                val = self._cache.incr(key, delta)\n        # Normalize an exception raised by the underlying client library to\n        # ValueError in the event of a nonexistent key when calling\n        # incr()/decr().\n        except self.LibraryValueNotFoundException:\n            val = None\n        if val is None:\n            raise ValueError(\"Key '%s' not found\" % key)\n        return val\n\n    def set_many(self, data, timeout=DEFAULT_TIMEOUT, version=None):\n        safe_data = {}\n        original_keys = {}\n        for key, value in data.items():\n            safe_key = self.make_and_validate_key(key, version=version)\n            safe_data[safe_key] = value\n            original_keys[safe_key] = key\n        failed_keys = self._cache.set_multi(\n            safe_data, self.get_backend_timeout(timeout)\n        )\n        return [original_keys[k] for k in failed_keys]\n\n    def delete_many(self, keys, version=None):\n        keys = [self.make_and_validate_key(key, version=version) for key in keys]\n        self._cache.delete_multi(keys)\n\n    def clear(self):\n        self._cache.flush_all()\n\n    def validate_key(self, key):\n        for warning in memcache_key_warnings(key):\n            raise InvalidCacheKey(warning)",
+                "filename": "django/core/cache/backends/memcached.py",
+                "start_index": 3253,
+                "end_index": 5293,
+                "start_line": 88,
+                "end_line": 141,
+                "max_line": 188,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "\"Base Cache class.\"\nimport time\nimport warnings\n\nfrom asgiref.sync import sync_to_async\n\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.utils.module_loading import import_string\nfrom django.utils.regex_helper import _lazy_re_compile\n\n\nclass InvalidCacheBackendError(ImproperlyConfigured):\n    pass\n\n\nclass CacheKeyWarning(RuntimeWarning):\n    pass\n\n\nclass InvalidCacheKey(ValueError):\n    pass\n\n\n# Stub class to ensure not passing in a `timeout` argument results in\n# the default timeout\nDEFAULT_TIMEOUT = object()\n\n# Memcached does not accept keys longer than this.\nMEMCACHE_MAX_KEY_LENGTH = 250\n\n\ndef default_key_func(key, key_prefix, version):\n    \"\"\"\n    Default function to generate keys.\n\n    Construct the key used by all other methods. By default, prepend\n    the `key_prefix`. KEY_FUNCTION can be used to specify an alternate\n    function with custom key making behavior.\n    \"\"\"\n    return \"%s:%s:%s\" % (key_prefix, version, key)\n\n\ndef get_key_func(key_func):\n    \"\"\"\n    Function to decide which key function to use.\n\n    Default to ``default_key_func``.\n    \"\"\"\n    if key_func is not None:\n        if callable(key_func):\n            return key_func\n        else:\n            return import_string(key_func)\n    return default_key_func",
+                "filename": "django/core/cache/backends/base.py",
+                "start_index": 0,
+                "end_index": 1267,
+                "start_line": 1,
+                "end_line": 54,
+                "max_line": 405,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "try:\n                # Note: typecasting for datetimes is needed by some 3rd party\n                # database backends. All core backends work without typecasting,\n                # so be careful about changes here - test suite will NOT pick\n                # regressions.\n                with transaction.atomic(using=db):\n                    cursor.execute(\n                        \"SELECT %s, %s FROM %s WHERE %s = %%s\"\n                        % (\n                            quote_name(\"cache_key\"),\n                            quote_name(\"expires\"),\n                            table,\n                            quote_name(\"cache_key\"),\n                        ),\n                        [key],\n                    )\n                    result = cursor.fetchone()\n\n                    if result:\n                        current_expires = result[1]\n                        expression = models.Expression(\n                            output_field=models.DateTimeField()\n                        )\n                        for converter in connection.ops.get_db_converters(\n                            expression\n                        ) + expression.get_db_converters(connection):\n                            current_expires = converter(\n                                current_expires, expression, connection\n                            )\n\n                    exp = connection.ops.adapt_datetimefield_value(exp)\n                    if result and mode == \"touch\":\n                        cursor.execute(\n                            \"UPDATE %s SET %s = %%s WHERE %s = %%s\"\n                            % (table, quote_name(\"expires\"), quote_name(\"cache_key\")),\n                            [exp, key],\n                        )\n                    elif result and (\n                        mode == \"set\" or (mode == \"add\" and current_expires < now)\n                    ):\n                        cursor.execute(\n                            \"UPDATE %s SET %s = %%s, %s = %%s WHERE %s = %%s\"\n                            % (\n                                table,\n                                quote_name(\"value\"),\n                                quote_name(\"expires\"),\n                                quote_name(\"cache_key\"),\n                            ),\n                            [b64encoded, exp, key],\n                        )\n                    elif mode != \"touch\":\n                        cursor.execute(\n                            \"INSERT INTO %s (%s, %s, %s) VALUES (%%s, %%s, %%s)\"\n                            % (\n                                table,\n                                quote_name(\"cache_key\"),\n                                quote_name(\"value\"),\n                                quote_name(\"expires\"),\n                            ),\n                            [key, b64encoded, exp],\n                        )\n                    else:\n                        return False  # touch failed.",
+                "filename": "django/core/cache/backends/db.py",
+                "start_index": 5011,
+                "end_index": 7933,
+                "start_line": 36,
+                "end_line": 198,
+                "max_line": 293,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def delete(self, key, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        return self._base_delete_many([key])\n\n    def delete_many(self, keys, version=None):\n        keys = [self.make_and_validate_key(key, version=version) for key in keys]\n        self._base_delete_many(keys)\n\n    def _base_delete_many(self, keys):\n        if not keys:\n            return False\n\n        db = router.db_for_write(self.cache_model_class)\n        connection = connections[db]\n        quote_name = connection.ops.quote_name\n        table = quote_name(self._table)\n\n        with connection.cursor() as cursor:\n            cursor.execute(\n                \"DELETE FROM %s WHERE %s IN (%s)\"\n                % (\n                    table,\n                    quote_name(\"cache_key\"),\n                    \", \".join([\"%s\"] * len(keys)),\n                ),\n                keys,\n            )\n            return bool(cursor.rowcount)\n\n    def has_key(self, key, version=None):\n        key = self.make_and_validate_key(key, version=version)\n\n        db = router.db_for_read(self.cache_model_class)\n        connection = connections[db]\n        quote_name = connection.ops.quote_name\n\n        now = tz_now().replace(microsecond=0, tzinfo=None)\n\n        with connection.cursor() as cursor:\n            cursor.execute(\n                \"SELECT %s FROM %s WHERE %s = %%s and %s > %%s\"\n                % (\n                    quote_name(\"cache_key\"),\n                    quote_name(self._table),\n                    quote_name(\"cache_key\"),\n                    quote_name(\"expires\"),\n                ),\n                [key, connection.ops.adapt_datetimefield_value(now)],\n            )\n            return cursor.fetchone() is not None\n\n    def _cull(self, db, cursor, now, num):\n        if self._cull_frequency == 0:\n            self.clear()\n        else:\n            connection = connections[db]\n            table = connection.ops.quote_name(self._table)\n            cursor.execute(\n                \"DELETE FROM %s WHERE %s < %%s\"\n                % (\n                    table,\n                    connection.ops.quote_name(\"expires\"),\n                ),\n                [connection.ops.adapt_datetimefield_value(now)],\n            )\n            deleted_count = cursor.rowcount\n            remaining_num = num - deleted_count\n            if remaining_num > self._max_entries:\n                cull_num = remaining_num // self._cull_frequency\n                cursor.execute(\n                    connection.ops.cache_key_culling_sql() % table, [cull_num]\n                )\n                last_cache_key = cursor.fetchone()\n                if last_cache_key:\n                    cursor.execute(\n                        \"DELETE FROM %s WHERE %s < %%s\"\n                        % (\n                            table,\n                            connection.ops.quote_name(\"cache_key\"),\n                        ),\n                        [last_cache_key[0]],\n                    )",
+                "filename": "django/core/cache/backends/db.py",
+                "start_index": 8129,
+                "end_index": 11103,
+                "start_line": 205,
+                "end_line": 286,
+                "max_line": 293,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "memcached_error_chars_re = _lazy_re_compile(r\"[\\x00-\\x20\\x7f]\")\n\n\ndef memcache_key_warnings(key):\n    if len(key) > MEMCACHE_MAX_KEY_LENGTH:\n        yield (\n            \"Cache key will cause errors if used with memcached: %r \"\n            \"(longer than %s)\" % (key, MEMCACHE_MAX_KEY_LENGTH)\n        )\n    if memcached_error_chars_re.search(key):\n        yield (\n            \"Cache key contains characters that will cause errors if used with \"\n            f\"memcached: {key!r}\"\n        )",
+                "filename": "django/core/cache/backends/base.py",
+                "start_index": 13804,
+                "end_index": 14290,
+                "start_line": 392,
+                "end_line": 405,
+                "max_line": 405,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import pathlib\n\nfrom django.conf import settings\nfrom django.core.cache import DEFAULT_CACHE_ALIAS, caches\nfrom django.core.cache.backends.filebased import FileBasedCache\n\nfrom . import Error, Tags, Warning, register\n\nE001 = Error(\n    \"You must define a '%s' cache in your CACHES setting.\" % DEFAULT_CACHE_ALIAS,\n    id=\"caches.E001\",\n)\n\n\n@register(Tags.caches)\ndef check_default_cache_is_configured(app_configs, **kwargs):\n    if DEFAULT_CACHE_ALIAS not in settings.CACHES:\n        return [E001]\n    return []\n\n\n@register(Tags.caches, deploy=True)\ndef check_cache_location_not_exposed(app_configs, **kwargs):\n    errors = []\n    for name in (\"MEDIA_ROOT\", \"STATIC_ROOT\", \"STATICFILES_DIRS\"):\n        setting = getattr(settings, name, None)\n        if not setting:\n            continue\n        if name == \"STATICFILES_DIRS\":\n            paths = set()\n            for staticfiles_dir in setting:\n                if isinstance(staticfiles_dir, (list, tuple)):\n                    _, staticfiles_dir = staticfiles_dir\n                paths.add(pathlib.Path(staticfiles_dir).resolve())\n        else:\n            paths = {pathlib.Path(setting).resolve()}\n        for alias in settings.CACHES:\n            cache = caches[alias]\n            if not isinstance(cache, FileBasedCache):\n                continue\n            cache_path = pathlib.Path(cache._dir).resolve()\n            if any(path == cache_path for path in paths):\n                relation = \"matches\"\n            elif any(path in cache_path.parents for path in paths):\n                relation = \"is inside\"\n            elif any(cache_path in path.parents for path in paths):\n                relation = \"contains\"\n            else:\n                continue\n            errors.append(\n                Warning(\n                    f\"Your '{alias}' cache configuration might expose your cache \"\n                    f\"or lead to corruption of your data because its LOCATION \"\n                    f\"{relation} {name}.\",\n                    id=\"caches.W002\",\n                )\n            )\n    return errors\n\n\n@register(Tags.caches)\ndef check_file_based_cache_is_absolute(app_configs, **kwargs):\n    errors = []\n    for alias, config in settings.CACHES.items():\n        cache = caches[alias]\n        if not isinstance(cache, FileBasedCache):\n            continue\n        if not pathlib.Path(config[\"LOCATION\"]).is_absolute():\n            errors.append(\n                Warning(\n                    f\"Your '{alias}' cache LOCATION path is relative. Use an \"\n                    f\"absolute path instead.\",\n                    id=\"caches.W003\",\n                )\n            )\n    return errors",
+                "filename": "django/core/checks/caches.py",
+                "start_index": 0,
+                "end_index": 2642,
+                "start_line": 1,
+                "end_line": 76,
+                "max_line": 76,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class BaseMemcachedCache(BaseCache):",
+                "filename": "django/core/cache/backends/memcached.py",
+                "start_index": 236,
+                "end_index": 272,
+                "start_line": 15,
+                "end_line": 15,
+                "max_line": 188,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class PyLibMCCache(BaseMemcachedCache):\n    \"An implementation of a cache binding using pylibmc\"\n\n    def __init__(self, server, params):\n        import pylibmc\n\n        super().__init__(\n            server, params, library=pylibmc, value_not_found_exception=pylibmc.NotFound\n        )\n\n    @property\n    def client_servers(self):\n        output = []\n        for server in self._servers:\n            output.append(server.removeprefix(\"unix:\"))\n        return output\n\n    def touch(self, key, timeout=DEFAULT_TIMEOUT, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        if timeout == 0:\n            return self._cache.delete(key)\n        return self._cache.touch(key, self.get_backend_timeout(timeout))\n\n    def close(self, **kwargs):\n        # libmemcached manages its own connections. Don't call disconnect_all()\n        # as it resets the failover state and creates unnecessary reconnects.\n        pass\n\n\nclass PyMemcacheCache(BaseMemcachedCache):\n    \"\"\"An implementation of a cache binding using pymemcache.\"\"\"\n\n    def __init__(self, server, params):\n        import pymemcache.serde\n\n        super().__init__(\n            server, params, library=pymemcache, value_not_found_exception=KeyError\n        )\n        self._class = self._lib.HashClient\n        self._options = {\n            \"allow_unicode_keys\": True,\n            \"default_noreply\": False,\n            \"serde\": pymemcache.serde.pickle_serde,\n            **self._options,\n        }",
+                "filename": "django/core/cache/backends/memcached.py",
+                "start_index": 5296,
+                "end_index": 6775,
+                "start_line": 144,
+                "end_line": 188,
+                "max_line": 188,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "pickle_protocol = pickle.HIGHEST_PROTOCOL\n\n    def get(self, key, default=None, version=None):\n        return self.get_many([key], version).get(key, default)\n\n    def get_many(self, keys, version=None):\n        if not keys:\n            return {}\n\n        key_map = {\n            self.make_and_validate_key(key, version=version): key for key in keys\n        }\n\n        db = router.db_for_read(self.cache_model_class)\n        connection = connections[db]\n        quote_name = connection.ops.quote_name\n        table = quote_name(self._table)\n\n        with connection.cursor() as cursor:\n            cursor.execute(\n                \"SELECT %s, %s, %s FROM %s WHERE %s IN (%s)\"\n                % (\n                    quote_name(\"cache_key\"),\n                    quote_name(\"value\"),\n                    quote_name(\"expires\"),\n                    table,\n                    quote_name(\"cache_key\"),\n                    \", \".join([\"%s\"] * len(key_map)),\n                ),\n                list(key_map),\n            )\n            rows = cursor.fetchall()\n\n        result = {}\n        expired_keys = []\n        expression = models.Expression(output_field=models.DateTimeField())\n        converters = connection.ops.get_db_converters(\n            expression\n        ) + expression.get_db_converters(connection)\n        for key, value, expires in rows:\n            for converter in converters:\n                expires = converter(expires, expression, connection)\n            if expires < tz_now():\n                expired_keys.append(key)\n            else:\n                value = connection.ops.process_clob(value)\n                value = pickle.loads(base64.b64decode(value.encode()))\n                result[key_map.get(key)] = value\n        self._base_delete_many(expired_keys)\n        return result\n\n    def set(self, key, value, timeout=DEFAULT_TIMEOUT, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        self._base_set(\"set\", key, value, timeout)\n\n    def add(self, key, value, timeout=DEFAULT_TIMEOUT, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        return self._base_set(\"add\", key, value, timeout)\n\n    def touch(self, key, timeout=DEFAULT_TIMEOUT, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        return self._base_set(\"touch\", key, None, timeout)",
+                "filename": "django/core/cache/backends/db.py",
+                "start_index": 1519,
+                "end_index": 3878,
+                "start_line": 49,
+                "end_line": 110,
+                "max_line": 293,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def decr(self, key, delta=1, version=None):\n        \"\"\"\n        Subtract delta from value in the cache. If the key does not exist, raise\n        a ValueError exception.\n        \"\"\"\n        return self.incr(key, -delta, version=version)\n\n    async def adecr(self, key, delta=1, version=None):\n        return await self.aincr(key, -delta, version=version)\n\n    def __contains__(self, key):\n        \"\"\"\n        Return True if the key is in the cache and has not expired.\n        \"\"\"\n        # This is a separate method, rather than just a copy of has_key(),\n        # so that it always has the same functionality as has_key(), even\n        # if a subclass overrides it.\n        return self.has_key(key)\n\n    def set_many(self, data, timeout=DEFAULT_TIMEOUT, version=None):\n        \"\"\"\n        Set a bunch of values in the cache at once from a dict of key/value\n        pairs.  For certain backends (memcached), this is much more efficient\n        than calling set() multiple times.\n\n        If timeout is given, use that timeout for the key; otherwise use the\n        default cache timeout.\n\n        On backends that support it, return a list of keys that failed\n        insertion, or an empty list if all keys were inserted successfully.\n        \"\"\"\n        for key, value in data.items():\n            self.set(key, value, timeout=timeout, version=version)\n        return []\n\n    async def aset_many(self, data, timeout=DEFAULT_TIMEOUT, version=None):\n        for key, value in data.items():\n            await self.aset(key, value, timeout=timeout, version=version)\n        return []\n\n    def delete_many(self, keys, version=None):\n        \"\"\"\n        Delete a bunch of values in the cache at once. For certain backends\n        (memcached), this is much more efficient than calling delete() multiple\n        times.\n        \"\"\"\n        for key in keys:\n            self.delete(key, version=version)\n\n    async def adelete_many(self, keys, version=None):\n        for key in keys:\n            await self.adelete(key, version=version)\n\n    def clear(self):\n        \"\"\"Remove *all* values from the cache at once.\"\"\"\n        raise NotImplementedError(\n            \"subclasses of BaseCache must provide a clear() method\"\n        )\n\n    async def aclear(self):\n        return await sync_to_async(self.clear, thread_sensitive=True)()\n\n    def incr_version(self, key, delta=1, version=None):\n        \"\"\"\n        Add delta to the cache version for the supplied key. Return the new\n        version.\n        \"\"\"\n        if version is None:\n            version = self.version\n\n        value = self.get(key, self._missing_key, version=version)\n        if value is self._missing_key:\n            raise ValueError(\"Key '%s' not found\" % key)\n\n        self.set(key, value, version=version + delta)\n        self.delete(key, version=version)\n        return version + delta",
+                "filename": "django/core/cache/backends/base.py",
+                "start_index": 9978,
+                "end_index": 12828,
+                "start_line": 283,
+                "end_line": 372,
+                "max_line": 405,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/core/cache/backends/memcached.py": [
+                {
+                    "chunk": {
+                        "code": "def delete(self, key, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        return bool(self._cache.delete(key))\n\n    def get_many(self, keys, version=None):\n        key_map = {\n            self.make_and_validate_key(key, version=version): key for key in keys\n        }\n        ret = self._cache.get_multi(key_map.keys())\n        return {key_map[k]: v for k, v in ret.items()}\n\n    def close(self, **kwargs):\n        # Many clients don't clean up connections properly.\n        self._cache.disconnect_all()\n\n    def incr(self, key, delta=1, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        try:\n            # Memcached doesn't support negative delta.\n            if delta < 0:\n                val = self._cache.decr(key, -delta)\n            else:\n                val = self._cache.incr(key, delta)\n        # Normalize an exception raised by the underlying client library to\n        # ValueError in the event of a nonexistent key when calling\n        # incr()/decr().\n        except self.LibraryValueNotFoundException:\n            val = None\n        if val is None:\n            raise ValueError(\"Key '%s' not found\" % key)\n        return val\n\n    def set_many(self, data, timeout=DEFAULT_TIMEOUT, version=None):\n        safe_data = {}\n        original_keys = {}\n        for key, value in data.items():\n            safe_key = self.make_and_validate_key(key, version=version)\n            safe_data[safe_key] = value\n            original_keys[safe_key] = key\n        failed_keys = self._cache.set_multi(\n            safe_data, self.get_backend_timeout(timeout)\n        )\n        return [original_keys[k] for k in failed_keys]\n\n    def delete_many(self, keys, version=None):\n        keys = [self.make_and_validate_key(key, version=version) for key in keys]\n        self._cache.delete_multi(keys)\n\n    def clear(self):\n        self._cache.flush_all()\n\n    def validate_key(self, key):\n        for warning in memcache_key_warnings(key):\n            raise InvalidCacheKey(warning)",
+                        "filename": "django/core/cache/backends/memcached.py",
+                        "start_index": 3253,
+                        "end_index": 5293,
+                        "start_line": 88,
+                        "end_line": 141,
+                        "max_line": 188,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the implementation of 'delete' and 'delete_many' methods for the MemcachedCache backend, which are mentioned in the issue as needing validation checks."
+                },
+                {
+                    "chunk": {
+                        "code": "class PyLibMCCache(BaseMemcachedCache):\n    \"An implementation of a cache binding using pylibmc\"\n\n    def __init__(self, server, params):\n        import pylibmc\n\n        super().__init__(\n            server, params, library=pylibmc, value_not_found_exception=pylibmc.NotFound\n        )\n\n    @property\n    def client_servers(self):\n        output = []\n        for server in self._servers:\n            output.append(server.removeprefix(\"unix:\"))\n        return output\n\n    def touch(self, key, timeout=DEFAULT_TIMEOUT, version=None):\n        key = self.make_and_validate_key(key, version=version)\n        if timeout == 0:\n            return self._cache.delete(key)\n        return self._cache.touch(key, self.get_backend_timeout(timeout))\n\n    def close(self, **kwargs):\n        # libmemcached manages its own connections. Don't call disconnect_all()\n        # as it resets the failover state and creates unnecessary reconnects.\n        pass\n\n\nclass PyMemcacheCache(BaseMemcachedCache):\n    \"\"\"An implementation of a cache binding using pymemcache.\"\"\"\n\n    def __init__(self, server, params):\n        import pymemcache.serde\n\n        super().__init__(\n            server, params, library=pymemcache, value_not_found_exception=KeyError\n        )\n        self._class = self._lib.HashClient\n        self._options = {\n            \"allow_unicode_keys\": True,\n            \"default_noreply\": False,\n            \"serde\": pymemcache.serde.pickle_serde,\n            **self._options,\n        }",
+                        "filename": "django/core/cache/backends/memcached.py",
+                        "start_index": 5296,
+                        "end_index": 6775,
+                        "start_line": 144,
+                        "end_line": 188,
+                        "max_line": 188,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'touch' method for the PyLibMCCache backend, which is one of the methods mentioned in the issue that requires a validation check."
+                }
+            ]
+        },
+        "solution_task": "- Add `self.validate_key(key)` call in `MemcachedCache.touch()` method.\n- Add `self.validate_key(key)` call in `MemcachedCache.get()` method.\n- Ensure `self.validate_key(key)` is called in `MemcachedCache.delete()` and `MemcachedCache.delete_many()` methods.\n- Add unit tests to verify that `validate_key()` is called in `touch()`, `get()`, `delete()`, and `delete_many()` methods for all cache backends.\n- Address the CVE-2020-13254 by ensuring that `validate_key()` properly checks for key validity and prevents any potential security issues related to key validation.\n- Review and update `PyLibMCCache.touch()` and other relevant methods in `PyLibMCCache` and `PyMemcacheCache` classes to ensure they call `self.validate_key(key)` before performing operations.\n- Check if `BaseMemcachedCache` class and its subclasses properly implement `validate_key()` calls for all operations that manipulate cache keys. If not, implement the missing calls.\n- Ensure that `validate_key()` raises `InvalidCacheKey` exception for invalid keys, which should be caught and handled appropriately in cache operation methods to prevent data loss.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a comprehensive list of actions to address the inconsistent key validation checks in cache backends, directly referencing the methods and classes mentioned in the PROMPT. It suggests adding the missing `self.validate_key(key)` calls in the specified methods, implementing unit tests to ensure future compliance, and addressing the CVE-2020-13254 by ensuring proper key validity checks. The RESPONSE also includes a review of the `PyLibMCCache` and `PyMemcacheCache` classes and the `BaseMemcachedCache` class and its subclasses to ensure they implement `validate_key()` calls correctly. Additionally, it advises on the proper handling of the `InvalidCacheKey` exception to prevent data loss. The RESPONSE also provides links to the relevant code snippets, which is useful for the developer to locate the exact locations in the codebase that require attention. The only reason it does not score a 10 is that it does not explicitly mention `LocMemcache.touch()` which was listed in the PROMPT as one of the methods needing validation.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711727071.641422,
+        "result": "- Add `self.validate_key(key)` call in `MemcachedCache.touch()` method.\n- Add `self.validate_key(key)` call in `MemcachedCache.get()` method.\n- Ensure `self.validate_key(key)` is called in `MemcachedCache.delete()` and `MemcachedCache.delete_many()` methods.\n- Add unit tests to verify that `validate_key()` is called in `touch()`, `get()`, `delete()`, and `delete_many()` methods for all cache backends.\n- Address the CVE-2020-13254 by ensuring that `validate_key()` properly checks for key validity and prevents any potential security issues related to key validation.\n- Review and update `PyLibMCCache.touch()` and other relevant methods in `PyLibMCCache` and `PyMemcacheCache` classes to ensure they call `self.validate_key(key)` before performing operations.\n- Check if `BaseMemcachedCache` class and its subclasses properly implement `validate_key()` calls for all operations that manipulate cache keys. If not, implement the missing calls.\n- Ensure that `validate_key()` raises `InvalidCacheKey` exception for invalid keys, which should be caught and handled appropriately in cache operation methods to prevent data loss.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [cache](https://github.com/testbed/django__django__3.2/tree//django/core/cache) \u2192 [backends](https://github.com/testbed/django__django__3.2/tree//django/core/cache/backends)- [Lines 88 - 141](https://github.com/testbed/django__django__3.2/blob//django/core/cache/backends/memcached.py#L88-L141)\n\n This snippet includes the implementation of 'delete' and 'delete_many' methods for the MemcachedCache backend, which are mentioned in the issue as needing validation checks. \n\n\n   - [Lines 144 - 188](https://github.com/testbed/django__django__3.2/blob//django/core/cache/backends/memcached.py#L144-L188)\n\n This snippet contains the 'touch' method for the PyLibMCCache backend, which is one of the methods mentioned in the issue that requires a validation check."
+    }
+}

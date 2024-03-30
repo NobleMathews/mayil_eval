@@ -1,0 +1,223 @@
+{
+    "id": "django__django-11591",
+    "repo_name": "testbed/django__django__3.0",
+    "task_id": 4387883901333033092,
+    "title": "Raise a descriptive error on unsupported operations following QuerySet.union(), intersection(), and difference().",
+    "body": "Description\n\t\nThe documentation for QuerySet.union() says, \"In addition, only LIMIT, OFFSET, and ORDER BY (i.e. slicing and order_by()) are allowed on the resulting QuerySet.\", however, there isn't any strict enforcement about this -- some operations like QuerySet.count() might appear to work. See #27982 and #27990 for confusion about this.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.0.git",
+    "requested_commit": "",
+    "mayil_response": "- Add a method `_not_support_combined_queries` in `django/db/models/query.py` within the `QuerySet` class to raise an error for unsupported operations on combined QuerySets (union, intersection, difference).\n- Implement the `_not_support_combined_queries` method to check if the current QuerySet is a result of a combination and raise a `NotSupportedError` if an unsupported operation is attempted.\n- Call `_not_support_combined_queries` at the beginning of methods that are not supported after a combination, such as `distinct`, `extra`, `defer`, and `reverse`.\n- Update the `QuerySet` class to track if it is a result of a combination using an attribute, e.g., `self._result_of_combination`.\n- Set `self._result_of_combination` to `True` in the `union`, `intersection`, and `difference` methods after the combination is performed.\n- Ensure that the `count` method does not call `_not_support_combined_queries` since it is supported after combinations.\n- Add relevant error messages in `django/core/exceptions.py` for unsupported operations on combined QuerySets.\n- Update the documentation to clearly state which operations are not supported after calling `union`, `intersection`, or `difference`.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models)- [Lines 1673 - 2061](https://github.com/testbed/django__django__3.0/blob//django/db/models/query.py#L1673-L2061)\n\n This snippet contains the method '_not_support_combined_queries' which is used to raise errors for unsupported operations on combined queries. It is relevant because the issue is about raising descriptive errors for unsupported operations following QuerySet.union(), intersection(), and difference().\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models) \u2192 [sql](https://github.com/testbed/django__django__3.0/tree//django/db/models/sql)- [Lines 556 - 1141](https://github.com/testbed/django__django__3.0/blob//django/db/models/sql/compiler.py#L556-L1141)\n\n This snippet is part of the SQL compiler and deals with the handling of combined queries (e.g., UNION, INTERSECT, EXCEPT). It is relevant because the issue is related to enforcing restrictions on operations after combining querysets. \n\n\n   - [Lines 550 - 572](https://github.com/testbed/django__django__3.0/blob//django/db/models/sql/compiler.py#L550-L572)\n\n This snippet contains checks for slicing and ordering in compound statements, which is relevant to the issue as it involves enforcing restrictions on QuerySet operations after set operations like union.\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.0/tree//django/core)- [Lines 239 - 254](https://github.com/testbed/django__django__3.0/blob//django/core/exceptions.py#L239-L254)\n\n This snippet defines custom exceptions that could be used or extended to create a new exception for unsupported operations following QuerySet.union(), intersection(), and difference().",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000263,
+        "snippet_processor": 0.03901,
+        "issue_star_creation": 0.01774,
+        "issue_star_solver": 0.07738,
+        "bouncer": 0.02554
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711728338.654783,
+        "relevant_snippets": [
+            {
+                "code": "def __and__(self, other):\n        self._check_operator_queryset(other, \"&\")\n        self._merge_sanity_check(other)\n        if isinstance(other, EmptyQuerySet):\n            return other\n        if isinstance(self, EmptyQuerySet):\n            return self\n        combined = self._chain()\n        combined._merge_known_related_objects(other)\n        combined.query.combine(other.query, sql.AND)\n        return combined\n\n    def __or__(self, other):\n        self._check_operator_queryset(other, \"|\")\n        self._merge_sanity_check(other)\n        if isinstance(self, EmptyQuerySet):\n            return other\n        if isinstance(other, EmptyQuerySet):\n            return self\n        query = (\n            self\n            if self.query.can_filter()\n            else self.model._base_manager.filter(pk__in=self.values(\"pk\"))\n        )\n        combined = query._chain()\n        combined._merge_known_related_objects(other)\n        if not other.query.can_filter():\n            other = other.model._base_manager.filter(pk__in=other.values(\"pk\"))\n        combined.query.combine(other.query, sql.OR)\n        return combined\n\n    def __xor__(self, other):\n        self._check_operator_queryset(other, \"^\")\n        self._merge_sanity_check(other)\n        if isinstance(self, EmptyQuerySet):\n            return other\n        if isinstance(other, EmptyQuerySet):\n            return self\n        query = (\n            self\n            if self.query.can_filter()\n            else self.model._base_manager.filter(pk__in=self.values(\"pk\"))\n        )\n        combined = query._chain()\n        combined._merge_known_related_objects(other)\n        if not other.query.can_filter():\n            other = other.model._base_manager.filter(pk__in=other.values(\"pk\"))\n        combined.query.combine(other.query, sql.XOR)\n        return combined\n\n    ####################################\n    # METHODS THAT DO DATABASE QUERIES #\n    ####################################\n\n    def _iterator(self, use_chunked_fetch, chunk_size):\n        iterable = self._iterable_class(\n            self,\n            chunked_fetch=use_chunked_fetch,\n            chunk_size=chunk_size or 2000,\n        )\n        if not self._prefetch_related_lookups or chunk_size is None:\n            yield from iterable\n            return\n\n        iterator = iter(iterable)\n        while results := list(islice(iterator, chunk_size)):\n            prefetch_related_objects(results, *self._prefetch_related_lookups)\n            yield from results",
+                "filename": "django/db/models/query.py",
+                "start_index": 15783,
+                "end_index": 18267,
+                "start_line": 454,
+                "end_line": 521,
+                "max_line": 2647,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "class EmptyResultSet(Exception):\n    \"\"\"A database query predicate is impossible.\"\"\"\n\n    pass\n\n\nclass FullResultSet(Exception):\n    \"\"\"A database query predicate is matches everything.\"\"\"\n\n    pass\n\n\nclass SynchronousOnlyOperation(Exception):\n    \"\"\"The user tried to call a sync-only function from an async context.\"\"\"\n\n    pass",
+                "filename": "django/core/exceptions.py",
+                "start_index": 6245,
+                "end_index": 6575,
+                "start_line": 239,
+                "end_line": 254,
+                "max_line": 254,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.core.exceptions import SuspiciousOperation\n\n\nclass DisallowedModelAdminLookup(SuspiciousOperation):\n    \"\"\"Invalid filter was passed to admin view via URL querystring\"\"\"\n\n    pass\n\n\nclass DisallowedModelAdminToField(SuspiciousOperation):\n    \"\"\"Invalid to_field was passed to admin view via URL query string\"\"\"\n\n    pass\n\n\nclass AlreadyRegistered(Exception):\n    \"\"\"The model is already registered.\"\"\"\n\n    pass\n\n\nclass NotRegistered(Exception):\n    \"\"\"The model is not registered.\"\"\"\n\n    pass",
+                "filename": "django/contrib/admin/exceptions.py",
+                "start_index": 0,
+                "end_index": 506,
+                "start_line": 1,
+                "end_line": 25,
+                "max_line": 25,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "def distinct(self, *field_names):\n        \"\"\"\n        Return a new QuerySet instance that will select only distinct results.\n        \"\"\"\n        self._not_support_combined_queries(\"distinct\")\n        if self.query.is_sliced:\n            raise TypeError(\n                \"Cannot create distinct fields once a slice has been taken.\"\n            )\n        obj = self._chain()\n        obj.query.add_distinct_fields(*field_names)\n        return obj\n\n    def extra(\n        self,\n        select=None,\n        where=None,\n        params=None,\n        tables=None,\n        order_by=None,\n        select_params=None,\n    ):\n        \"\"\"Add extra SQL fragments to the query.\"\"\"\n        self._not_support_combined_queries(\"extra\")\n        if self.query.is_sliced:\n            raise TypeError(\"Cannot change a query once a slice has been taken.\")\n        clone = self._chain()\n        clone.query.add_extra(select, select_params, where, params, tables, order_by)\n        return clone\n\n    def reverse(self):\n        \"\"\"Reverse the ordering of the QuerySet.\"\"\"\n        if self.query.is_sliced:\n            raise TypeError(\"Cannot reverse a query once a slice has been taken.\")\n        clone = self._chain()\n        clone.query.standard_ordering = not clone.query.standard_ordering\n        return clone\n\n    def defer(self, *fields):\n        \"\"\"\n        Defer the loading of data for certain fields until they are accessed.\n        Add the set of deferred fields to any existing set of deferred fields.\n        The only exception to this is if None is passed in as the only\n        parameter, in which case removal all deferrals.\n        \"\"\"\n        self._not_support_combined_queries(\"defer\")\n        if self._fields is not None:\n            raise TypeError(\"Cannot call defer() after .values() or .values_list()\")\n        clone = self._chain()\n        if fields == (None,):\n            clone.query.clear_deferred_loading()\n        else:\n            clone.query.add_deferred_loading(fields)\n        return clone",
+                "filename": "django/db/models/query.py",
+                "start_index": 64249,
+                "end_index": 66246,
+                "start_line": 1673,
+                "end_line": 2061,
+                "max_line": 2647,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "for compiler in compilers:\n            try:\n                # If the columns list is limited, then all combined queries\n                # must have the same columns list. Set the selects defined on\n                # the query on all combined queries, if not already set.\n                if not compiler.query.values_select and self.query.values_select:\n                    compiler.query = compiler.query.clone()\n                    compiler.query.set_values(\n                        (\n                            *self.query.extra_select,\n                            *self.query.values_select,\n                            *self.query.annotation_select,\n                        )\n                    )\n                part_sql, part_args = compiler.as_sql(with_col_aliases=True)\n                if compiler.query.combinator:\n                    # Wrap in a subquery if wrapping in parentheses isn't\n                    # supported.\n                    if not features.supports_parentheses_in_compound:\n                        part_sql = \"SELECT * FROM ({})\".format(part_sql)\n                    # Add parentheses when combining with compound query if not\n                    # already added for all compound queries.\n                    elif (\n                        self.query.subquery\n                        or not features.supports_slicing_ordering_in_compound\n                    ):\n                        part_sql = \"({})\".format(part_sql)\n                elif (\n                    self.query.subquery\n                    and features.supports_slicing_ordering_in_compound\n                ):\n                    part_sql = \"({})\".format(part_sql)\n                parts += ((part_sql, part_args),)\n            except EmptyResultSet:\n                # Omit the empty queryset with UNION and with DIFFERENCE if the\n                # first queryset is nonempty.\n                if combinator == \"union\" or (combinator == \"difference\" and parts):\n                    continue\n                raise\n        if not parts:\n            raise EmptyResultSet\n        combinator_sql = self.connection.ops.set_operators[combinator]\n        if all and combinator == \"union\":\n            combinator_sql += \" ALL\"\n        braces = \"{}\"\n        if not self.query.subquery and features.supports_slicing_ordering_in_compound:\n            braces = \"({})\"\n        sql_parts, args_parts = zip(\n            *((braces.format(sql), args) for sql, args in parts)\n        )\n        result = [\" {} \".format(combinator_sql).join(sql_parts)]\n        params = []\n        for part in args_parts:\n            params.extend(part)\n        return result, params",
+                "filename": "django/db/models/sql/compiler.py",
+                "start_index": 24873,
+                "end_index": 27507,
+                "start_line": 556,
+                "end_line": 1141,
+                "max_line": 2099,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from types import NoneType\n\nfrom django.contrib.postgres.indexes import OpClass\nfrom django.core.exceptions import ValidationError\nfrom django.db import DEFAULT_DB_ALIAS, NotSupportedError\nfrom django.db.backends.ddl_references import Expressions, Statement, Table\nfrom django.db.models import BaseConstraint, Deferrable, F, Q\nfrom django.db.models.expressions import Exists, ExpressionList\nfrom django.db.models.indexes import IndexExpression\nfrom django.db.models.lookups import PostgresOperatorLookup\nfrom django.db.models.sql import Query\n\n__all__ = [\"ExclusionConstraint\"]\n\n\nclass ExclusionConstraintExpression(IndexExpression):\n    template = \"%(expressions)s WITH %(operator)s\"",
+                "filename": "django/contrib/postgres/constraints.py",
+                "start_index": 0,
+                "end_index": 684,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 227,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "def check_related_objects(self, field, value, opts):\n        \"\"\"Check the type of object passed to query relations.\"\"\"\n        if field.is_relation:\n            # Check that the field and the queryset use the same model in a\n            # query like .filter(author=Author.objects.all()). For example, the\n            # opts would be Author's (from the author field) and value.model\n            # would be Author.objects.all() queryset's .model (Author also).\n            # The field is the related field on the lhs side.\n            if (\n                isinstance(value, Query)\n                and not value.has_select_fields\n                and not check_rel_lookup_compatibility(value.model, opts, field)\n            ):\n                raise ValueError(\n                    'Cannot use QuerySet for \"%s\": Use a QuerySet for \"%s\".'\n                    % (value.model._meta.object_name, opts.object_name)\n                )\n            elif hasattr(value, \"_meta\"):\n                self.check_query_object_type(value, opts, field)\n            elif hasattr(value, \"__iter__\"):\n                for v in value:\n                    self.check_query_object_type(v, opts, field)\n\n    def check_filterable(self, expression):\n        \"\"\"Raise an error if expression cannot be used in a WHERE clause.\"\"\"\n        if hasattr(expression, \"resolve_expression\") and not getattr(\n            expression, \"filterable\", True\n        ):\n            raise NotSupportedError(\n                expression.__class__.__name__ + \" is disallowed in the filter \"\n                \"clause.\"\n            )\n        if hasattr(expression, \"get_source_expressions\"):\n            for expr in expression.get_source_expressions():\n                self.check_filterable(expr)",
+                "filename": "django/db/models/sql/query.py",
+                "start_index": 53408,
+                "end_index": 55146,
+                "start_line": 1277,
+                "end_line": 1311,
+                "max_line": 2687,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nUseful auxiliary data structures for query construction. Not useful outside\nthe SQL domain.\n\"\"\"\nimport warnings\n\nfrom django.core.exceptions import FullResultSet\nfrom django.db.models.sql.constants import INNER, LOUTER\nfrom django.utils.deprecation import RemovedInDjango60Warning\n\n\nclass MultiJoin(Exception):\n    \"\"\"\n    Used by join construction code to indicate the point at which a\n    multi-valued join was attempted (if the caller wants to treat that\n    exceptionally).\n    \"\"\"\n\n    def __init__(self, names_pos, path_with_names):\n        self.level = names_pos\n        # The path travelled, this includes the path to the multijoin.\n        self.names_with_path = path_with_names\n\n\nclass Empty:\n    pass",
+                "filename": "django/db/models/sql/datastructures.py",
+                "start_index": 0,
+                "end_index": 715,
+                "start_line": 1,
+                "end_line": 130,
+                "max_line": 237,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "import warnings\nfrom enum import Enum\nfrom types import NoneType\n\nfrom django.core.exceptions import FieldError, ValidationError\nfrom django.db import connections\nfrom django.db.models.expressions import Exists, ExpressionList, F, OrderBy\nfrom django.db.models.indexes import IndexExpression\nfrom django.db.models.lookups import Exact\nfrom django.db.models.query_utils import Q\nfrom django.db.models.sql.query import Query\nfrom django.db.utils import DEFAULT_DB_ALIAS\nfrom django.utils.deprecation import RemovedInDjango60Warning\nfrom django.utils.translation import gettext_lazy as _\n\n__all__ = [\"BaseConstraint\", \"CheckConstraint\", \"Deferrable\", \"UniqueConstraint\"]",
+                "filename": "django/db/models/constraints.py",
+                "start_index": 0,
+                "end_index": 667,
+                "start_line": 1,
+                "end_line": 16,
+                "max_line": 466,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "features = self.connection.features\n        compilers = [\n            query.get_compiler(self.using, self.connection, self.elide_empty)\n            for query in self.query.combined_queries\n        ]\n        if not features.supports_slicing_ordering_in_compound:\n            for compiler in compilers:\n                if compiler.query.is_sliced:\n                    raise DatabaseError(\n                        \"LIMIT/OFFSET not allowed in subqueries of compound statements.\"\n                    )\n                if compiler.get_order_by():\n                    raise DatabaseError(\n                        \"ORDER BY not allowed in subqueries of compound statements.\"\n                    )\n        elif self.query.is_sliced and combinator == \"union\":\n            for compiler in compilers:\n                # A sliced union cannot have its parts elided as some of them\n                # might be sliced as well and in the event where only a single\n                # part produces a non-empty resultset it might be impossible to\n                # generate valid SQL.\n                compiler.elide_empty = False\n        parts = ()",
+                "filename": "django/db/models/sql/compiler.py",
+                "start_index": 23736,
+                "end_index": 24864,
+                "start_line": 550,
+                "end_line": 572,
+                "max_line": 2099,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/models/query.py": [
+                {
+                    "chunk": {
+                        "code": "def distinct(self, *field_names):\n        \"\"\"\n        Return a new QuerySet instance that will select only distinct results.\n        \"\"\"\n        self._not_support_combined_queries(\"distinct\")\n        if self.query.is_sliced:\n            raise TypeError(\n                \"Cannot create distinct fields once a slice has been taken.\"\n            )\n        obj = self._chain()\n        obj.query.add_distinct_fields(*field_names)\n        return obj\n\n    def extra(\n        self,\n        select=None,\n        where=None,\n        params=None,\n        tables=None,\n        order_by=None,\n        select_params=None,\n    ):\n        \"\"\"Add extra SQL fragments to the query.\"\"\"\n        self._not_support_combined_queries(\"extra\")\n        if self.query.is_sliced:\n            raise TypeError(\"Cannot change a query once a slice has been taken.\")\n        clone = self._chain()\n        clone.query.add_extra(select, select_params, where, params, tables, order_by)\n        return clone\n\n    def reverse(self):\n        \"\"\"Reverse the ordering of the QuerySet.\"\"\"\n        if self.query.is_sliced:\n            raise TypeError(\"Cannot reverse a query once a slice has been taken.\")\n        clone = self._chain()\n        clone.query.standard_ordering = not clone.query.standard_ordering\n        return clone\n\n    def defer(self, *fields):\n        \"\"\"\n        Defer the loading of data for certain fields until they are accessed.\n        Add the set of deferred fields to any existing set of deferred fields.\n        The only exception to this is if None is passed in as the only\n        parameter, in which case removal all deferrals.\n        \"\"\"\n        self._not_support_combined_queries(\"defer\")\n        if self._fields is not None:\n            raise TypeError(\"Cannot call defer() after .values() or .values_list()\")\n        clone = self._chain()\n        if fields == (None,):\n            clone.query.clear_deferred_loading()\n        else:\n            clone.query.add_deferred_loading(fields)\n        return clone",
+                        "filename": "django/db/models/query.py",
+                        "start_index": 64249,
+                        "end_index": 66246,
+                        "start_line": 1673,
+                        "end_line": 2061,
+                        "max_line": 2647,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the method '_not_support_combined_queries' which is used to raise errors for unsupported operations on combined queries. It is relevant because the issue is about raising descriptive errors for unsupported operations following QuerySet.union(), intersection(), and difference()."
+                }
+            ],
+            "django/db/models/sql/compiler.py": [
+                {
+                    "chunk": {
+                        "code": "for compiler in compilers:\n            try:\n                # If the columns list is limited, then all combined queries\n                # must have the same columns list. Set the selects defined on\n                # the query on all combined queries, if not already set.\n                if not compiler.query.values_select and self.query.values_select:\n                    compiler.query = compiler.query.clone()\n                    compiler.query.set_values(\n                        (\n                            *self.query.extra_select,\n                            *self.query.values_select,\n                            *self.query.annotation_select,\n                        )\n                    )\n                part_sql, part_args = compiler.as_sql(with_col_aliases=True)\n                if compiler.query.combinator:\n                    # Wrap in a subquery if wrapping in parentheses isn't\n                    # supported.\n                    if not features.supports_parentheses_in_compound:\n                        part_sql = \"SELECT * FROM ({})\".format(part_sql)\n                    # Add parentheses when combining with compound query if not\n                    # already added for all compound queries.\n                    elif (\n                        self.query.subquery\n                        or not features.supports_slicing_ordering_in_compound\n                    ):\n                        part_sql = \"({})\".format(part_sql)\n                elif (\n                    self.query.subquery\n                    and features.supports_slicing_ordering_in_compound\n                ):\n                    part_sql = \"({})\".format(part_sql)\n                parts += ((part_sql, part_args),)\n            except EmptyResultSet:\n                # Omit the empty queryset with UNION and with DIFFERENCE if the\n                # first queryset is nonempty.\n                if combinator == \"union\" or (combinator == \"difference\" and parts):\n                    continue\n                raise\n        if not parts:\n            raise EmptyResultSet\n        combinator_sql = self.connection.ops.set_operators[combinator]\n        if all and combinator == \"union\":\n            combinator_sql += \" ALL\"\n        braces = \"{}\"\n        if not self.query.subquery and features.supports_slicing_ordering_in_compound:\n            braces = \"({})\"\n        sql_parts, args_parts = zip(\n            *((braces.format(sql), args) for sql, args in parts)\n        )\n        result = [\" {} \".format(combinator_sql).join(sql_parts)]\n        params = []\n        for part in args_parts:\n            params.extend(part)\n        return result, params",
+                        "filename": "django/db/models/sql/compiler.py",
+                        "start_index": 24873,
+                        "end_index": 27507,
+                        "start_line": 556,
+                        "end_line": 1141,
+                        "max_line": 2099,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is part of the SQL compiler and deals with the handling of combined queries (e.g., UNION, INTERSECT, EXCEPT). It is relevant because the issue is related to enforcing restrictions on operations after combining querysets."
+                },
+                {
+                    "chunk": {
+                        "code": "features = self.connection.features\n        compilers = [\n            query.get_compiler(self.using, self.connection, self.elide_empty)\n            for query in self.query.combined_queries\n        ]\n        if not features.supports_slicing_ordering_in_compound:\n            for compiler in compilers:\n                if compiler.query.is_sliced:\n                    raise DatabaseError(\n                        \"LIMIT/OFFSET not allowed in subqueries of compound statements.\"\n                    )\n                if compiler.get_order_by():\n                    raise DatabaseError(\n                        \"ORDER BY not allowed in subqueries of compound statements.\"\n                    )\n        elif self.query.is_sliced and combinator == \"union\":\n            for compiler in compilers:\n                # A sliced union cannot have its parts elided as some of them\n                # might be sliced as well and in the event where only a single\n                # part produces a non-empty resultset it might be impossible to\n                # generate valid SQL.\n                compiler.elide_empty = False\n        parts = ()",
+                        "filename": "django/db/models/sql/compiler.py",
+                        "start_index": 23736,
+                        "end_index": 24864,
+                        "start_line": 550,
+                        "end_line": 572,
+                        "max_line": 2099,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains checks for slicing and ordering in compound statements, which is relevant to the issue as it involves enforcing restrictions on QuerySet operations after set operations like union."
+                }
+            ],
+            "django/core/exceptions.py": [
+                {
+                    "chunk": {
+                        "code": "class EmptyResultSet(Exception):\n    \"\"\"A database query predicate is impossible.\"\"\"\n\n    pass\n\n\nclass FullResultSet(Exception):\n    \"\"\"A database query predicate is matches everything.\"\"\"\n\n    pass\n\n\nclass SynchronousOnlyOperation(Exception):\n    \"\"\"The user tried to call a sync-only function from an async context.\"\"\"\n\n    pass",
+                        "filename": "django/core/exceptions.py",
+                        "start_index": 6245,
+                        "end_index": 6575,
+                        "start_line": 239,
+                        "end_line": 254,
+                        "max_line": 254,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines custom exceptions that could be used or extended to create a new exception for unsupported operations following QuerySet.union(), intersection(), and difference()."
+                }
+            ]
+        },
+        "solution_task": "- Add a method `_not_support_combined_queries` in `django/db/models/query.py` within the `QuerySet` class to raise an error for unsupported operations on combined QuerySets (union, intersection, difference).\n- Implement the `_not_support_combined_queries` method to check if the current QuerySet is a result of a combination and raise a `NotSupportedError` if an unsupported operation is attempted.\n- Call `_not_support_combined_queries` at the beginning of methods that are not supported after a combination, such as `distinct`, `extra`, `defer`, and `reverse`.\n- Update the `QuerySet` class to track if it is a result of a combination using an attribute, e.g., `self._result_of_combination`.\n- Set `self._result_of_combination` to `True` in the `union`, `intersection`, and `difference` methods after the combination is performed.\n- Ensure that the `count` method does not call `_not_support_combined_queries` since it is supported after combinations.\n- Add relevant error messages in `django/core/exceptions.py` for unsupported operations on combined QuerySets.\n- Update the documentation to clearly state which operations are not supported after calling `union`, `intersection`, or `difference`.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable plan to address the issue of unsupported operations following QuerySet.union(), intersection(), and difference() in Django. It suggests creating a method to raise an error for unsupported operations, implementing checks to enforce this, and updating the documentation accordingly. The RESPONSE also correctly identifies that the count method should not raise an error, as it is supported after combinations. Additionally, the RESPONSE includes updating exception messages and the relevant code snippets to check, which are directly related to the issue at hand. The only reason it does not score a 10 is that it does not explicitly mention updating test cases to ensure the new behavior is correctly implemented, which is a common practice when making changes to software behavior.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711728594.3809888,
+        "result": "- Add a method `_not_support_combined_queries` in `django/db/models/query.py` within the `QuerySet` class to raise an error for unsupported operations on combined QuerySets (union, intersection, difference).\n- Implement the `_not_support_combined_queries` method to check if the current QuerySet is a result of a combination and raise a `NotSupportedError` if an unsupported operation is attempted.\n- Call `_not_support_combined_queries` at the beginning of methods that are not supported after a combination, such as `distinct`, `extra`, `defer`, and `reverse`.\n- Update the `QuerySet` class to track if it is a result of a combination using an attribute, e.g., `self._result_of_combination`.\n- Set `self._result_of_combination` to `True` in the `union`, `intersection`, and `difference` methods after the combination is performed.\n- Ensure that the `count` method does not call `_not_support_combined_queries` since it is supported after combinations.\n- Add relevant error messages in `django/core/exceptions.py` for unsupported operations on combined QuerySets.\n- Update the documentation to clearly state which operations are not supported after calling `union`, `intersection`, or `difference`.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models)- [Lines 1673 - 2061](https://github.com/testbed/django__django__3.0/blob//django/db/models/query.py#L1673-L2061)\n\n This snippet contains the method '_not_support_combined_queries' which is used to raise errors for unsupported operations on combined queries. It is relevant because the issue is about raising descriptive errors for unsupported operations following QuerySet.union(), intersection(), and difference().\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models) \u2192 [sql](https://github.com/testbed/django__django__3.0/tree//django/db/models/sql)- [Lines 556 - 1141](https://github.com/testbed/django__django__3.0/blob//django/db/models/sql/compiler.py#L556-L1141)\n\n This snippet is part of the SQL compiler and deals with the handling of combined queries (e.g., UNION, INTERSECT, EXCEPT). It is relevant because the issue is related to enforcing restrictions on operations after combining querysets. \n\n\n   - [Lines 550 - 572](https://github.com/testbed/django__django__3.0/blob//django/db/models/sql/compiler.py#L550-L572)\n\n This snippet contains checks for slicing and ordering in compound statements, which is relevant to the issue as it involves enforcing restrictions on QuerySet operations after set operations like union.\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.0/tree//django/core)- [Lines 239 - 254](https://github.com/testbed/django__django__3.0/blob//django/core/exceptions.py#L239-L254)\n\n This snippet defines custom exceptions that could be used or extended to create a new exception for unsupported operations following QuerySet.union(), intersection(), and difference()."
+    }
+}

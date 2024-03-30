@@ -1,0 +1,174 @@
+{
+    "id": "django__django-15491",
+    "repo_name": "testbed/django__django__4.1",
+    "task_id": 8879660761041748277,
+    "title": "Builtin csrf_failure() view uses wrong charset",
+    "body": "Description\n\t\nWhen Django detects wrong CSRF token, it shows an error using view django.views.csrf.csrf_failure. That file ends with\n\treturn HttpResponseForbidden(t.render(c), content_type=\"text/html;\")\nWhen the template (CSRF_FAILURE_TEMPLATE_NAME) is written using UTF-8, it is rendered incorrectly. I suggest changing that line to\n\treturn HttpResponseForbidden(t.render(c), content_type=\"text/html;\"+\n\t\t\t\t\t\t\t\t\t\t\t f\" charset={settings.DEFAULT_CHARSET};\")\nor perhaps leaving out the content_type entirely.\nCurrently I'm using a workaround, by adding\n<meta http-equiv=\"Content-type\" content=\"text/html; charset=utf-8\" />\nto the template's HEAD, but it seems to me that the suggested fix is a better solution.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.1.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `csrf_failure` function in `django/views/csrf.py` to include the charset in the `Content-Type` header by using `settings.DEFAULT_CHARSET`.\n- The updated `HttpResponseForbidden` call should look like this:\n\n```python\nreturn HttpResponseForbidden(t.render(c), content_type=f\"text/html; charset={settings.DEFAULT_CHARSET}\")\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [views](https://github.com/testbed/django__django__4.1/tree//django/views)- [Lines 22 - 79](https://github.com/testbed/django__django__4.1/blob//django/views/csrf.py#L22-L79)\n\n This snippet contains the actual implementation of the csrf_failure view, which is where the content_type needs to be updated to include the charset.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000368,
+        "snippet_processor": 0.05754,
+        "issue_star_creation": 0.017099999999999997,
+        "issue_star_solver": 0.05033,
+        "bouncer": 0.02452
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711718625.168972,
+        "relevant_snippets": [
+            {
+                "code": "def csrf_failure(request, reason=\"\", template_name=CSRF_FAILURE_TEMPLATE_NAME):\n    \"\"\"\n    Default view used when request fails CSRF protection\n    \"\"\"\n    from django.middleware.csrf import REASON_NO_CSRF_COOKIE, REASON_NO_REFERER\n\n    c = {\n        \"title\": _(\"Forbidden\"),\n        \"main\": _(\"CSRF verification failed. Request aborted.\"),\n        \"reason\": reason,\n        \"no_referer\": reason == REASON_NO_REFERER,\n        \"no_referer1\": _(\n            \"You are seeing this message because this HTTPS site requires a \"\n            \"\u201cReferer header\u201d to be sent by your web browser, but none was \"\n            \"sent. This header is required for security reasons, to ensure \"\n            \"that your browser is not being hijacked by third parties.\"\n        ),\n        \"no_referer2\": _(\n            \"If you have configured your browser to disable \u201cReferer\u201d headers, \"\n            \"please re-enable them, at least for this site, or for HTTPS \"\n            \"connections, or for \u201csame-origin\u201d requests.\"\n        ),\n        \"no_referer3\": _(\n            'If you are using the <meta name=\"referrer\" '\n            'content=\"no-referrer\"> tag or including the \u201cReferrer-Policy: '\n            \"no-referrer\u201d header, please remove them. The CSRF protection \"\n            \"requires the \u201cReferer\u201d header to do strict referer checking. If \"\n            \"you\u2019re concerned about privacy, use alternatives like \"\n            '<a rel=\"noreferrer\" \u2026> for links to third-party sites.'\n        ),\n        \"no_cookie\": reason == REASON_NO_CSRF_COOKIE,\n        \"no_cookie1\": _(\n            \"You are seeing this message because this site requires a CSRF \"\n            \"cookie when submitting forms. This cookie is required for \"\n            \"security reasons, to ensure that your browser is not being \"\n            \"hijacked by third parties.\"\n        ),\n        \"no_cookie2\": _(\n            \"If you have configured your browser to disable cookies, please \"\n            \"re-enable them, at least for this site, or for \u201csame-origin\u201d \"\n            \"requests.\"\n        ),\n        \"DEBUG\": settings.DEBUG,\n        \"docs_version\": get_docs_version(),\n        \"more\": _(\"More information is available with DEBUG=True.\"),\n    }\n    try:\n        t = loader.get_template(template_name)\n    except TemplateDoesNotExist:\n        if template_name == CSRF_FAILURE_TEMPLATE_NAME:\n            # If the default template doesn't exist, use the fallback template.\n            with builtin_template_path(\"csrf_403.html\").open(encoding=\"utf-8\") as fh:\n                t = Engine().from_string(fh.read())\n            c = Context(c)\n        else:\n            # Raise if a developer-specified template doesn't exist.\n            raise\n    return HttpResponseForbidden(t.render(c))",
+                "filename": "django/views/csrf.py",
+                "start_index": 616,
+                "end_index": 3349,
+                "start_line": 22,
+                "end_line": 79,
+                "max_line": 79,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nCross Site Request Forgery Middleware.\n\nThis module provides a middleware that implements protection\nagainst request forgeries from other sites.\n\"\"\"\nimport logging\nimport string\nfrom collections import defaultdict\nfrom urllib.parse import urlparse\n\nfrom django.conf import settings\nfrom django.core.exceptions import DisallowedHost, ImproperlyConfigured\nfrom django.http import HttpHeaders, UnreadablePostError\nfrom django.urls import get_callable\nfrom django.utils.cache import patch_vary_headers\nfrom django.utils.crypto import constant_time_compare, get_random_string\nfrom django.utils.deprecation import MiddlewareMixin\nfrom django.utils.functional import cached_property\nfrom django.utils.http import is_same_domain\nfrom django.utils.log import log_response\nfrom django.utils.regex_helper import _lazy_re_compile\n\nlogger = logging.getLogger(\"django.security.csrf\")\n# This matches if any character is not in CSRF_ALLOWED_CHARS.\ninvalid_token_chars_re = _lazy_re_compile(\"[^a-zA-Z0-9]\")\n\nREASON_BAD_ORIGIN = \"Origin checking failed - %s does not match any trusted origins.\"\nREASON_NO_REFERER = \"Referer checking failed - no Referer.\"\nREASON_BAD_REFERER = \"Referer checking failed - %s does not match any trusted origins.\"\nREASON_NO_CSRF_COOKIE = \"CSRF cookie not set.\"\nREASON_CSRF_TOKEN_MISSING = \"CSRF token missing.\"\nREASON_MALFORMED_REFERER = \"Referer checking failed - Referer is malformed.\"\nREASON_INSECURE_REFERER = (\n    \"Referer checking failed - Referer is insecure while host is secure.\"\n)\n# The reason strings below are for passing to InvalidTokenFormat. They are\n# phrases without a subject because they can be in reference to either the CSRF\n# cookie or non-cookie token.\nREASON_INCORRECT_LENGTH = \"has incorrect length\"\nREASON_INVALID_CHARACTERS = \"has invalid characters\"\n\nCSRF_SECRET_LENGTH = 32\nCSRF_TOKEN_LENGTH = 2 * CSRF_SECRET_LENGTH\nCSRF_ALLOWED_CHARS = string.ascii_letters + string.digits\nCSRF_SESSION_KEY = \"_csrftoken\"\n\n\ndef _get_failure_view():\n    \"\"\"Return the view to be used for CSRF rejections.\"\"\"\n    return get_callable(settings.CSRF_FAILURE_VIEW)\n\n\ndef _get_new_csrf_string():\n    return get_random_string(CSRF_SECRET_LENGTH, allowed_chars=CSRF_ALLOWED_CHARS)\n\n\ndef _mask_cipher_secret(secret):\n    \"\"\"\n    Given a secret (assumed to be a string of CSRF_ALLOWED_CHARS), generate a\n    token by adding a mask and applying it to the secret.\n    \"\"\"\n    mask = _get_new_csrf_string()\n    chars = CSRF_ALLOWED_CHARS\n    pairs = zip((chars.index(x) for x in secret), (chars.index(x) for x in mask))\n    cipher = \"\".join(chars[(x + y) % len(chars)] for x, y in pairs)\n    return mask + cipher",
+                "filename": "django/middleware/csrf.py",
+                "start_index": 0,
+                "end_index": 2628,
+                "start_line": 1,
+                "end_line": 67,
+                "max_line": 482,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "class CsrfViewMiddleware(MiddlewareMixin):",
+                "filename": "django/middleware/csrf.py",
+                "start_index": 6093,
+                "end_index": 6135,
+                "start_line": 164,
+                "end_line": 164,
+                "max_line": 482,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "from django.middleware.csrf import get_token\nfrom django.utils.functional import lazy\nfrom django.utils.html import format_html\nfrom django.utils.safestring import SafeString\n\n\ndef csrf_input(request):\n    return format_html(\n        '<input type=\"hidden\" name=\"csrfmiddlewaretoken\" value=\"{}\">',\n        get_token(request),\n    )\n\n\ncsrf_input_lazy = lazy(csrf_input, SafeString, str)\ncsrf_token_lazy = lazy(get_token, str)",
+                "filename": "django/template/backends/utils.py",
+                "start_index": 0,
+                "end_index": 423,
+                "start_line": 1,
+                "end_line": 15,
+                "max_line": 15,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "from functools import wraps\n\nfrom asgiref.sync import iscoroutinefunction\n\nfrom django.middleware.csrf import CsrfViewMiddleware, get_token\nfrom django.utils.decorators import decorator_from_middleware\n\ncsrf_protect = decorator_from_middleware(CsrfViewMiddleware)\ncsrf_protect.__name__ = \"csrf_protect\"\ncsrf_protect.__doc__ = \"\"\"\nThis decorator adds CSRF protection in exactly the same way as\nCsrfViewMiddleware, but it can be used on a per view basis.  Using both, or\nusing the decorator multiple times, is harmless and efficient.\n\"\"\"\n\n\nclass _EnsureCsrfToken(CsrfViewMiddleware):\n    # Behave like CsrfViewMiddleware but don't reject requests or log warnings.\n    def _reject(self, request, reason):\n        return None\n\n\nrequires_csrf_token = decorator_from_middleware(_EnsureCsrfToken)\nrequires_csrf_token.__name__ = \"requires_csrf_token\"\nrequires_csrf_token.__doc__ = \"\"\"\nUse this decorator on views that need a correct csrf_token available to\nRequestContext, but without the CSRF protection that csrf_protect\nenforces.\n\"\"\"\n\n\nclass _EnsureCsrfCookie(CsrfViewMiddleware):\n    def _reject(self, request, reason):\n        return None\n\n    def process_view(self, request, callback, callback_args, callback_kwargs):\n        retval = super().process_view(request, callback, callback_args, callback_kwargs)\n        # Force process_response to send the cookie\n        get_token(request)\n        return retval\n\n\nensure_csrf_cookie = decorator_from_middleware(_EnsureCsrfCookie)\nensure_csrf_cookie.__name__ = \"ensure_csrf_cookie\"\nensure_csrf_cookie.__doc__ = \"\"\"\nUse this decorator to ensure that a view sets a CSRF cookie, whether or not it\nuses the csrf_token template tag, or the CsrfViewMiddleware is used.\n\"\"\"\n\n\ndef csrf_exempt(view_func):\n    \"\"\"Mark a view function as being exempt from the CSRF view protection.\"\"\"\n\n    # view_func.csrf_exempt = True would also work, but decorators are nicer\n    # if they don't have side effects, so return a new function.\n\n    if iscoroutinefunction(view_func):\n\n        async def _view_wrapper(request, *args, **kwargs):\n            return await view_func(request, *args, **kwargs)\n\n    else:\n\n        def _view_wrapper(request, *args, **kwargs):\n            return view_func(request, *args, **kwargs)\n\n    _view_wrapper.csrf_exempt = True\n\n    return wraps(view_func)(_view_wrapper)",
+                "filename": "django/views/decorators/csrf.py",
+                "start_index": 0,
+                "end_index": 2323,
+                "start_line": 1,
+                "end_line": 69,
+                "max_line": 69,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    Require a present and correct csrfmiddlewaretoken for POST requests that\n    have a CSRF cookie, and set an outgoing CSRF cookie.\n\n    This middleware should be used in conjunction with the {% csrf_token %}\n    template tag.\n    \"\"\"\n\n    @cached_property\n    def csrf_trusted_origins_hosts(self):\n        return [\n            urlparse(origin).netloc.lstrip(\"*\")\n            for origin in settings.CSRF_TRUSTED_ORIGINS\n        ]\n\n    @cached_property\n    def allowed_origins_exact(self):\n        return {origin for origin in settings.CSRF_TRUSTED_ORIGINS if \"*\" not in origin}\n\n    @cached_property\n    def allowed_origin_subdomains(self):\n        \"\"\"\n        A mapping of allowed schemes to list of allowed netlocs, where all\n        subdomains of the netloc are allowed.\n        \"\"\"\n        allowed_origin_subdomains = defaultdict(list)\n        for parsed in (\n            urlparse(origin)\n            for origin in settings.CSRF_TRUSTED_ORIGINS\n            if \"*\" in origin\n        ):\n            allowed_origin_subdomains[parsed.scheme].append(parsed.netloc.lstrip(\"*\"))\n        return allowed_origin_subdomains\n\n    # The _accept and _reject methods currently only exist for the sake of the\n    # requires_csrf_token decorator.\n    def _accept(self, request):\n        # Avoid checking the request twice by adding a custom attribute to\n        # request.  This will be relevant when both decorator and middleware\n        # are used.\n        request.csrf_processing_done = True\n        return None\n\n    def _reject(self, request, reason):\n        response = _get_failure_view()(request, reason=reason)\n        log_response(\n            \"Forbidden (%s): %s\",\n            reason,\n            request.path,\n            response=response,\n            request=request,\n            logger=logger,\n        )\n        return response",
+                "filename": "django/middleware/csrf.py",
+                "start_index": 6140,
+                "end_index": 7974,
+                "start_line": 1,
+                "end_line": 482,
+                "max_line": 482,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "import inspect\n\nfrom django.conf import settings\n\nfrom .. import Error, Tags, Warning, register\n\nW003 = Warning(\n    \"You don't appear to be using Django's built-in \"\n    \"cross-site request forgery protection via the middleware \"\n    \"('django.middleware.csrf.CsrfViewMiddleware' is not in your \"\n    \"MIDDLEWARE). Enabling the middleware is the safest approach \"\n    \"to ensure you don't leave any holes.\",\n    id=\"security.W003\",\n)\n\nW016 = Warning(\n    \"You have 'django.middleware.csrf.CsrfViewMiddleware' in your \"\n    \"MIDDLEWARE, but you have not set CSRF_COOKIE_SECURE to True. \"\n    \"Using a secure-only CSRF cookie makes it more difficult for network \"\n    \"traffic sniffers to steal the CSRF token.\",\n    id=\"security.W016\",\n)\n\n\ndef _csrf_middleware():\n    return \"django.middleware.csrf.CsrfViewMiddleware\" in settings.MIDDLEWARE\n\n\n@register(Tags.security, deploy=True)\ndef check_csrf_middleware(app_configs, **kwargs):\n    passed_check = _csrf_middleware()\n    return [] if passed_check else [W003]\n\n\n@register(Tags.security, deploy=True)\ndef check_csrf_cookie_secure(app_configs, **kwargs):\n    passed_check = (\n        settings.CSRF_USE_SESSIONS\n        or not _csrf_middleware()\n        or settings.CSRF_COOKIE_SECURE is True\n    )\n    return [] if passed_check else [W016]\n\n\n@register(Tags.security)\ndef check_csrf_failure_view(app_configs, **kwargs):\n    from django.middleware.csrf import _get_failure_view\n\n    errors = []\n    try:\n        view = _get_failure_view()\n    except ImportError:\n        msg = (\n            \"The CSRF failure view '%s' could not be imported.\"\n            % settings.CSRF_FAILURE_VIEW\n        )\n        errors.append(Error(msg, id=\"security.E102\"))\n    else:\n        try:\n            inspect.signature(view).bind(None, reason=None)\n        except TypeError:\n            msg = (\n                \"The CSRF failure view '%s' does not take the correct number of \"\n                \"arguments.\" % settings.CSRF_FAILURE_VIEW\n            )\n            errors.append(Error(msg, id=\"security.E101\"))\n    return errors",
+                "filename": "django/core/checks/security/csrf.py",
+                "start_index": 0,
+                "end_index": 2054,
+                "start_line": 1,
+                "end_line": 67,
+                "max_line": 67,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "def _unmask_cipher_token(token):\n    \"\"\"\n    Given a token (assumed to be a string of CSRF_ALLOWED_CHARS, of length\n    CSRF_TOKEN_LENGTH, and that its first half is a mask), use it to decrypt\n    the second half to produce the original secret.\n    \"\"\"\n    mask = token[:CSRF_SECRET_LENGTH]\n    token = token[CSRF_SECRET_LENGTH:]\n    chars = CSRF_ALLOWED_CHARS\n    pairs = zip((chars.index(x) for x in token), (chars.index(x) for x in mask))\n    return \"\".join(chars[x - y] for x, y in pairs)  # Note negative values are ok\n\n\ndef _add_new_csrf_cookie(request):\n    \"\"\"Generate a new random CSRF_COOKIE value, and add it to request.META.\"\"\"\n    csrf_secret = _get_new_csrf_string()\n    request.META.update(\n        {\n            \"CSRF_COOKIE\": csrf_secret,\n            \"CSRF_COOKIE_NEEDS_UPDATE\": True,\n        }\n    )\n    return csrf_secret\n\n\ndef get_token(request):\n    \"\"\"\n    Return the CSRF token required for a POST form. The token is an\n    alphanumeric value. A new token is created if one is not already set.\n\n    A side effect of calling this function is to make the csrf_protect\n    decorator and the CsrfViewMiddleware add a CSRF cookie and a 'Vary: Cookie'\n    header to the outgoing response.  For this reason, you may need to use this\n    function lazily, as is done by the csrf context processor.\n    \"\"\"\n    if \"CSRF_COOKIE\" in request.META:\n        csrf_secret = request.META[\"CSRF_COOKIE\"]\n        # Since the cookie is being used, flag to send the cookie in\n        # process_response() (even if the client already has it) in order to\n        # renew the expiry timer.\n        request.META[\"CSRF_COOKIE_NEEDS_UPDATE\"] = True\n    else:\n        csrf_secret = _add_new_csrf_cookie(request)\n    return _mask_cipher_secret(csrf_secret)\n\n\ndef rotate_token(request):\n    \"\"\"\n    Change the CSRF token in use for a request - should be done on login\n    for security purposes.\n    \"\"\"\n    _add_new_csrf_cookie(request)\n\n\nclass InvalidTokenFormat(Exception):\n    def __init__(self, reason):\n        self.reason = reason\n\n\ndef _check_token_format(token):\n    \"\"\"\n    Raise an InvalidTokenFormat error if the token has an invalid length or\n    characters that aren't allowed. The token argument can be a CSRF cookie\n    secret or non-cookie CSRF token, and either masked or unmasked.\n    \"\"\"\n    if len(token) not in (CSRF_TOKEN_LENGTH, CSRF_SECRET_LENGTH):\n        raise InvalidTokenFormat(REASON_INCORRECT_LENGTH)\n    # Make sure all characters are in CSRF_ALLOWED_CHARS.\n    if invalid_token_chars_re.search(token):\n        raise InvalidTokenFormat(REASON_INVALID_CHARACTERS)",
+                "filename": "django/middleware/csrf.py",
+                "start_index": 2631,
+                "end_index": 5216,
+                "start_line": 70,
+                "end_line": 139,
+                "max_line": 482,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "import functools\nimport inspect\nimport itertools\nimport re\nimport sys\nimport types\nimport warnings\nfrom pathlib import Path\n\nfrom django.conf import settings\nfrom django.http import Http404, HttpResponse, HttpResponseNotFound\nfrom django.template import Context, Engine, TemplateDoesNotExist\nfrom django.template.defaultfilters import pprint\nfrom django.urls import resolve\nfrom django.utils import timezone\nfrom django.utils.datastructures import MultiValueDict\nfrom django.utils.encoding import force_str\nfrom django.utils.module_loading import import_string\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.version import PY311, get_docs_version\nfrom django.views.decorators.debug import coroutine_functions_to_sensitive_variables\n\n# Minimal Django templates engine to render the error templates\n# regardless of the project's TEMPLATES setting. Templates are\n# read directly from the filesystem so that the error handler\n# works even if the template loader is broken.\nDEBUG_ENGINE = Engine(\n    debug=True,\n    libraries={\"i18n\": \"django.templatetags.i18n\"},\n)\n\n\ndef builtin_template_path(name):\n    \"\"\"\n    Return a path to a builtin template.\n\n    Avoid calling this function at the module level or in a class-definition\n    because __file__ may not exist, e.g. in frozen environments.\n    \"\"\"\n    return Path(__file__).parent / \"templates\" / name\n\n\nclass ExceptionCycleWarning(UserWarning):\n    pass\n\n\nclass CallableSettingWrapper:\n    \"\"\"\n    Object to wrap callable appearing in settings.\n    * Not to call in the debug page (#21345).\n    * Not to break the debug page if the callable forbidding to set attributes\n      (#23070).\n    \"\"\"\n\n    def __init__(self, callable_setting):\n        self._wrapped = callable_setting\n\n    def __repr__(self):\n        return repr(self._wrapped)\n\n\ndef technical_500_response(request, exc_type, exc_value, tb, status_code=500):\n    \"\"\"\n    Create a technical server error response. The last three arguments are\n    the values returned from sys.exc_info() and friends.\n    \"\"\"\n    reporter = get_exception_reporter_class(request)(request, exc_type, exc_value, tb)\n    if request.accepts(\"text/html\"):\n        html = reporter.get_traceback_html()\n        return HttpResponse(html, status=status_code)\n    else:\n        text = reporter.get_traceback_text()\n        return HttpResponse(\n            text, status=status_code, content_type=\"text/plain; charset=utf-8\"\n        )\n\n\n@functools.lru_cache\ndef get_default_exception_reporter_filter():\n    # Instantiate the default filter for the first time and cache it.\n    return import_string(settings.DEFAULT_EXCEPTION_REPORTER_FILTER)()\n\n\ndef get_exception_reporter_filter(request):\n    default_filter = get_default_exception_reporter_filter()\n    return getattr(request, \"exception_reporter_filter\", default_filter)",
+                "filename": "django/views/debug.py",
+                "start_index": 0,
+                "end_index": 2827,
+                "start_line": 1,
+                "end_line": 86,
+                "max_line": 665,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            },
+            {
+                "code": "from urllib.parse import quote\n\nfrom django.http import (\n    HttpResponseBadRequest,\n    HttpResponseForbidden,\n    HttpResponseNotFound,\n    HttpResponseServerError,\n)\nfrom django.template import Context, Engine, TemplateDoesNotExist, loader\nfrom django.views.decorators.csrf import requires_csrf_token\n\nERROR_404_TEMPLATE_NAME = \"404.html\"\nERROR_403_TEMPLATE_NAME = \"403.html\"\nERROR_400_TEMPLATE_NAME = \"400.html\"\nERROR_500_TEMPLATE_NAME = \"500.html\"\nERROR_PAGE_TEMPLATE = \"\"\"\n<!doctype html>\n<html lang=\"en\">\n<head>\n  <title>%(title)s</title>\n</head>\n<body>\n  <h1>%(title)s</h1><p>%(details)s</p>\n</body>\n</html>\n\"\"\"\n\n\n# These views can be called when CsrfViewMiddleware.process_view() not run,\n# therefore need @requires_csrf_token in case the template needs\n# {% csrf_token %}.\n\n\n@requires_csrf_token\ndef page_not_found(request, exception, template_name=ERROR_404_TEMPLATE_NAME):\n    \"\"\"\n    Default 404 handler.\n\n    Templates: :template:`404.html`\n    Context:\n        request_path\n            The path of the requested URL (e.g., '/app/pages/bad_page/'). It's\n            quoted to prevent a content injection attack.\n        exception\n            The message from the exception which triggered the 404 (if one was\n            supplied), or the exception class name\n    \"\"\"\n    exception_repr = exception.__class__.__name__\n    # Try to get an \"interesting\" exception message, if any (and not the ugly\n    # Resolver404 dictionary)\n    try:\n        message = exception.args[0]\n    except (AttributeError, IndexError):\n        pass\n    else:\n        if isinstance(message, str):\n            exception_repr = message\n    context = {\n        \"request_path\": quote(request.path),\n        \"exception\": exception_repr,\n    }\n    try:\n        template = loader.get_template(template_name)\n        body = template.render(context, request)\n    except TemplateDoesNotExist:\n        if template_name != ERROR_404_TEMPLATE_NAME:\n            # Reraise if it's a missing custom template.\n            raise\n        # Render template (even though there are no substitutions) to allow\n        # inspecting the context in tests.\n        template = Engine().from_string(\n            ERROR_PAGE_TEMPLATE\n            % {\n                \"title\": \"Not Found\",\n                \"details\": \"The requested resource was not found on this server.\",\n            },\n        )\n        body = template.render(Context(context))\n    return HttpResponseNotFound(body)",
+                "filename": "django/views/defaults.py",
+                "start_index": 0,
+                "end_index": 2441,
+                "start_line": 1,
+                "end_line": 79,
+                "max_line": 149,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/views/csrf.py": [
+                {
+                    "chunk": {
+                        "code": "def csrf_failure(request, reason=\"\", template_name=CSRF_FAILURE_TEMPLATE_NAME):\n    \"\"\"\n    Default view used when request fails CSRF protection\n    \"\"\"\n    from django.middleware.csrf import REASON_NO_CSRF_COOKIE, REASON_NO_REFERER\n\n    c = {\n        \"title\": _(\"Forbidden\"),\n        \"main\": _(\"CSRF verification failed. Request aborted.\"),\n        \"reason\": reason,\n        \"no_referer\": reason == REASON_NO_REFERER,\n        \"no_referer1\": _(\n            \"You are seeing this message because this HTTPS site requires a \"\n            \"\u201cReferer header\u201d to be sent by your web browser, but none was \"\n            \"sent. This header is required for security reasons, to ensure \"\n            \"that your browser is not being hijacked by third parties.\"\n        ),\n        \"no_referer2\": _(\n            \"If you have configured your browser to disable \u201cReferer\u201d headers, \"\n            \"please re-enable them, at least for this site, or for HTTPS \"\n            \"connections, or for \u201csame-origin\u201d requests.\"\n        ),\n        \"no_referer3\": _(\n            'If you are using the <meta name=\"referrer\" '\n            'content=\"no-referrer\"> tag or including the \u201cReferrer-Policy: '\n            \"no-referrer\u201d header, please remove them. The CSRF protection \"\n            \"requires the \u201cReferer\u201d header to do strict referer checking. If \"\n            \"you\u2019re concerned about privacy, use alternatives like \"\n            '<a rel=\"noreferrer\" \u2026> for links to third-party sites.'\n        ),\n        \"no_cookie\": reason == REASON_NO_CSRF_COOKIE,\n        \"no_cookie1\": _(\n            \"You are seeing this message because this site requires a CSRF \"\n            \"cookie when submitting forms. This cookie is required for \"\n            \"security reasons, to ensure that your browser is not being \"\n            \"hijacked by third parties.\"\n        ),\n        \"no_cookie2\": _(\n            \"If you have configured your browser to disable cookies, please \"\n            \"re-enable them, at least for this site, or for \u201csame-origin\u201d \"\n            \"requests.\"\n        ),\n        \"DEBUG\": settings.DEBUG,\n        \"docs_version\": get_docs_version(),\n        \"more\": _(\"More information is available with DEBUG=True.\"),\n    }\n    try:\n        t = loader.get_template(template_name)\n    except TemplateDoesNotExist:\n        if template_name == CSRF_FAILURE_TEMPLATE_NAME:\n            # If the default template doesn't exist, use the fallback template.\n            with builtin_template_path(\"csrf_403.html\").open(encoding=\"utf-8\") as fh:\n                t = Engine().from_string(fh.read())\n            c = Context(c)\n        else:\n            # Raise if a developer-specified template doesn't exist.\n            raise\n    return HttpResponseForbidden(t.render(c))",
+                        "filename": "django/views/csrf.py",
+                        "start_index": 616,
+                        "end_index": 3349,
+                        "start_line": 22,
+                        "end_line": 79,
+                        "max_line": 79,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the actual implementation of the csrf_failure view, which is where the content_type needs to be updated to include the charset."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `csrf_failure` function in `django/views/csrf.py` to include the charset in the `Content-Type` header by using `settings.DEFAULT_CHARSET`.\n- The updated `HttpResponseForbidden` call should look like this:\n\n```python\nreturn HttpResponseForbidden(t.render(c), content_type=f\"text/html; charset={settings.DEFAULT_CHARSET}\")\n```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a specific and actionable solution to the problem described in the PROMPT by suggesting a modification to the `csrf_failure` function to include the charset in the `Content-Type` header. It also provides the exact line of code that should be used to fix the issue, which aligns with the suggestion in the PROMPT to use `settings.DEFAULT_CHARSET`. Additionally, the RESPONSE includes a link to the code snippet where the change needs to be made, which is helpful for locating the exact location in the codebase. The reason for not giving a score of 10 is that the RESPONSE does not address the alternative suggestion from the PROMPT about possibly leaving out the content_type entirely. However, the provided solution is still highly relevant and actionable.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711719377.952814,
+        "result": "- Modify the `csrf_failure` function in `django/views/csrf.py` to include the charset in the `Content-Type` header by using `settings.DEFAULT_CHARSET`.\n- The updated `HttpResponseForbidden` call should look like this:\n\n```python\nreturn HttpResponseForbidden(t.render(c), content_type=f\"text/html; charset={settings.DEFAULT_CHARSET}\")\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [views](https://github.com/testbed/django__django__4.1/tree//django/views)- [Lines 22 - 79](https://github.com/testbed/django__django__4.1/blob//django/views/csrf.py#L22-L79)\n\n This snippet contains the actual implementation of the csrf_failure view, which is where the content_type needs to be updated to include the charset."
+    }
+}

@@ -1,0 +1,191 @@
+{
+    "id": "django__django-14324",
+    "repo_name": "testbed/django__django__4.0",
+    "task_id": 1577070572385957226,
+    "title": "Migration autodetector changes related_name for self-referential ManyToManyField.",
+    "body": "Description\n\t\nMigration autodetector no longer adds a model name to the related_name attribute for self-referential ManyToManyField, e.g. for a field\nclass MyModel2(models.Model):\n\tfield_3 = models.ManyToManyField('self')\nit creates a migration with related_name='field_3_rel_+' instead of related_name='_mymodel2_field_3_+'.\nRegression in aa4acc164d1247c0de515c959f7b09648b57dc42 (see #29899).\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.0.git",
+    "requested_commit": "",
+    "mayil_response": "- Review the commit `aa4acc164d1247c0de515c959f7b09648b57dc42` to identify the changes made to the migration autodetector logic or `ManyToManyField` related code that could have caused the regression.\n- Check if the `related_name` for `field_3` in `MyModel2` is being incorrectly set or overwritten in the `contribute_to_class` method of the `ManyToManyField` in `django/db/models/fields/related.py`.\n- Ensure that the `related_name` for self-referential `ManyToManyField` follows the expected format (e.g., `'_mymodel2_field_3_+'`) and is not being replaced by the default `\"%s_rel_+\" % name` pattern.\n- If the regression is found in the `contribute_to_class` method, modify the conditional logic to correctly handle self-referential `ManyToManyField` cases, preserving the expected `related_name` format.\n- Add a test case to cover the expected behavior of the migration autodetector for self-referential `ManyToManyField` with a custom `related_name` to prevent future regressions.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__4.0/tree//django/db/models) \u2192 [fields](https://github.com/testbed/django__django__4.0/tree//django/db/models/fields)- [Lines 1894 - 1941](https://github.com/testbed/django__django__4.0/blob//django/db/models/fields/related.py#L1894-L1941)\n\n This snippet contains the logic for setting the related_name attribute for self-referential ManyToManyField, which is directly related to the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.0/tree//django/db/migrations)- [Lines 522 - 977](https://github.com/testbed/django__django__4.0/blob//django/db/migrations/autodetector.py#L522-L977)\n\n This snippet is part of the MigrationAutodetector class and may contain logic that determines how related_name attributes are generated during migrations, which could be relevant to the issue.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0011274999999999998,
+        "snippet_processor": 0.04498,
+        "issue_star_creation": 0.020819999999999998,
+        "issue_star_solver": 0.058910000000000004,
+        "bouncer": 0.02352
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711723322.054024,
+        "relevant_snippets": [
+            {
+                "code": "def contribute_to_class(self, cls, name, **kwargs):\n        # To support multiple relations to self, it's useful to have a non-None\n        # related name on symmetrical relations for internal reasons. The\n        # concept doesn't make a lot of sense externally (\"you want me to\n        # specify *what* on my non-reversible relation?!\"), so we set it up\n        # automatically. The funky name reduces the chance of an accidental\n        # clash.\n        if self.remote_field.symmetrical and (\n            self.remote_field.model == RECURSIVE_RELATIONSHIP_CONSTANT\n            or self.remote_field.model == cls._meta.object_name\n        ):\n            self.remote_field.related_name = \"%s_rel_+\" % name\n        elif self.remote_field.is_hidden():\n            # If the backwards relation is disabled, replace the original\n            # related_name with one generated from the m2m field name. Django\n            # still uses backwards relations internally and we need to avoid\n            # clashes between multiple m2m fields with related_name == '+'.\n            self.remote_field.related_name = \"_%s_%s_%s_+\" % (\n                cls._meta.app_label,\n                cls.__name__.lower(),\n                name,\n            )\n\n        super().contribute_to_class(cls, name, **kwargs)\n\n        # The intermediate m2m model is not auto created if:\n        #  1) There is a manually specified intermediate, or\n        #  2) The class owning the m2m field is abstract.\n        #  3) The class owning the m2m field has been swapped out.\n        if not cls._meta.abstract:\n            if self.remote_field.through:\n\n                def resolve_through_model(_, model, field):\n                    field.remote_field.through = model\n\n                lazy_related_operation(\n                    resolve_through_model, cls, self.remote_field.through, field=self\n                )\n            elif not cls._meta.swapped:\n                self.remote_field.through = create_many_to_many_intermediary_model(\n                    self, cls\n                )\n\n        # Add the descriptor for the m2m relation.\n        setattr(cls, self.name, ManyToManyDescriptor(self.remote_field, reverse=False))\n\n        # Set up the accessor for the m2m table name for the relation.\n        self.m2m_db_table = partial(self._get_m2m_db_table, cls._meta)",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 71843,
+                "end_index": 74169,
+                "start_line": 1894,
+                "end_line": 1941,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "def contribute_to_related_class(self, cls, related):\n        # Internal M2Ms (i.e., those with a related name ending with '+')\n        # and swapped models don't get a related descriptor.\n        if (\n            not self.remote_field.is_hidden()\n            and not related.related_model._meta.swapped\n        ):\n            setattr(\n                cls,\n                related.get_accessor_name(),\n                ManyToManyDescriptor(self.remote_field, reverse=True),\n            )\n\n        # Set up the accessors for the column names on the m2m table.\n        self.m2m_column_name = partial(self._get_m2m_attr, related, \"column\")\n        self.m2m_reverse_name = partial(self._get_m2m_reverse_attr, related, \"column\")\n\n        self.m2m_field_name = partial(self._get_m2m_attr, related, \"name\")\n        self.m2m_reverse_field_name = partial(\n            self._get_m2m_reverse_attr, related, \"name\"\n        )\n\n        get_m2m_rel = partial(self._get_m2m_attr, related, \"remote_field\")\n        self.m2m_target_field_name = lambda: get_m2m_rel().field_name\n        get_m2m_reverse_rel = partial(\n            self._get_m2m_reverse_attr, related, \"remote_field\"\n        )\n        self.m2m_reverse_target_field_name = lambda: get_m2m_reverse_rel().field_name\n\n    def set_attributes_from_rel(self):\n        pass\n\n    def value_from_object(self, obj):\n        return [] if obj.pk is None else list(getattr(obj, self.attname).all())\n\n    def save_form_data(self, instance, data):\n        getattr(instance, self.attname).set(data)\n\n    def formfield(self, *, using=None, **kwargs):\n        defaults = {\n            \"form_class\": forms.ModelMultipleChoiceField,\n            \"queryset\": self.remote_field.model._default_manager.using(using),\n            **kwargs,\n        }\n        # If initial is passed in, it's a list of related objects, but the\n        # MultipleChoiceField takes a list of IDs.\n        if defaults.get(\"initial\") is not None:\n            initial = defaults[\"initial\"]\n            if callable(initial):\n                initial = initial()\n            defaults[\"initial\"] = [i.pk for i in initial]\n        return super().formfield(**defaults)\n\n    def db_check(self, connection):\n        return None\n\n    def db_type(self, connection):\n        # A ManyToManyField is not represented by a single column,\n        # so return None.\n        return None\n\n    def db_parameters(self, connection):\n        return {\"type\": None, \"check\": None}",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 74175,
+                "end_index": 76622,
+                "start_line": 889,
+                "end_line": 2005,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "if self_referential:\n                seen_self = sum(\n                    from_model == getattr(field.remote_field, \"model\", None)\n                    for field in self.remote_field.through._meta.fields\n                )\n\n                if seen_self > 2 and not self.remote_field.through_fields:\n                    errors.append(\n                        checks.Error(\n                            \"The model is used as an intermediate model by \"\n                            \"'%s', but it has more than two foreign keys \"\n                            \"to '%s', which is ambiguous. You must specify \"\n                            \"which two foreign keys Django should use via the \"\n                            \"through_fields keyword argument.\"\n                            % (self, from_model_name),\n                            hint=(\n                                \"Use through_fields to specify which two foreign keys \"\n                                \"Django should use.\"\n                            ),\n                            obj=self.remote_field.through,\n                            id=\"fields.E333\",\n                        )\n                    )",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 54255,
+                "end_index": 55411,
+                "start_line": 1503,
+                "end_line": 1777,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "class MigrationAutodetector:",
+                "filename": "django/db/migrations/autodetector.py",
+                "start_index": 594,
+                "end_index": 622,
+                "start_line": 21,
+                "end_line": 21,
+                "max_line": 1776,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"redirects\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"redirect\",\n            name=\"new_path\",\n            field=models.CharField(\n                blank=True,\n                help_text=(\n                    \"This can be either an absolute path (as above) or a full \"\n                    \"URL starting with a scheme such as \u201chttps://\u201d.\"\n                ),\n                max_length=200,\n                verbose_name=\"redirect to\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/redirects/migrations/0002_alter_redirect_new_path_help_text.py",
+                "start_index": 0,
+                "end_index": 630,
+                "start_line": 1,
+                "end_line": 23,
+                "max_line": 23,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.contrib.auth import validators\nfrom django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0003_alter_user_email_max_length\"),\n    ]\n\n    # No database changes; modifies validators and error_messages (#13147).\n    operations = [\n        migrations.AlterField(\n            model_name=\"user\",\n            name=\"username\",\n            field=models.CharField(\n                error_messages={\"unique\": \"A user with that username already exists.\"},\n                max_length=30,\n                validators=[validators.UnicodeUsernameValidator()],\n                help_text=(\n                    \"Required. 30 characters or fewer. Letters, digits and @/./+/-/_ \"\n                    \"only.\"\n                ),\n                unique=True,\n                verbose_name=\"username\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0004_alter_user_username_opts.py",
+                "start_index": 0,
+                "end_index": 879,
+                "start_line": 1,
+                "end_line": 27,
+                "max_line": 27,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "model_state = self.to_state.models[app_label, model_name]\n            model_fields_def = self.only_relation_agnostic_fields(model_state.fields)\n\n            removed_models = self.old_model_keys - self.new_model_keys\n            for rem_app_label, rem_model_name in removed_models:\n                if rem_app_label == app_label:\n                    rem_model_state = self.from_state.models[\n                        rem_app_label, rem_model_name\n                    ]\n                    rem_model_fields_def = self.only_relation_agnostic_fields(\n                        rem_model_state.fields\n                    )\n                    if model_fields_def == rem_model_fields_def:\n                        if self.questioner.ask_rename_model(\n                            rem_model_state, model_state\n                        ):\n                            dependencies = []\n                            fields = list(model_state.fields.values()) + [\n                                field.remote_field\n                                for relations in self.to_state.relations[\n                                    app_label, model_name\n                                ].values()\n                                for field in relations.values()\n                            ]\n                            for field in fields:\n                                if field.is_relation:\n                                    dependencies.extend(\n                                        self._get_dependencies_for_foreign_key(\n                                            app_label,\n                                            model_name,\n                                            field,\n                                            self.to_state,\n                                        )\n                                    )\n                            self.add_operation(\n                                app_label,\n                                operations.RenameModel(\n                                    old_name=rem_model_state.name,\n                                    new_name=model_state.name,\n                                ),\n                                dependencies=dependencies,\n                            )\n                            self.renamed_models[app_label, model_name] = rem_model_name\n                            renamed_models_rel_key = \"%s.%s\" % (\n                                rem_model_state.app_label,\n                                rem_model_state.name_lower,\n                            )\n                            self.renamed_models_rel[\n                                renamed_models_rel_key\n                            ] = \"%s.%s\" % (\n                                model_state.app_label,\n                                model_state.name_lower,\n                            )\n                            self.old_model_keys.remove((rem_app_label, rem_model_name))\n                            self.old_model_keys.add((app_label, model_name))\n                            break",
+                "filename": "django/db/migrations/autodetector.py",
+                "start_index": 23937,
+                "end_index": 26937,
+                "start_line": 522,
+                "end_line": 977,
+                "max_line": 1776,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"permission\",\n            name=\"name\",\n            field=models.CharField(max_length=255, verbose_name=\"name\"),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0002_alter_permission_name_max_length.py",
+                "start_index": 0,
+                "end_index": 345,
+                "start_line": 1,
+                "end_line": 15,
+                "max_line": 15,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "def remove_field(self, app_label, model_name, name):\n        model_key = app_label, model_name\n        model_state = self.models[model_key]\n        old_field = model_state.fields.pop(name)\n        if self._relations is not None:\n            self.resolve_model_field_relations(model_key, name, old_field)\n        # Delay rendering of relationships if it's not a relational field.\n        delay = not old_field.is_relation\n        self.reload_model(*model_key, delay=delay)\n\n    def alter_field(self, app_label, model_name, name, field, preserve_default):\n        if not preserve_default:\n            field = field.clone()\n            field.default = NOT_PROVIDED\n        else:\n            field = field\n        model_key = app_label, model_name\n        fields = self.models[model_key].fields\n        if self._relations is not None:\n            old_field = fields.pop(name)\n            if old_field.is_relation:\n                self.resolve_model_field_relations(model_key, name, old_field)\n            fields[name] = field\n            if field.is_relation:\n                self.resolve_model_field_relations(model_key, name, field)\n        else:\n            fields[name] = field\n        # TODO: investigate if old relational fields must be reloaded or if\n        # it's sufficient if the new field is (#27737).\n        # Delay rendering of relationships if it's not a relational field and\n        # not referenced by a foreign key.\n        delay = not field.is_relation and not field_is_referenced(\n            self, model_key, (name, field)\n        )\n        self.reload_model(*model_key, delay=delay)",
+                "filename": "django/db/migrations/state.py",
+                "start_index": 10674,
+                "end_index": 12275,
+                "start_line": 255,
+                "end_line": 345,
+                "max_line": 988,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "seen_from = sum(\n                    from_model == getattr(field.remote_field, \"model\", None)\n                    for field in self.remote_field.through._meta.fields\n                )\n                seen_to = sum(\n                    to_model == getattr(field.remote_field, \"model\", None)\n                    for field in self.remote_field.through._meta.fields\n                )\n\n                if seen_from > 1 and not self.remote_field.through_fields:\n                    errors.append(\n                        checks.Error(\n                            (\n                                \"The model is used as an intermediate model by \"\n                                \"'%s', but it has more than one foreign key \"\n                                \"from '%s', which is ambiguous. You must specify \"\n                                \"which foreign key Django should use via the \"\n                                \"through_fields keyword argument.\"\n                            )\n                            % (self, from_model_name),\n                            hint=(\n                                \"If you want to create a recursive relationship, \"\n                                'use ManyToManyField(\"%s\", through=\"%s\").'\n                            )\n                            % (\n                                RECURSIVE_RELATIONSHIP_CONSTANT,\n                                relationship_model_name,\n                            ),\n                            obj=self,\n                            id=\"fields.E334\",\n                        )\n                    )\n\n                if seen_to > 1 and not self.remote_field.through_fields:\n                    errors.append(\n                        checks.Error(\n                            \"The model is used as an intermediate model by \"\n                            \"'%s', but it has more than one foreign key \"\n                            \"to '%s', which is ambiguous. You must specify \"\n                            \"which foreign key Django should use via the \"\n                            \"through_fields keyword argument.\" % (self, to_model_name),\n                            hint=(\n                                \"If you want to create a recursive relationship, \"\n                                'use ManyToManyField(\"%s\", through=\"%s\").'\n                            )\n                            % (\n                                RECURSIVE_RELATIONSHIP_CONSTANT,\n                                relationship_model_name,\n                            ),\n                            obj=self,\n                            id=\"fields.E335\",\n                        )\n                    )",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 55506,
+                "end_index": 58155,
+                "start_line": 1529,
+                "end_line": 1777,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/models/fields/related.py": [
+                {
+                    "chunk": {
+                        "code": "def contribute_to_class(self, cls, name, **kwargs):\n        # To support multiple relations to self, it's useful to have a non-None\n        # related name on symmetrical relations for internal reasons. The\n        # concept doesn't make a lot of sense externally (\"you want me to\n        # specify *what* on my non-reversible relation?!\"), so we set it up\n        # automatically. The funky name reduces the chance of an accidental\n        # clash.\n        if self.remote_field.symmetrical and (\n            self.remote_field.model == RECURSIVE_RELATIONSHIP_CONSTANT\n            or self.remote_field.model == cls._meta.object_name\n        ):\n            self.remote_field.related_name = \"%s_rel_+\" % name\n        elif self.remote_field.is_hidden():\n            # If the backwards relation is disabled, replace the original\n            # related_name with one generated from the m2m field name. Django\n            # still uses backwards relations internally and we need to avoid\n            # clashes between multiple m2m fields with related_name == '+'.\n            self.remote_field.related_name = \"_%s_%s_%s_+\" % (\n                cls._meta.app_label,\n                cls.__name__.lower(),\n                name,\n            )\n\n        super().contribute_to_class(cls, name, **kwargs)\n\n        # The intermediate m2m model is not auto created if:\n        #  1) There is a manually specified intermediate, or\n        #  2) The class owning the m2m field is abstract.\n        #  3) The class owning the m2m field has been swapped out.\n        if not cls._meta.abstract:\n            if self.remote_field.through:\n\n                def resolve_through_model(_, model, field):\n                    field.remote_field.through = model\n\n                lazy_related_operation(\n                    resolve_through_model, cls, self.remote_field.through, field=self\n                )\n            elif not cls._meta.swapped:\n                self.remote_field.through = create_many_to_many_intermediary_model(\n                    self, cls\n                )\n\n        # Add the descriptor for the m2m relation.\n        setattr(cls, self.name, ManyToManyDescriptor(self.remote_field, reverse=False))\n\n        # Set up the accessor for the m2m table name for the relation.\n        self.m2m_db_table = partial(self._get_m2m_db_table, cls._meta)",
+                        "filename": "django/db/models/fields/related.py",
+                        "start_index": 71843,
+                        "end_index": 74169,
+                        "start_line": 1894,
+                        "end_line": 1941,
+                        "max_line": 2005,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the logic for setting the related_name attribute for self-referential ManyToManyField, which is directly related to the issue."
+                }
+            ],
+            "django/db/migrations/autodetector.py": [
+                {
+                    "chunk": {
+                        "code": "model_state = self.to_state.models[app_label, model_name]\n            model_fields_def = self.only_relation_agnostic_fields(model_state.fields)\n\n            removed_models = self.old_model_keys - self.new_model_keys\n            for rem_app_label, rem_model_name in removed_models:\n                if rem_app_label == app_label:\n                    rem_model_state = self.from_state.models[\n                        rem_app_label, rem_model_name\n                    ]\n                    rem_model_fields_def = self.only_relation_agnostic_fields(\n                        rem_model_state.fields\n                    )\n                    if model_fields_def == rem_model_fields_def:\n                        if self.questioner.ask_rename_model(\n                            rem_model_state, model_state\n                        ):\n                            dependencies = []\n                            fields = list(model_state.fields.values()) + [\n                                field.remote_field\n                                for relations in self.to_state.relations[\n                                    app_label, model_name\n                                ].values()\n                                for field in relations.values()\n                            ]\n                            for field in fields:\n                                if field.is_relation:\n                                    dependencies.extend(\n                                        self._get_dependencies_for_foreign_key(\n                                            app_label,\n                                            model_name,\n                                            field,\n                                            self.to_state,\n                                        )\n                                    )\n                            self.add_operation(\n                                app_label,\n                                operations.RenameModel(\n                                    old_name=rem_model_state.name,\n                                    new_name=model_state.name,\n                                ),\n                                dependencies=dependencies,\n                            )\n                            self.renamed_models[app_label, model_name] = rem_model_name\n                            renamed_models_rel_key = \"%s.%s\" % (\n                                rem_model_state.app_label,\n                                rem_model_state.name_lower,\n                            )\n                            self.renamed_models_rel[\n                                renamed_models_rel_key\n                            ] = \"%s.%s\" % (\n                                model_state.app_label,\n                                model_state.name_lower,\n                            )\n                            self.old_model_keys.remove((rem_app_label, rem_model_name))\n                            self.old_model_keys.add((app_label, model_name))\n                            break",
+                        "filename": "django/db/migrations/autodetector.py",
+                        "start_index": 23937,
+                        "end_index": 26937,
+                        "start_line": 522,
+                        "end_line": 977,
+                        "max_line": 1776,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is part of the MigrationAutodetector class and may contain logic that determines how related_name attributes are generated during migrations, which could be relevant to the issue."
+                }
+            ]
+        },
+        "solution_task": "- Review the commit `aa4acc164d1247c0de515c959f7b09648b57dc42` to identify the changes made to the migration autodetector logic or `ManyToManyField` related code that could have caused the regression.\n- Check if the `related_name` for `field_3` in `MyModel2` is being incorrectly set or overwritten in the `contribute_to_class` method of the `ManyToManyField` in `django/db/models/fields/related.py`.\n- Ensure that the `related_name` for self-referential `ManyToManyField` follows the expected format (e.g., `'_mymodel2_field_3_+'`) and is not being replaced by the default `\"%s_rel_+\" % name` pattern.\n- If the regression is found in the `contribute_to_class` method, modify the conditional logic to correctly handle self-referential `ManyToManyField` cases, preserving the expected `related_name` format.\n- Add a test case to cover the expected behavior of the migration autodetector for self-referential `ManyToManyField` with a custom `related_name` to prevent future regressions.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a structured approach to identifying and resolving the regression issue with the migration autodetector for self-referential ManyToManyFields in Django. It suggests reviewing the specific commit where the regression was introduced, checking the related_name setting logic in the ManyToManyField's contribute_to_class method, ensuring the related_name follows the expected format, modifying the logic if necessary, and adding a test case to prevent future regressions. The RESPONSE also points to specific code snippets that are likely to contain the problematic code, which is highly relevant and actionable for developers working on this issue.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711723459.2406,
+        "result": "- Review the commit `aa4acc164d1247c0de515c959f7b09648b57dc42` to identify the changes made to the migration autodetector logic or `ManyToManyField` related code that could have caused the regression.\n- Check if the `related_name` for `field_3` in `MyModel2` is being incorrectly set or overwritten in the `contribute_to_class` method of the `ManyToManyField` in `django/db/models/fields/related.py`.\n- Ensure that the `related_name` for self-referential `ManyToManyField` follows the expected format (e.g., `'_mymodel2_field_3_+'`) and is not being replaced by the default `\"%s_rel_+\" % name` pattern.\n- If the regression is found in the `contribute_to_class` method, modify the conditional logic to correctly handle self-referential `ManyToManyField` cases, preserving the expected `related_name` format.\n- Add a test case to cover the expected behavior of the migration autodetector for self-referential `ManyToManyField` with a custom `related_name` to prevent future regressions.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__4.0/tree//django/db/models) \u2192 [fields](https://github.com/testbed/django__django__4.0/tree//django/db/models/fields)- [Lines 1894 - 1941](https://github.com/testbed/django__django__4.0/blob//django/db/models/fields/related.py#L1894-L1941)\n\n This snippet contains the logic for setting the related_name attribute for self-referential ManyToManyField, which is directly related to the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.0/tree//django/db/migrations)- [Lines 522 - 977](https://github.com/testbed/django__django__4.0/blob//django/db/migrations/autodetector.py#L522-L977)\n\n This snippet is part of the MigrationAutodetector class and may contain logic that determines how related_name attributes are generated during migrations, which could be relevant to the issue."
+    }
+}

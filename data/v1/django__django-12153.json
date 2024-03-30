@@ -1,0 +1,191 @@
+{
+    "id": "django__django-12153",
+    "repo_name": "testbed/django__django__3.1",
+    "task_id": 5432089976287329589,
+    "title": "0011_update_proxy_permissions crashes in multi database environment.",
+    "body": "Description\n\t \n\t\t(last modified by haudoing)\n\t \nThe tutorial said that we can omit to set the default database if default doesn't makes sense\n\u200bhttps://docs.djangoproject.com/en/2.2/topics/db/multi-db/#defining-your-databases\nBut the following migration script doesn't work after configuration with empty default database\n\u200bhttps://github.com/django/django/blob/stable/2.2.x/django/contrib/auth/migrations/0011_update_proxy_permissions.py\non line 42, it use\n\t\t\twith transaction.atomic():\n\t\t\t\tPermission.objects.filter(\n\t\t\t\t\tpermissions_query,\n\t\t\t\t\tcontent_type=old_content_type,\n\t\t\t\t).update(content_type=new_content_type)\nThis will brake the migration if default database doesn't set\nTracebacks\n\traise ImproperlyConfigured(\"settings.DATABASES is improperly configured. \"\ndjango.core.exceptions.ImproperlyConfigured: settings.DATABASES is improperly configured. Please supply the ENGINE value. Check settings documentation for more details.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.1.git",
+    "requested_commit": "",
+    "mayil_response": "- Ensure that the `settings.DATABASES` configuration in your Django settings file includes a default database with the `ENGINE` value set. If the default database is intentionally not set, modify the migration script to handle the absence of a default database.\n- In the migration script `0011_update_proxy_permissions.py`, ensure that the database alias is correctly passed to the `transaction.atomic()` and `Permission.objects.using(alias)` calls.\n- If the migration is intended to run on a specific database other than the default, you may need to explicitly specify the database alias when calling `transaction.atomic()` and when querying the `Permission` model.\n- If the issue persists after checking the above points, consider reviewing the entire Django settings file to ensure that the `DATABASES` configuration is correct for all databases, including the `ENGINE` value for each database entry.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.1/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.1/tree//django/contrib/auth) \u2192 [migrations](https://github.com/testbed/django__django__3.1/tree//django/contrib/auth/migrations)- [Lines 1 - 76](https://github.com/testbed/django__django__3.1/blob//django/contrib/auth/migrations/0011_update_proxy_permissions.py#L1-L76)\n\n This snippet contains the migration script that is causing the issue when the default database is not set. It is directly related to the problem described in the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.1/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__3.1/tree//django/db/backends) \u2192 [dummy](https://github.com/testbed/django__django__3.1/tree//django/db/backends/dummy)- [Lines 1 - 74](https://github.com/testbed/django__django__3.1/blob//django/db/backends/dummy/base.py#L1-L74)\n\n This snippet is from the dummy backend which is used when the database ENGINE setting is empty. It raises the ImproperlyConfigured exception mentioned in the traceback. It is relevant for understanding why the exception is raised when the default database is not set.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00020449999999999998,
+        "snippet_processor": 0.04630000000000001,
+        "issue_star_creation": 0.022739999999999996,
+        "issue_star_solver": 0.07763,
+        "bouncer": 0.04344
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711731919.3083022,
+        "relevant_snippets": [
+            {
+                "code": "import sys\n\nfrom django.core.management.color import color_style\nfrom django.db import IntegrityError, migrations, transaction\nfrom django.db.models import Q\n\nWARNING = \"\"\"\n    A problem arose migrating proxy model permissions for {old} to {new}.\n\n      Permission(s) for {new} already existed.\n      Codenames Q: {query}\n\n    Ensure to audit ALL permissions for {old} and {new}.\n\"\"\"\n\n\ndef update_proxy_model_permissions(apps, schema_editor, reverse=False):\n    \"\"\"\n    Update the content_type of proxy model permissions to use the ContentType\n    of the proxy model.\n    \"\"\"\n    style = color_style()\n    Permission = apps.get_model(\"auth\", \"Permission\")\n    ContentType = apps.get_model(\"contenttypes\", \"ContentType\")\n    alias = schema_editor.connection.alias\n    for Model in apps.get_models():\n        opts = Model._meta\n        if not opts.proxy:\n            continue\n        proxy_default_permissions_codenames = [\n            \"%s_%s\" % (action, opts.model_name) for action in opts.default_permissions\n        ]\n        permissions_query = Q(codename__in=proxy_default_permissions_codenames)\n        for codename, name in opts.permissions:\n            permissions_query |= Q(codename=codename, name=name)\n        content_type_manager = ContentType.objects.db_manager(alias)\n        concrete_content_type = content_type_manager.get_for_model(\n            Model, for_concrete_model=True\n        )\n        proxy_content_type = content_type_manager.get_for_model(\n            Model, for_concrete_model=False\n        )\n        old_content_type = proxy_content_type if reverse else concrete_content_type\n        new_content_type = concrete_content_type if reverse else proxy_content_type\n        try:\n            with transaction.atomic(using=alias):\n                Permission.objects.using(alias).filter(\n                    permissions_query,\n                    content_type=old_content_type,\n                ).update(content_type=new_content_type)\n        except IntegrityError:\n            old = \"{}_{}\".format(old_content_type.app_label, old_content_type.model)\n            new = \"{}_{}\".format(new_content_type.app_label, new_content_type.model)\n            sys.stdout.write(\n                style.WARNING(WARNING.format(old=old, new=new, query=permissions_query))\n            )\n\n\ndef revert_proxy_model_permissions(apps, schema_editor):\n    \"\"\"\n    Update the content_type of proxy model permissions to use the ContentType\n    of the concrete model.\n    \"\"\"\n    update_proxy_model_permissions(apps, schema_editor, reverse=True)\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0010_alter_group_name_max_length\"),\n        (\"contenttypes\", \"0002_remove_content_type_name\"),\n    ]\n    operations = [\n        migrations.RunPython(\n            update_proxy_model_permissions, revert_proxy_model_permissions\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0011_update_proxy_permissions.py",
+                "start_index": 0,
+                "end_index": 2859,
+                "start_line": 1,
+                "end_line": 76,
+                "max_line": 76,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0011_update_proxy_permissions\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"user\",\n            name=\"first_name\",\n            field=models.CharField(\n                blank=True, max_length=150, verbose_name=\"first name\"\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0012_alter_user_first_name_max_length.py",
+                "start_index": 0,
+                "end_index": 410,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 17,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "def setup_worker_connection(self, _worker_id):\n        settings_dict = self.get_test_db_clone_settings(_worker_id)\n        # connection.settings_dict must be updated in place for changes to be\n        # reflected in django.db.connections. Otherwise new threads would\n        # connect to the default database instead of the appropriate clone.\n        start_method = multiprocessing.get_start_method()\n        if start_method == \"fork\":\n            # Update settings_dict in place.\n            self.connection.settings_dict.update(settings_dict)\n            self.connection.close()\n        elif start_method == \"spawn\":\n            alias = self.connection.alias\n            connection_str = (\n                f\"file:memorydb_{alias}_{_worker_id}?mode=memory&cache=shared\"\n            )\n            source_db = self.connection.Database.connect(\n                f\"file:{alias}_{_worker_id}.sqlite3\", uri=True\n            )\n            target_db = sqlite3.connect(connection_str, uri=True)\n            source_db.backup(target_db)\n            source_db.close()\n            # Update settings_dict in place.\n            self.connection.settings_dict.update(settings_dict)\n            self.connection.settings_dict[\"NAME\"] = connection_str\n            # Re-open connection to in-memory database before closing copy\n            # connection.\n            self.connection.connect()\n            target_db.close()\n            if os.environ.get(\"RUNNING_DJANGOS_TEST_SUITE\") == \"true\":\n                self.mark_expected_failures_and_skips()",
+                "filename": "django/db/backends/sqlite3/creation.py",
+                "start_index": 5299,
+                "end_index": 6826,
+                "start_line": 130,
+                "end_line": 159,
+                "max_line": 159,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nDummy database backend for Django.\n\nDjango uses this if the database ENGINE setting is empty (None or empty string).\n\nEach of these API functions, except connection.close(), raise\nImproperlyConfigured.\n\"\"\"\n\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.db.backends.base.base import BaseDatabaseWrapper\nfrom django.db.backends.base.client import BaseDatabaseClient\nfrom django.db.backends.base.creation import BaseDatabaseCreation\nfrom django.db.backends.base.introspection import BaseDatabaseIntrospection\nfrom django.db.backends.base.operations import BaseDatabaseOperations\nfrom django.db.backends.dummy.features import DummyDatabaseFeatures\n\n\ndef complain(*args, **kwargs):\n    raise ImproperlyConfigured(\n        \"settings.DATABASES is improperly configured. \"\n        \"Please supply the ENGINE value. Check \"\n        \"settings documentation for more details.\"\n    )\n\n\ndef ignore(*args, **kwargs):\n    pass\n\n\nclass DatabaseOperations(BaseDatabaseOperations):\n    quote_name = complain\n\n\nclass DatabaseClient(BaseDatabaseClient):\n    runshell = complain\n\n\nclass DatabaseCreation(BaseDatabaseCreation):\n    create_test_db = ignore\n    destroy_test_db = ignore\n\n\nclass DatabaseIntrospection(BaseDatabaseIntrospection):\n    get_table_list = complain\n    get_table_description = complain\n    get_relations = complain\n    get_indexes = complain\n\n\nclass DatabaseWrapper(BaseDatabaseWrapper):\n    operators = {}\n    # Override the base class implementations with null\n    # implementations. Anything that tries to actually\n    # do something raises complain; anything that tries\n    # to rollback or undo something raises ignore.\n    _cursor = complain\n    ensure_connection = complain\n    _commit = complain\n    _rollback = ignore\n    _close = ignore\n    _savepoint = ignore\n    _savepoint_commit = complain\n    _savepoint_rollback = ignore\n    _set_autocommit = complain\n    # Classes instantiated in __init__().\n    client_class = DatabaseClient\n    creation_class = DatabaseCreation\n    features_class = DummyDatabaseFeatures\n    introspection_class = DatabaseIntrospection\n    ops_class = DatabaseOperations\n\n    def is_usable(self):\n        return True",
+                "filename": "django/db/backends/dummy/base.py",
+                "start_index": 0,
+                "end_index": 2180,
+                "start_line": 1,
+                "end_line": 74,
+                "max_line": 74,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "def _check_db_default(self, databases=None, **kwargs):\n        from django.db.models.expressions import Value\n\n        if (\n            self.db_default is NOT_PROVIDED\n            or isinstance(self.db_default, Value)\n            or databases is None\n        ):\n            return []\n        errors = []\n        for db in databases:\n            if not router.allow_migrate_model(db, self.model):\n                continue\n            connection = connections[db]\n\n            if not getattr(self.db_default, \"allowed_default\", False) and (\n                connection.features.supports_expression_defaults\n            ):\n                msg = f\"{self.db_default} cannot be used in db_default.\"\n                errors.append(checks.Error(msg, obj=self, id=\"fields.E012\"))\n\n            if not (\n                connection.features.supports_expression_defaults\n                or \"supports_expression_defaults\"\n                in self.model._meta.required_db_features\n            ):\n                msg = (\n                    f\"{connection.display_name} does not support default database \"\n                    \"values with expressions (db_default).\"\n                )\n                errors.append(checks.Error(msg, obj=self, id=\"fields.E011\"))\n        return errors\n\n    def _check_db_index(self):\n        if self.db_index not in (None, True, False):\n            return [\n                checks.Error(\n                    \"'db_index' must be None, True or False.\",\n                    obj=self,\n                    id=\"fields.E006\",\n                )\n            ]\n        else:\n            return []\n\n    def _check_db_comment(self, databases=None, **kwargs):\n        if not self.db_comment or not databases:\n            return []\n        errors = []\n        for db in databases:\n            if not router.allow_migrate_model(db, self.model):\n                continue\n            connection = connections[db]\n            if not (\n                connection.features.supports_comments\n                or \"supports_comments\" in self.model._meta.required_db_features\n            ):\n                errors.append(\n                    checks.Warning(\n                        f\"{connection.display_name} does not support comments on \"\n                        f\"columns (db_comment).\",\n                        obj=self,\n                        id=\"fields.W163\",\n                    )\n                )\n        return errors",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 12491,
+                "end_index": 14905,
+                "start_line": 391,
+                "end_line": 2463,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "from django.conf import settings\nfrom django.core.cache import caches\nfrom django.core.cache.backends.db import BaseDatabaseCache\nfrom django.core.management.base import BaseCommand, CommandError\nfrom django.db import (\n    DEFAULT_DB_ALIAS,\n    DatabaseError,\n    connections,\n    models,\n    router,\n    transaction,\n)",
+                "filename": "django/core/management/commands/createcachetable.py",
+                "start_index": 0,
+                "end_index": 320,
+                "start_line": 1,
+                "end_line": 130,
+                "max_line": 130,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "from django.apps import apps\nfrom django.core.management.base import BaseCommand, CommandError\nfrom django.db import DEFAULT_DB_ALIAS, connections\nfrom django.db.migrations.loader import AmbiguityError, MigrationLoader",
+                "filename": "django/core/management/commands/sqlmigrate.py",
+                "start_index": 0,
+                "end_index": 218,
+                "start_line": 1,
+                "end_line": 4,
+                "max_line": 83,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "def setup_worker_connection(self, _worker_id):\n        settings_dict = self.get_test_db_clone_settings(str(_worker_id))\n        # connection.settings_dict must be updated in place for changes to be\n        # reflected in django.db.connections. If the following line assigned\n        # connection.settings_dict = settings_dict, new threads would connect\n        # to the default database instead of the appropriate clone.\n        self.connection.settings_dict.update(settings_dict)\n        self.connection.close()",
+                "filename": "django/db/backends/base/creation.py",
+                "start_index": 15155,
+                "end_index": 15667,
+                "start_line": 374,
+                "end_line": 381,
+                "max_line": 381,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "test_collations = {\n        \"ci\": \"BINARY_CI\",\n        \"cs\": \"BINARY\",\n        \"non_default\": \"SWEDISH_CI\",\n        \"swedish_ci\": \"SWEDISH_CI\",\n    }\n    test_now_utc_template = \"CURRENT_TIMESTAMP AT TIME ZONE 'UTC'\"\n\n    django_test_skips = {\n        \"Oracle doesn't support SHA224.\": {\n            \"db_functions.text.test_sha224.SHA224Tests.test_basic\",\n            \"db_functions.text.test_sha224.SHA224Tests.test_transform\",\n        },\n        \"Oracle doesn't correctly calculate ISO 8601 week numbering before \"\n        \"1583 (the Gregorian calendar was introduced in 1582).\": {\n            \"db_functions.datetime.test_extract_trunc.DateFunctionTests.\"\n            \"test_trunc_week_before_1000\",\n            \"db_functions.datetime.test_extract_trunc.DateFunctionWithTimeZoneTests.\"\n            \"test_trunc_week_before_1000\",\n        },\n        \"Oracle extracts seconds including fractional seconds (#33517).\": {\n            \"db_functions.datetime.test_extract_trunc.DateFunctionTests.\"\n            \"test_extract_second_func_no_fractional\",\n            \"db_functions.datetime.test_extract_trunc.DateFunctionWithTimeZoneTests.\"\n            \"test_extract_second_func_no_fractional\",\n        },\n        \"Oracle doesn't support bitwise XOR.\": {\n            \"expressions.tests.ExpressionOperatorTests.test_lefthand_bitwise_xor\",\n            \"expressions.tests.ExpressionOperatorTests.test_lefthand_bitwise_xor_null\",\n            \"expressions.tests.ExpressionOperatorTests.\"\n            \"test_lefthand_bitwise_xor_right_null\",\n        },\n        \"Oracle requires ORDER BY in row_number, ANSI:SQL doesn't.\": {\n            \"expressions_window.tests.WindowFunctionTests.test_row_number_no_ordering\",\n        },\n        \"Raises ORA-00600: internal error code.\": {\n            \"model_fields.test_jsonfield.TestQuerying.test_usage_in_subquery\",\n        },\n        \"Oracle doesn't support changing collations on indexed columns (#33671).\": {\n            \"migrations.test_operations.OperationTests.\"\n            \"test_alter_field_pk_fk_db_collation\",\n        },\n        \"Oracle doesn't support comparing NCLOB to NUMBER.\": {\n            \"generic_relations_regress.tests.GenericRelationTests.test_textlink_filter\",\n        },\n    }\n    django_test_expected_failures = {\n        # A bug in Django/cx_Oracle with respect to string handling (#23843).\n        \"annotations.tests.NonAggregateAnnotationTestCase.test_custom_functions\",\n        \"annotations.tests.NonAggregateAnnotationTestCase.\"\n        \"test_custom_functions_can_ref_other_functions\",\n    }\n    insert_test_table_with_defaults = (\n        \"INSERT INTO {} VALUES (DEFAULT, DEFAULT, DEFAULT)\"\n    )",
+                "filename": "django/db/backends/oracle/features.py",
+                "start_index": 3124,
+                "end_index": 5770,
+                "start_line": 82,
+                "end_line": 136,
+                "max_line": 159,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import connections\n\nfrom . import Tags, register\n\n\n@register(Tags.database)\ndef check_database_backends(databases=None, **kwargs):\n    if databases is None:\n        return []\n    issues = []\n    for alias in databases:\n        conn = connections[alias]\n        issues.extend(conn.validation.check(**kwargs))\n    return issues",
+                "filename": "django/core/checks/database.py",
+                "start_index": 0,
+                "end_index": 340,
+                "start_line": 1,
+                "end_line": 14,
+                "max_line": 14,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/contrib/auth/migrations/0011_update_proxy_permissions.py": [
+                {
+                    "chunk": {
+                        "code": "import sys\n\nfrom django.core.management.color import color_style\nfrom django.db import IntegrityError, migrations, transaction\nfrom django.db.models import Q\n\nWARNING = \"\"\"\n    A problem arose migrating proxy model permissions for {old} to {new}.\n\n      Permission(s) for {new} already existed.\n      Codenames Q: {query}\n\n    Ensure to audit ALL permissions for {old} and {new}.\n\"\"\"\n\n\ndef update_proxy_model_permissions(apps, schema_editor, reverse=False):\n    \"\"\"\n    Update the content_type of proxy model permissions to use the ContentType\n    of the proxy model.\n    \"\"\"\n    style = color_style()\n    Permission = apps.get_model(\"auth\", \"Permission\")\n    ContentType = apps.get_model(\"contenttypes\", \"ContentType\")\n    alias = schema_editor.connection.alias\n    for Model in apps.get_models():\n        opts = Model._meta\n        if not opts.proxy:\n            continue\n        proxy_default_permissions_codenames = [\n            \"%s_%s\" % (action, opts.model_name) for action in opts.default_permissions\n        ]\n        permissions_query = Q(codename__in=proxy_default_permissions_codenames)\n        for codename, name in opts.permissions:\n            permissions_query |= Q(codename=codename, name=name)\n        content_type_manager = ContentType.objects.db_manager(alias)\n        concrete_content_type = content_type_manager.get_for_model(\n            Model, for_concrete_model=True\n        )\n        proxy_content_type = content_type_manager.get_for_model(\n            Model, for_concrete_model=False\n        )\n        old_content_type = proxy_content_type if reverse else concrete_content_type\n        new_content_type = concrete_content_type if reverse else proxy_content_type\n        try:\n            with transaction.atomic(using=alias):\n                Permission.objects.using(alias).filter(\n                    permissions_query,\n                    content_type=old_content_type,\n                ).update(content_type=new_content_type)\n        except IntegrityError:\n            old = \"{}_{}\".format(old_content_type.app_label, old_content_type.model)\n            new = \"{}_{}\".format(new_content_type.app_label, new_content_type.model)\n            sys.stdout.write(\n                style.WARNING(WARNING.format(old=old, new=new, query=permissions_query))\n            )\n\n\ndef revert_proxy_model_permissions(apps, schema_editor):\n    \"\"\"\n    Update the content_type of proxy model permissions to use the ContentType\n    of the concrete model.\n    \"\"\"\n    update_proxy_model_permissions(apps, schema_editor, reverse=True)\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0010_alter_group_name_max_length\"),\n        (\"contenttypes\", \"0002_remove_content_type_name\"),\n    ]\n    operations = [\n        migrations.RunPython(\n            update_proxy_model_permissions, revert_proxy_model_permissions\n        ),\n    ]",
+                        "filename": "django/contrib/auth/migrations/0011_update_proxy_permissions.py",
+                        "start_index": 0,
+                        "end_index": 2859,
+                        "start_line": 1,
+                        "end_line": 76,
+                        "max_line": 76,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the migration script that is causing the issue when the default database is not set. It is directly related to the problem described in the issue."
+                }
+            ],
+            "django/db/backends/dummy/base.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nDummy database backend for Django.\n\nDjango uses this if the database ENGINE setting is empty (None or empty string).\n\nEach of these API functions, except connection.close(), raise\nImproperlyConfigured.\n\"\"\"\n\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.db.backends.base.base import BaseDatabaseWrapper\nfrom django.db.backends.base.client import BaseDatabaseClient\nfrom django.db.backends.base.creation import BaseDatabaseCreation\nfrom django.db.backends.base.introspection import BaseDatabaseIntrospection\nfrom django.db.backends.base.operations import BaseDatabaseOperations\nfrom django.db.backends.dummy.features import DummyDatabaseFeatures\n\n\ndef complain(*args, **kwargs):\n    raise ImproperlyConfigured(\n        \"settings.DATABASES is improperly configured. \"\n        \"Please supply the ENGINE value. Check \"\n        \"settings documentation for more details.\"\n    )\n\n\ndef ignore(*args, **kwargs):\n    pass\n\n\nclass DatabaseOperations(BaseDatabaseOperations):\n    quote_name = complain\n\n\nclass DatabaseClient(BaseDatabaseClient):\n    runshell = complain\n\n\nclass DatabaseCreation(BaseDatabaseCreation):\n    create_test_db = ignore\n    destroy_test_db = ignore\n\n\nclass DatabaseIntrospection(BaseDatabaseIntrospection):\n    get_table_list = complain\n    get_table_description = complain\n    get_relations = complain\n    get_indexes = complain\n\n\nclass DatabaseWrapper(BaseDatabaseWrapper):\n    operators = {}\n    # Override the base class implementations with null\n    # implementations. Anything that tries to actually\n    # do something raises complain; anything that tries\n    # to rollback or undo something raises ignore.\n    _cursor = complain\n    ensure_connection = complain\n    _commit = complain\n    _rollback = ignore\n    _close = ignore\n    _savepoint = ignore\n    _savepoint_commit = complain\n    _savepoint_rollback = ignore\n    _set_autocommit = complain\n    # Classes instantiated in __init__().\n    client_class = DatabaseClient\n    creation_class = DatabaseCreation\n    features_class = DummyDatabaseFeatures\n    introspection_class = DatabaseIntrospection\n    ops_class = DatabaseOperations\n\n    def is_usable(self):\n        return True",
+                        "filename": "django/db/backends/dummy/base.py",
+                        "start_index": 0,
+                        "end_index": 2180,
+                        "start_line": 1,
+                        "end_line": 74,
+                        "max_line": 74,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is from the dummy backend which is used when the database ENGINE setting is empty. It raises the ImproperlyConfigured exception mentioned in the traceback. It is relevant for understanding why the exception is raised when the default database is not set."
+                }
+            ]
+        },
+        "solution_task": "- Ensure that the `settings.DATABASES` configuration in your Django settings file includes a default database with the `ENGINE` value set. If the default database is intentionally not set, modify the migration script to handle the absence of a default database.\n- In the migration script `0011_update_proxy_permissions.py`, ensure that the database alias is correctly passed to the `transaction.atomic()` and `Permission.objects.using(alias)` calls.\n- If the migration is intended to run on a specific database other than the default, you may need to explicitly specify the database alias when calling `transaction.atomic()` and when querying the `Permission` model.\n- If the issue persists after checking the above points, consider reviewing the entire Django settings file to ensure that the `DATABASES` configuration is correct for all databases, including the `ENGINE` value for each database entry.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a series of actionable steps that are relevant to the issue described in the PROMPT. It suggests ensuring that the `settings.DATABASES` configuration includes a default database with the `ENGINE` value set, which is directly related to the error message provided in the PROMPT. It also advises modifying the migration script to handle the absence of a default database and to specify the database alias when calling `transaction.atomic()` and when querying the `Permission` model. These are practical steps that can help resolve the issue. Additionally, the RESPONSE provides links to code snippets that are relevant to the problem, which can be useful for further investigation. However, the RESPONSE could be improved by providing more detailed instructions on how to modify the migration script to handle the absence of a default database, which is a key part of the issue described. This lack of detail is why the score is not higher.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711732718.545842,
+        "result": "- Ensure that the `settings.DATABASES` configuration in your Django settings file includes a default database with the `ENGINE` value set. If the default database is intentionally not set, modify the migration script to handle the absence of a default database.\n- In the migration script `0011_update_proxy_permissions.py`, ensure that the database alias is correctly passed to the `transaction.atomic()` and `Permission.objects.using(alias)` calls.\n- If the migration is intended to run on a specific database other than the default, you may need to explicitly specify the database alias when calling `transaction.atomic()` and when querying the `Permission` model.\n- If the issue persists after checking the above points, consider reviewing the entire Django settings file to ensure that the `DATABASES` configuration is correct for all databases, including the `ENGINE` value for each database entry.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.1/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.1/tree//django/contrib/auth) \u2192 [migrations](https://github.com/testbed/django__django__3.1/tree//django/contrib/auth/migrations)- [Lines 1 - 76](https://github.com/testbed/django__django__3.1/blob//django/contrib/auth/migrations/0011_update_proxy_permissions.py#L1-L76)\n\n This snippet contains the migration script that is causing the issue when the default database is not set. It is directly related to the problem described in the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.1/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__3.1/tree//django/db/backends) \u2192 [dummy](https://github.com/testbed/django__django__3.1/tree//django/db/backends/dummy)- [Lines 1 - 74](https://github.com/testbed/django__django__3.1/blob//django/db/backends/dummy/base.py#L1-L74)\n\n This snippet is from the dummy backend which is used when the database ENGINE setting is empty. It raises the ImproperlyConfigured exception mentioned in the traceback. It is relevant for understanding why the exception is raised when the default database is not set."
+    }
+}

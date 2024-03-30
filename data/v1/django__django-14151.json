@@ -1,0 +1,174 @@
+{
+    "id": "django__django-14151",
+    "repo_name": "testbed/django__django__4.0",
+    "task_id": 456559398176440,
+    "title": "CsrfViewMiddleware assumes referer header can be parsed",
+    "body": "Description\n\t\nDjango's CsrfViewMiddleware assumes that the HTTP referer header is valid when checking it. Specifically, it doesn't handle the case of urlparse() raising a ValueError in this line (e.g. for urls like 'https://['):\n\u200bhttps://github.com/django/django/blob/45814af6197cfd8f4dc72ee43b90ecde305a1d5a/django/middleware/csrf.py#L244\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.0.git",
+    "requested_commit": "",
+    "mayil_response": "- To address the issue where `CsrfViewMiddleware` does not handle `ValueError` from `urlparse()`, modify the `_check_referer` method in `django/middleware/csrf.py` to catch the `ValueError` and raise a `RejectRequest` with an appropriate reason.\n\n- Here is the suggested change to the `_check_referer` method:\n\n```python\ndef _check_referer(self, request):\n    referer = request.META.get(\"HTTP_REFERER\")\n    if referer is None:\n        raise RejectRequest(REASON_NO_REFERER)\n\n    try:\n        referer = urlparse(referer)\n    except ValueError:\n        raise RejectRequest(REASON_MALFORMED_REFERER)  # This line handles the ValueError\n\n    # ... rest of the existing code ...\n```\n\n- Ensure that `REASON_MALFORMED_REFERER` is defined in the module, which it already is based on the provided code snippets.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [middleware](https://github.com/testbed/django__django__4.0/tree//django/middleware)- [Lines 270 - 346](https://github.com/testbed/django__django__4.0/blob//django/middleware/csrf.py#L270-L346)\n\n This snippet contains the _check_referer method where the urlparse() function is used and where the ValueError might be raised, which is directly related to the issue described.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00023349999999999998,
+        "snippet_processor": 0.050140000000000004,
+        "issue_star_creation": 0.02036,
+        "issue_star_solver": 0.056830000000000006,
+        "bouncer": 0.02819
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711724138.550364,
+        "relevant_snippets": [
+            {
+                "code": "class CsrfViewMiddleware(MiddlewareMixin):",
+                "filename": "django/middleware/csrf.py",
+                "start_index": 6093,
+                "end_index": 6135,
+                "start_line": 164,
+                "end_line": 164,
+                "max_line": 482,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nCross Site Request Forgery Middleware.\n\nThis module provides a middleware that implements protection\nagainst request forgeries from other sites.\n\"\"\"\nimport logging\nimport string\nfrom collections import defaultdict\nfrom urllib.parse import urlparse\n\nfrom django.conf import settings\nfrom django.core.exceptions import DisallowedHost, ImproperlyConfigured\nfrom django.http import HttpHeaders, UnreadablePostError\nfrom django.urls import get_callable\nfrom django.utils.cache import patch_vary_headers\nfrom django.utils.crypto import constant_time_compare, get_random_string\nfrom django.utils.deprecation import MiddlewareMixin\nfrom django.utils.functional import cached_property\nfrom django.utils.http import is_same_domain\nfrom django.utils.log import log_response\nfrom django.utils.regex_helper import _lazy_re_compile\n\nlogger = logging.getLogger(\"django.security.csrf\")\n# This matches if any character is not in CSRF_ALLOWED_CHARS.\ninvalid_token_chars_re = _lazy_re_compile(\"[^a-zA-Z0-9]\")\n\nREASON_BAD_ORIGIN = \"Origin checking failed - %s does not match any trusted origins.\"\nREASON_NO_REFERER = \"Referer checking failed - no Referer.\"\nREASON_BAD_REFERER = \"Referer checking failed - %s does not match any trusted origins.\"\nREASON_NO_CSRF_COOKIE = \"CSRF cookie not set.\"\nREASON_CSRF_TOKEN_MISSING = \"CSRF token missing.\"\nREASON_MALFORMED_REFERER = \"Referer checking failed - Referer is malformed.\"\nREASON_INSECURE_REFERER = (\n    \"Referer checking failed - Referer is insecure while host is secure.\"\n)\n# The reason strings below are for passing to InvalidTokenFormat. They are\n# phrases without a subject because they can be in reference to either the CSRF\n# cookie or non-cookie token.\nREASON_INCORRECT_LENGTH = \"has incorrect length\"\nREASON_INVALID_CHARACTERS = \"has invalid characters\"\n\nCSRF_SECRET_LENGTH = 32\nCSRF_TOKEN_LENGTH = 2 * CSRF_SECRET_LENGTH\nCSRF_ALLOWED_CHARS = string.ascii_letters + string.digits\nCSRF_SESSION_KEY = \"_csrftoken\"\n\n\ndef _get_failure_view():\n    \"\"\"Return the view to be used for CSRF rejections.\"\"\"\n    return get_callable(settings.CSRF_FAILURE_VIEW)\n\n\ndef _get_new_csrf_string():\n    return get_random_string(CSRF_SECRET_LENGTH, allowed_chars=CSRF_ALLOWED_CHARS)\n\n\ndef _mask_cipher_secret(secret):\n    \"\"\"\n    Given a secret (assumed to be a string of CSRF_ALLOWED_CHARS), generate a\n    token by adding a mask and applying it to the secret.\n    \"\"\"\n    mask = _get_new_csrf_string()\n    chars = CSRF_ALLOWED_CHARS\n    pairs = zip((chars.index(x) for x in secret), (chars.index(x) for x in mask))\n    cipher = \"\".join(chars[(x + y) % len(chars)] for x, y in pairs)\n    return mask + cipher",
+                "filename": "django/middleware/csrf.py",
+                "start_index": 0,
+                "end_index": 2628,
+                "start_line": 1,
+                "end_line": 67,
+                "max_line": 482,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "def _origin_verified(self, request):\n        request_origin = request.META[\"HTTP_ORIGIN\"]\n        try:\n            good_host = request.get_host()\n        except DisallowedHost:\n            pass\n        else:\n            good_origin = \"%s://%s\" % (\n                \"https\" if request.is_secure() else \"http\",\n                good_host,\n            )\n            if request_origin == good_origin:\n                return True\n        if request_origin in self.allowed_origins_exact:\n            return True\n        try:\n            parsed_origin = urlparse(request_origin)\n        except ValueError:\n            return False\n        request_scheme = parsed_origin.scheme\n        request_netloc = parsed_origin.netloc\n        return any(\n            is_same_domain(request_netloc, host)\n            for host in self.allowed_origin_subdomains.get(request_scheme, ())\n        )\n\n    def _check_referer(self, request):\n        referer = request.META.get(\"HTTP_REFERER\")\n        if referer is None:\n            raise RejectRequest(REASON_NO_REFERER)\n\n        try:\n            referer = urlparse(referer)\n        except ValueError:\n            raise RejectRequest(REASON_MALFORMED_REFERER)\n\n        # Make sure we have a valid URL for Referer.\n        if \"\" in (referer.scheme, referer.netloc):\n            raise RejectRequest(REASON_MALFORMED_REFERER)\n\n        # Ensure that our Referer is also secure.\n        if referer.scheme != \"https\":\n            raise RejectRequest(REASON_INSECURE_REFERER)\n\n        if any(\n            is_same_domain(referer.netloc, host)\n            for host in self.csrf_trusted_origins_hosts\n        ):\n            return\n        # Allow matching the configured cookie domain.\n        good_referer = (\n            settings.SESSION_COOKIE_DOMAIN\n            if settings.CSRF_USE_SESSIONS\n            else settings.CSRF_COOKIE_DOMAIN\n        )\n        if good_referer is None:\n            # If no cookie domain is configured, allow matching the current\n            # host:port exactly if it's permitted by ALLOWED_HOSTS.\n            try:\n                # request.get_host() includes the port.\n                good_referer = request.get_host()\n            except DisallowedHost:\n                raise RejectRequest(REASON_BAD_REFERER % referer.geturl())\n        else:\n            server_port = request.get_port()\n            if server_port not in (\"443\", \"80\"):\n                good_referer = \"%s:%s\" % (good_referer, server_port)\n\n        if not is_same_domain(referer.netloc, good_referer):\n            raise RejectRequest(REASON_BAD_REFERER % referer.geturl())\n\n    def _bad_token_message(self, reason, token_source):\n        if token_source != \"POST\":\n            # Assume it is a settings.CSRF_HEADER_NAME value.\n            header_name = HttpHeaders.parse_header_name(token_source)\n            token_source = f\"the {header_name!r} HTTP header\"\n        return f\"CSRF token from {token_source} {reason}.\"",
+                "filename": "django/middleware/csrf.py",
+                "start_index": 10130,
+                "end_index": 13056,
+                "start_line": 270,
+                "end_line": 346,
+                "max_line": 482,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    Require a present and correct csrfmiddlewaretoken for POST requests that\n    have a CSRF cookie, and set an outgoing CSRF cookie.\n\n    This middleware should be used in conjunction with the {% csrf_token %}\n    template tag.\n    \"\"\"\n\n    @cached_property\n    def csrf_trusted_origins_hosts(self):\n        return [\n            urlparse(origin).netloc.lstrip(\"*\")\n            for origin in settings.CSRF_TRUSTED_ORIGINS\n        ]\n\n    @cached_property\n    def allowed_origins_exact(self):\n        return {origin for origin in settings.CSRF_TRUSTED_ORIGINS if \"*\" not in origin}\n\n    @cached_property\n    def allowed_origin_subdomains(self):\n        \"\"\"\n        A mapping of allowed schemes to list of allowed netlocs, where all\n        subdomains of the netloc are allowed.\n        \"\"\"\n        allowed_origin_subdomains = defaultdict(list)\n        for parsed in (\n            urlparse(origin)\n            for origin in settings.CSRF_TRUSTED_ORIGINS\n            if \"*\" in origin\n        ):\n            allowed_origin_subdomains[parsed.scheme].append(parsed.netloc.lstrip(\"*\"))\n        return allowed_origin_subdomains\n\n    # The _accept and _reject methods currently only exist for the sake of the\n    # requires_csrf_token decorator.\n    def _accept(self, request):\n        # Avoid checking the request twice by adding a custom attribute to\n        # request.  This will be relevant when both decorator and middleware\n        # are used.\n        request.csrf_processing_done = True\n        return None\n\n    def _reject(self, request, reason):\n        response = _get_failure_view()(request, reason=reason)\n        log_response(\n            \"Forbidden (%s): %s\",\n            reason,\n            request.path,\n            response=response,\n            request=request,\n            logger=logger,\n        )\n        return response",
+                "filename": "django/middleware/csrf.py",
+                "start_index": 6140,
+                "end_index": 7974,
+                "start_line": 1,
+                "end_line": 482,
+                "max_line": 482,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "import re\nfrom urllib.parse import urlparse\n\nfrom django.conf import settings\nfrom django.core.exceptions import PermissionDenied\nfrom django.core.mail import mail_managers\nfrom django.http import HttpResponsePermanentRedirect\nfrom django.urls import is_valid_path\nfrom django.utils.deprecation import MiddlewareMixin\nfrom django.utils.http import escape_leading_slashes",
+                "filename": "django/middleware/common.py",
+                "start_index": 0,
+                "end_index": 370,
+                "start_line": 1,
+                "end_line": 10,
+                "max_line": 178,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "from urllib.parse import urlparse, urlunparse\n\nfrom django.conf import settings\n\n# Avoid shadowing the login() and logout() views below.\nfrom django.contrib.auth import REDIRECT_FIELD_NAME, get_user_model\nfrom django.contrib.auth import login as auth_login\nfrom django.contrib.auth import logout as auth_logout\nfrom django.contrib.auth import update_session_auth_hash\nfrom django.contrib.auth.decorators import login_required\nfrom django.contrib.auth.forms import (\n    AuthenticationForm,\n    PasswordChangeForm,\n    PasswordResetForm,\n    SetPasswordForm,\n)\nfrom django.contrib.auth.tokens import default_token_generator\nfrom django.contrib.sites.shortcuts import get_current_site\nfrom django.core.exceptions import ImproperlyConfigured, ValidationError\nfrom django.http import HttpResponseRedirect, QueryDict\nfrom django.shortcuts import resolve_url\nfrom django.urls import reverse_lazy\nfrom django.utils.decorators import method_decorator\nfrom django.utils.http import url_has_allowed_host_and_scheme, urlsafe_base64_decode\nfrom django.utils.translation import gettext_lazy as _\nfrom django.views.decorators.cache import never_cache\nfrom django.views.decorators.csrf import csrf_protect\nfrom django.views.decorators.debug import sensitive_post_parameters\nfrom django.views.generic.base import TemplateView\nfrom django.views.generic.edit import FormView\n\nUserModel = get_user_model()\n\n\nclass RedirectURLMixin:\n    next_page = None\n    redirect_field_name = REDIRECT_FIELD_NAME\n    success_url_allowed_hosts = set()\n\n    def get_success_url(self):\n        return self.get_redirect_url() or self.get_default_redirect_url()\n\n    def get_redirect_url(self):\n        \"\"\"Return the user-originating redirect URL if it's safe.\"\"\"\n        redirect_to = self.request.POST.get(\n            self.redirect_field_name, self.request.GET.get(self.redirect_field_name)\n        )\n        url_is_safe = url_has_allowed_host_and_scheme(\n            url=redirect_to,\n            allowed_hosts=self.get_success_url_allowed_hosts(),\n            require_https=self.request.is_secure(),\n        )\n        return redirect_to if url_is_safe else \"\"\n\n    def get_success_url_allowed_hosts(self):\n        return {self.request.get_host(), *self.success_url_allowed_hosts}\n\n    def get_default_redirect_url(self):\n        \"\"\"Return the default redirect URL.\"\"\"\n        if self.next_page:\n            return resolve_url(self.next_page)\n        raise ImproperlyConfigured(\"No URL to redirect to. Provide a next_page.\")",
+                "filename": "django/contrib/auth/views.py",
+                "start_index": 0,
+                "end_index": 2489,
+                "start_line": 1,
+                "end_line": 62,
+                "max_line": 379,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "@register(Tags.security, deploy=True)\ndef check_referrer_policy(app_configs, **kwargs):\n    if _security_middleware():\n        if settings.SECURE_REFERRER_POLICY is None:\n            return [W022]\n        # Support a comma-separated string or iterable of values to allow fallback.\n        if isinstance(settings.SECURE_REFERRER_POLICY, str):\n            values = {v.strip() for v in settings.SECURE_REFERRER_POLICY.split(\",\")}\n        else:\n            values = set(settings.SECURE_REFERRER_POLICY)\n        if not values <= REFERRER_POLICY_VALUES:\n            return [E023]\n    return []\n\n\n@register(Tags.security, deploy=True)\ndef check_cross_origin_opener_policy(app_configs, **kwargs):\n    if (\n        _security_middleware()\n        and settings.SECURE_CROSS_ORIGIN_OPENER_POLICY is not None\n        and settings.SECURE_CROSS_ORIGIN_OPENER_POLICY\n        not in CROSS_ORIGIN_OPENER_POLICY_VALUES\n    ):\n        return [E024]\n    return []",
+                "filename": "django/core/checks/security/base.py",
+                "start_index": 8197,
+                "end_index": 9139,
+                "start_line": 155,
+                "end_line": 283,
+                "max_line": 283,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "from functools import wraps\n\nfrom asgiref.sync import iscoroutinefunction\n\nfrom django.middleware.csrf import CsrfViewMiddleware, get_token\nfrom django.utils.decorators import decorator_from_middleware\n\ncsrf_protect = decorator_from_middleware(CsrfViewMiddleware)\ncsrf_protect.__name__ = \"csrf_protect\"\ncsrf_protect.__doc__ = \"\"\"\nThis decorator adds CSRF protection in exactly the same way as\nCsrfViewMiddleware, but it can be used on a per view basis.  Using both, or\nusing the decorator multiple times, is harmless and efficient.\n\"\"\"\n\n\nclass _EnsureCsrfToken(CsrfViewMiddleware):\n    # Behave like CsrfViewMiddleware but don't reject requests or log warnings.\n    def _reject(self, request, reason):\n        return None\n\n\nrequires_csrf_token = decorator_from_middleware(_EnsureCsrfToken)\nrequires_csrf_token.__name__ = \"requires_csrf_token\"\nrequires_csrf_token.__doc__ = \"\"\"\nUse this decorator on views that need a correct csrf_token available to\nRequestContext, but without the CSRF protection that csrf_protect\nenforces.\n\"\"\"\n\n\nclass _EnsureCsrfCookie(CsrfViewMiddleware):\n    def _reject(self, request, reason):\n        return None\n\n    def process_view(self, request, callback, callback_args, callback_kwargs):\n        retval = super().process_view(request, callback, callback_args, callback_kwargs)\n        # Force process_response to send the cookie\n        get_token(request)\n        return retval\n\n\nensure_csrf_cookie = decorator_from_middleware(_EnsureCsrfCookie)\nensure_csrf_cookie.__name__ = \"ensure_csrf_cookie\"\nensure_csrf_cookie.__doc__ = \"\"\"\nUse this decorator to ensure that a view sets a CSRF cookie, whether or not it\nuses the csrf_token template tag, or the CsrfViewMiddleware is used.\n\"\"\"\n\n\ndef csrf_exempt(view_func):\n    \"\"\"Mark a view function as being exempt from the CSRF view protection.\"\"\"\n\n    # view_func.csrf_exempt = True would also work, but decorators are nicer\n    # if they don't have side effects, so return a new function.\n\n    if iscoroutinefunction(view_func):\n\n        async def _view_wrapper(request, *args, **kwargs):\n            return await view_func(request, *args, **kwargs)\n\n    else:\n\n        def _view_wrapper(request, *args, **kwargs):\n            return view_func(request, *args, **kwargs)\n\n    _view_wrapper.csrf_exempt = True\n\n    return wraps(view_func)(_view_wrapper)",
+                "filename": "django/views/decorators/csrf.py",
+                "start_index": 0,
+                "end_index": 2323,
+                "start_line": 1,
+                "end_line": 69,
+                "max_line": 69,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "import inspect\n\nfrom django.conf import settings\n\nfrom .. import Error, Tags, Warning, register\n\nW003 = Warning(\n    \"You don't appear to be using Django's built-in \"\n    \"cross-site request forgery protection via the middleware \"\n    \"('django.middleware.csrf.CsrfViewMiddleware' is not in your \"\n    \"MIDDLEWARE). Enabling the middleware is the safest approach \"\n    \"to ensure you don't leave any holes.\",\n    id=\"security.W003\",\n)\n\nW016 = Warning(\n    \"You have 'django.middleware.csrf.CsrfViewMiddleware' in your \"\n    \"MIDDLEWARE, but you have not set CSRF_COOKIE_SECURE to True. \"\n    \"Using a secure-only CSRF cookie makes it more difficult for network \"\n    \"traffic sniffers to steal the CSRF token.\",\n    id=\"security.W016\",\n)\n\n\ndef _csrf_middleware():\n    return \"django.middleware.csrf.CsrfViewMiddleware\" in settings.MIDDLEWARE\n\n\n@register(Tags.security, deploy=True)\ndef check_csrf_middleware(app_configs, **kwargs):\n    passed_check = _csrf_middleware()\n    return [] if passed_check else [W003]\n\n\n@register(Tags.security, deploy=True)\ndef check_csrf_cookie_secure(app_configs, **kwargs):\n    passed_check = (\n        settings.CSRF_USE_SESSIONS\n        or not _csrf_middleware()\n        or settings.CSRF_COOKIE_SECURE is True\n    )\n    return [] if passed_check else [W016]\n\n\n@register(Tags.security)\ndef check_csrf_failure_view(app_configs, **kwargs):\n    from django.middleware.csrf import _get_failure_view\n\n    errors = []\n    try:\n        view = _get_failure_view()\n    except ImportError:\n        msg = (\n            \"The CSRF failure view '%s' could not be imported.\"\n            % settings.CSRF_FAILURE_VIEW\n        )\n        errors.append(Error(msg, id=\"security.E102\"))\n    else:\n        try:\n            inspect.signature(view).bind(None, reason=None)\n        except TypeError:\n            msg = (\n                \"The CSRF failure view '%s' does not take the correct number of \"\n                \"arguments.\" % settings.CSRF_FAILURE_VIEW\n            )\n            errors.append(Error(msg, id=\"security.E101\"))\n    return errors",
+                "filename": "django/core/checks/security/csrf.py",
+                "start_index": 0,
+                "end_index": 2054,
+                "start_line": 1,
+                "end_line": 67,
+                "max_line": 67,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "def process_response(self, request, response):\n        if request.META.get(\"CSRF_COOKIE_NEEDS_UPDATE\"):\n            self._set_csrf_cookie(request, response)\n            # Unset the flag to prevent _set_csrf_cookie() from being\n            # unnecessarily called again in process_response() by other\n            # instances of CsrfViewMiddleware. This can happen e.g. when both a\n            # decorator and middleware are used. However,\n            # CSRF_COOKIE_NEEDS_UPDATE is still respected in subsequent calls\n            # e.g. in case rotate_token() is called in process_response() later\n            # by custom middleware but before those subsequent calls.\n            request.META[\"CSRF_COOKIE_NEEDS_UPDATE\"] = False\n\n        return response",
+                "filename": "django/middleware/csrf.py",
+                "start_index": 18737,
+                "end_index": 19487,
+                "start_line": 470,
+                "end_line": 482,
+                "max_line": 482,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/middleware/csrf.py": [
+                {
+                    "chunk": {
+                        "code": "def _origin_verified(self, request):\n        request_origin = request.META[\"HTTP_ORIGIN\"]\n        try:\n            good_host = request.get_host()\n        except DisallowedHost:\n            pass\n        else:\n            good_origin = \"%s://%s\" % (\n                \"https\" if request.is_secure() else \"http\",\n                good_host,\n            )\n            if request_origin == good_origin:\n                return True\n        if request_origin in self.allowed_origins_exact:\n            return True\n        try:\n            parsed_origin = urlparse(request_origin)\n        except ValueError:\n            return False\n        request_scheme = parsed_origin.scheme\n        request_netloc = parsed_origin.netloc\n        return any(\n            is_same_domain(request_netloc, host)\n            for host in self.allowed_origin_subdomains.get(request_scheme, ())\n        )\n\n    def _check_referer(self, request):\n        referer = request.META.get(\"HTTP_REFERER\")\n        if referer is None:\n            raise RejectRequest(REASON_NO_REFERER)\n\n        try:\n            referer = urlparse(referer)\n        except ValueError:\n            raise RejectRequest(REASON_MALFORMED_REFERER)\n\n        # Make sure we have a valid URL for Referer.\n        if \"\" in (referer.scheme, referer.netloc):\n            raise RejectRequest(REASON_MALFORMED_REFERER)\n\n        # Ensure that our Referer is also secure.\n        if referer.scheme != \"https\":\n            raise RejectRequest(REASON_INSECURE_REFERER)\n\n        if any(\n            is_same_domain(referer.netloc, host)\n            for host in self.csrf_trusted_origins_hosts\n        ):\n            return\n        # Allow matching the configured cookie domain.\n        good_referer = (\n            settings.SESSION_COOKIE_DOMAIN\n            if settings.CSRF_USE_SESSIONS\n            else settings.CSRF_COOKIE_DOMAIN\n        )\n        if good_referer is None:\n            # If no cookie domain is configured, allow matching the current\n            # host:port exactly if it's permitted by ALLOWED_HOSTS.\n            try:\n                # request.get_host() includes the port.\n                good_referer = request.get_host()\n            except DisallowedHost:\n                raise RejectRequest(REASON_BAD_REFERER % referer.geturl())\n        else:\n            server_port = request.get_port()\n            if server_port not in (\"443\", \"80\"):\n                good_referer = \"%s:%s\" % (good_referer, server_port)\n\n        if not is_same_domain(referer.netloc, good_referer):\n            raise RejectRequest(REASON_BAD_REFERER % referer.geturl())\n\n    def _bad_token_message(self, reason, token_source):\n        if token_source != \"POST\":\n            # Assume it is a settings.CSRF_HEADER_NAME value.\n            header_name = HttpHeaders.parse_header_name(token_source)\n            token_source = f\"the {header_name!r} HTTP header\"\n        return f\"CSRF token from {token_source} {reason}.\"",
+                        "filename": "django/middleware/csrf.py",
+                        "start_index": 10130,
+                        "end_index": 13056,
+                        "start_line": 270,
+                        "end_line": 346,
+                        "max_line": 482,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the _check_referer method where the urlparse() function is used and where the ValueError might be raised, which is directly related to the issue described."
+                }
+            ]
+        },
+        "solution_task": "- To address the issue where `CsrfViewMiddleware` does not handle `ValueError` from `urlparse()`, modify the `_check_referer` method in `django/middleware/csrf.py` to catch the `ValueError` and raise a `RejectRequest` with an appropriate reason.\n\n- Here is the suggested change to the `_check_referer` method:\n\n```python\ndef _check_referer(self, request):\n    referer = request.META.get(\"HTTP_REFERER\")\n    if referer is None:\n        raise RejectRequest(REASON_NO_REFERER)\n\n    try:\n        referer = urlparse(referer)\n    except ValueError:\n        raise RejectRequest(REASON_MALFORMED_REFERER)  # This line handles the ValueError\n\n    # ... rest of the existing code ...\n```\n\n- Ensure that `REASON_MALFORMED_REFERER` is defined in the module, which it already is based on the provided code snippets.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT by suggesting a modification to the `_check_referer` method in `django/middleware/csrf.py`. It correctly identifies the need to catch the `ValueError` that can be raised by `urlparse()` and proposes raising a `RejectRequest` with an appropriate reason when this exception occurs. The RESPONSE also includes a code snippet that demonstrates how to implement the suggested change, which is directly relevant to the issue. Additionally, the RESPONSE advises ensuring that `REASON_MALFORMED_REFERER` is defined, which is a useful reminder to maintain the integrity of the code. The RESPONSE also provides a link to the relevant code snippets, which is helpful for context and verification. The only reason it does not score a 10 is that it does not explicitly mention the need to import the `urlparse` function from the appropriate module, which is a minor detail that could be inferred.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711724281.503315,
+        "result": "- To address the issue where `CsrfViewMiddleware` does not handle `ValueError` from `urlparse()`, modify the `_check_referer` method in `django/middleware/csrf.py` to catch the `ValueError` and raise a `RejectRequest` with an appropriate reason.\n\n- Here is the suggested change to the `_check_referer` method:\n\n```python\ndef _check_referer(self, request):\n    referer = request.META.get(\"HTTP_REFERER\")\n    if referer is None:\n        raise RejectRequest(REASON_NO_REFERER)\n\n    try:\n        referer = urlparse(referer)\n    except ValueError:\n        raise RejectRequest(REASON_MALFORMED_REFERER)  # This line handles the ValueError\n\n    # ... rest of the existing code ...\n```\n\n- Ensure that `REASON_MALFORMED_REFERER` is defined in the module, which it already is based on the provided code snippets.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [middleware](https://github.com/testbed/django__django__4.0/tree//django/middleware)- [Lines 270 - 346](https://github.com/testbed/django__django__4.0/blob//django/middleware/csrf.py#L270-L346)\n\n This snippet contains the _check_referer method where the urlparse() function is used and where the ValueError might be raised, which is directly related to the issue described."
+    }
+}

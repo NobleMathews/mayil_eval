@@ -1,0 +1,204 @@
+{
+    "id": "django__django-13355",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 6377816381439523776,
+    "title": "Optimize django.forms.widgets.Media.__add__.",
+    "body": "Description\n\t\nWhile working with another project that make extensive use of django.forms.widgets.Media I discovered that the fix for ticket #30153 has unintended consequences on the performance of Media.__add__. If the number of Media objects added grows beyond a certain point (not sure it may be machine specific) then the performance of all subsequent Media.__add__ calls becomes terrible.\nThis was causing page load times of several minutes on my development machine. I agree that you need to delay as long as possible as #30153 intends but it seems that there probably should be an upper bound on this so that performance does not suddenly decrease.\nHere is some sample code that can reproduce the issue:\nfrom django.forms import Media\nimport datetime\ndef create_media(MediaClass):\n\t'''Creates a simple Media object with only one or two items.'''\n\treturn MediaClass(css={'all': ['main.css']}, js=['main.js'])\nstart = datetime.datetime.now()\nmedia = create_media(Media)\nfor i in range(100000):\n\tmedia = media + create_media(Media)\n\t\nprint('100000 additions took: %s' % (datetime.datetime.now() - start))\nOn my machine several runs of this code result in times between 1:35 - 1:44 (eg. 1 minute 35 seconds to 1 minute 44 seconds). However, taking away one zero from the number of media objects runs in under a second. Near as I can tell this has to do with the memory used to store these arrays and when it gets past a certain point the performance is awful. Since I am not sure if it is machine specific, for reference my machine is a i7-8700 with 64 GB RAM.\nHere is a sample that has a modified Media class that does not have theses issues:\nfrom django.forms import Media\nimport datetime\ndef create_media(MediaClass):\n\t'''Creates a simple Media object with only one or two items.'''\n\treturn MediaClass(css={'all': ['main.css']}, js=['main.js'])\nclass CustomMedia(Media):\n\tdef __add__(self, other):\n\t\tcombined = CustomMedia()\n\t\tif len(self._css_lists) + len(other._css_lists) > 1000:\n\t\t\tcombined._css_lists = [self._css, other._css]\n\t\telse:\n\t\t\tcombined._css_lists = self._css_lists + other._css_lists\n\t\t\n\t\tif len(self._js_lists) + len(other._js_lists) > 1000:\n\t\t\tcombined._js_lists = [self._js, other._js]\n\t\telse:\n\t\t\tcombined._js_lists = self._js_lists + other._js_lists\n\t\t\n\t\treturn combined\nstart = datetime.datetime.now()\nmedia = create_media(CustomMedia)\nfor i in range(100000):\n\tmedia = media + create_media(CustomMedia)\n\t\nprint('100000 additions took: %s' % (datetime.datetime.now() - start))\nWith this change it again runs in under a second. If I increase the number of loops the performance seems to change at a much more expected level.\nI set an upper limit on the length allowed before a merge occurs. I'm not sure if the number of additions allowed should be a setting that can be adjusted to meet specific needs or if something that is just \"reasonably\" high is sufficient. It does appear that limiting the total number of items in the list to about 1000 works best on my machine. I'm also not sure that this is the best solution.\nThanks for your consideration.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "Doesn't seem like we have fully grasped all the specifics of this ticket \ud83d\ude41.                   But we've outlined some ideas that might help you get started:\n\n- Optimize the `Media.__add__` method in `django/forms/widgets.py` to handle large numbers of Media objects more efficiently.\n- Implement a threshold for direct list addition and switch to a more efficient concatenation method when the threshold is exceeded.\n- Consider using a set or dict to avoid adding duplicate items, which can be faster than checking `if item not in` for large lists.\n\n```python\nclass Media:\n    # ... (existing code)\n\n    def __add__(self, other):\n        combined = Media()\n        # Use set for efficient deduplication\n        combined._css_lists = list(set(self._css_lists + other._css_lists))\n        combined._js_lists = list(set(self._js_lists + other._js_lists))\n        return combined\n```\n\n- If the threshold logic is still desired, you can implement it as follows:\n\n```python\nclass Media:\n    # ... (existing code)\n\n    def __add__(self, other):\n        combined = Media()\n        # Threshold for switching to a more efficient concatenation method\n        threshold = 1000\n        if len(self._css_lists) + len(other._css_lists) > threshold:\n            combined._css_lists = list(set(self._css_lists + other._css_lists))\n        else:\n            combined._css_lists = self._css_lists + other._css_lists\n\n        if len(self._js_lists) + len(other._js_lists) > threshold:\n            combined._js_lists = list(set(self._js_lists + other._js_lists))\n        else:\n            combined._js_lists = self._js_lists + other._js_lists\n\n        return combined\n```\n\n- Ensure that the `Media.merge` method is not contributing to the performance issue. If it is, consider optimizing it as well.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [forms](https://github.com/testbed/django__django__3.2/tree//django/forms)- [Lines 143 - 181](https://github.com/testbed/django__django__3.2/blob//django/forms/widgets.py#L143-L181)\n\n This snippet contains the __add__ method of the Media class, which is directly related to the performance issue described. The method's implementation likely needs to be optimized to handle large numbers of Media objects efficiently. \n\n\n   - [Lines 62 - 141](https://github.com/testbed/django__django__3.2/blob//django/forms/widgets.py#L62-L141)\n\n This snippet initializes the Media class and defines the _css and _js properties, which are used in the __add__ method. Understanding how these properties are initialized and used is necessary for optimizing the __add__ method. \n\n\n   - [Lines 61 - 61](https://github.com/testbed/django__django__3.2/blob//django/forms/widgets.py#L61-L61)\n\n This snippet is the declaration of the Media class. While it doesn't contain the code that needs to be changed, it is necessary to look at this to understand the context of the Media class within the widgets.py file.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0002025,
+        "snippet_processor": 0.06689,
+        "issue_star_creation": 0.04074,
+        "issue_star_solver": 0.06449,
+        "bouncer": 0.02736
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711726930.118446,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"\nHTML Widget classes\n\"\"\"\n\nimport copy\nimport datetime\nimport warnings\nfrom collections import defaultdict\nfrom graphlib import CycleError, TopologicalSorter\nfrom itertools import chain\n\nfrom django.forms.utils import to_current_timezone\nfrom django.templatetags.static import static\nfrom django.utils import formats\nfrom django.utils.dates import MONTHS\nfrom django.utils.formats import get_format\nfrom django.utils.html import format_html, html_safe\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.safestring import mark_safe\nfrom django.utils.translation import gettext_lazy as _\n\nfrom .renderers import get_default_renderer\n\n__all__ = (\n    \"Media\",\n    \"MediaDefiningClass\",\n    \"Widget\",\n    \"TextInput\",\n    \"NumberInput\",\n    \"EmailInput\",\n    \"URLInput\",\n    \"PasswordInput\",\n    \"HiddenInput\",\n    \"MultipleHiddenInput\",\n    \"FileInput\",\n    \"ClearableFileInput\",\n    \"Textarea\",\n    \"DateInput\",\n    \"DateTimeInput\",\n    \"TimeInput\",\n    \"CheckboxInput\",\n    \"Select\",\n    \"NullBooleanSelect\",\n    \"SelectMultiple\",\n    \"RadioSelect\",\n    \"CheckboxSelectMultiple\",\n    \"MultiWidget\",\n    \"SplitDateTimeWidget\",\n    \"SplitHiddenDateTimeWidget\",\n    \"SelectDateWidget\",\n)\n\nMEDIA_TYPES = (\"css\", \"js\")\n\n\nclass MediaOrderConflictWarning(RuntimeWarning):\n    pass",
+                "filename": "django/forms/widgets.py",
+                "start_index": 0,
+                "end_index": 1296,
+                "start_line": 1,
+                "end_line": 1150,
+                "max_line": 1200,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def __init__(self, media=None, css=None, js=None):\n        if media is not None:\n            css = getattr(media, \"css\", {})\n            js = getattr(media, \"js\", [])\n        else:\n            if css is None:\n                css = {}\n            if js is None:\n                js = []\n        self._css_lists = [css]\n        self._js_lists = [js]\n\n    def __repr__(self):\n        return \"Media(css=%r, js=%r)\" % (self._css, self._js)\n\n    def __str__(self):\n        return self.render()\n\n    @property\n    def _css(self):\n        css = defaultdict(list)\n        for css_list in self._css_lists:\n            for medium, sublist in css_list.items():\n                css[medium].append(sublist)\n        return {medium: self.merge(*lists) for medium, lists in css.items()}\n\n    @property\n    def _js(self):\n        return self.merge(*self._js_lists)\n\n    def render(self):\n        return mark_safe(\n            \"\\n\".join(\n                chain.from_iterable(\n                    getattr(self, \"render_\" + name)() for name in MEDIA_TYPES\n                )\n            )\n        )\n\n    def render_js(self):\n        return [\n            path.__html__()\n            if hasattr(path, \"__html__\")\n            else format_html('<script src=\"{}\"></script>', self.absolute_path(path))\n            for path in self._js\n        ]\n\n    def render_css(self):\n        # To keep rendering order consistent, we can't just iterate over items().\n        # We need to sort the keys, and iterate over the sorted list.\n        media = sorted(self._css)\n        return chain.from_iterable(\n            [\n                path.__html__()\n                if hasattr(path, \"__html__\")\n                else format_html(\n                    '<link href=\"{}\" media=\"{}\" rel=\"stylesheet\">',\n                    self.absolute_path(path),\n                    medium,\n                )\n                for path in self._css[medium]\n            ]\n            for medium in media\n        )\n\n    def absolute_path(self, path):\n        \"\"\"\n        Given a relative or absolute path to a static asset, return an absolute\n        path. An absolute path will be returned unchanged while a relative path\n        will be passed to django.templatetags.static.static().\n        \"\"\"\n        if path.startswith((\"http://\", \"https://\", \"/\")):\n            return path\n        return static(path)\n\n    def __getitem__(self, name):\n        \"\"\"Return a Media object that only contains media of the given type.\"\"\"\n        if name in MEDIA_TYPES:\n            return Media(**{str(name): getattr(self, \"_\" + name)})\n        raise KeyError('Unknown media type \"%s\"' % name)",
+                "filename": "django/forms/widgets.py",
+                "start_index": 1327,
+                "end_index": 3940,
+                "start_line": 62,
+                "end_line": 141,
+                "max_line": 1200,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "@staticmethod\n    def merge(*lists):\n        \"\"\"\n        Merge lists while trying to keep the relative order of the elements.\n        Warn if the lists have the same elements in a different relative order.\n\n        For static assets it can be important to have them included in the DOM\n        in a certain order. In JavaScript you may not be able to reference a\n        global or in CSS you might want to override a style.\n        \"\"\"\n        ts = TopologicalSorter()\n        for head, *tail in filter(None, lists):\n            ts.add(head)  # Ensure that the first items are included.\n            for item in tail:\n                if head != item:  # Avoid circular dependency to self.\n                    ts.add(item, head)\n                head = item\n        try:\n            return list(ts.static_order())\n        except CycleError:\n            warnings.warn(\n                \"Detected duplicate Media files in an opposite order: {}\".format(\n                    \", \".join(repr(list_) for list_ in lists)\n                ),\n                MediaOrderConflictWarning,\n            )\n            return list(dict.fromkeys(chain.from_iterable(filter(None, lists))))\n\n    def __add__(self, other):\n        combined = Media()\n        combined._css_lists = self._css_lists[:]\n        combined._js_lists = self._js_lists[:]\n        for item in other._css_lists:\n            if item and item not in self._css_lists:\n                combined._css_lists.append(item)\n        for item in other._js_lists:\n            if item and item not in self._js_lists:\n                combined._js_lists.append(item)\n        return combined",
+                "filename": "django/forms/widgets.py",
+                "start_index": 3946,
+                "end_index": 5566,
+                "start_line": 143,
+                "end_line": 181,
+                "max_line": 1200,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\nForm Widget classes specific to the Django admin site.\n\"\"\"\nimport copy\nimport json\n\nfrom django import forms\nfrom django.conf import settings\nfrom django.core.exceptions import ValidationError\nfrom django.core.validators import URLValidator\nfrom django.db.models import CASCADE, UUIDField\nfrom django.urls import reverse\nfrom django.urls.exceptions import NoReverseMatch\nfrom django.utils.html import smart_urlquote\nfrom django.utils.http import urlencode\nfrom django.utils.text import Truncator\nfrom django.utils.translation import get_language\nfrom django.utils.translation import gettext as _\n\n\nclass FilteredSelectMultiple(forms.SelectMultiple):\n    \"\"\"\n    A SelectMultiple with a JavaScript filter interface.\n\n    Note that the resulting JavaScript assumes that the jsi18n\n    catalog has been loaded in the page\n    \"\"\"\n\n    class Media:\n        js = [\n            \"admin/js/core.js\",\n            \"admin/js/SelectBox.js\",\n            \"admin/js/SelectFilter2.js\",\n        ]\n\n    def __init__(self, verbose_name, is_stacked, attrs=None, choices=()):\n        self.verbose_name = verbose_name\n        self.is_stacked = is_stacked\n        super().__init__(attrs, choices)\n\n    def get_context(self, name, value, attrs):\n        context = super().get_context(name, value, attrs)\n        context[\"widget\"][\"attrs\"][\"class\"] = \"selectfilter\"\n        if self.is_stacked:\n            context[\"widget\"][\"attrs\"][\"class\"] += \"stacked\"\n        context[\"widget\"][\"attrs\"][\"data-field-name\"] = self.verbose_name\n        context[\"widget\"][\"attrs\"][\"data-is-stacked\"] = int(self.is_stacked)\n        return context\n\n\nclass BaseAdminDateWidget(forms.DateInput):\n    class Media:\n        js = [\n            \"admin/js/calendar.js\",\n            \"admin/js/admin/DateTimeShortcuts.js\",\n        ]\n\n    def __init__(self, attrs=None, format=None):\n        attrs = {\"class\": \"vDateField\", \"size\": \"10\", **(attrs or {})}\n        super().__init__(attrs=attrs, format=format)\n\n\nclass AdminDateWidget(BaseAdminDateWidget):\n    template_name = \"admin/widgets/date.html\"\n\n\nclass BaseAdminTimeWidget(forms.TimeInput):\n    class Media:\n        js = [\n            \"admin/js/calendar.js\",\n            \"admin/js/admin/DateTimeShortcuts.js\",\n        ]\n\n    def __init__(self, attrs=None, format=None):\n        attrs = {\"class\": \"vTimeField\", \"size\": \"8\", **(attrs or {})}\n        super().__init__(attrs=attrs, format=format)\n\n\nclass AdminTimeWidget(BaseAdminTimeWidget):\n    template_name = \"admin/widgets/time.html\"",
+                "filename": "django/contrib/admin/widgets.py",
+                "start_index": 0,
+                "end_index": 2488,
+                "start_line": 1,
+                "end_line": 80,
+                "max_line": 595,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class Media:",
+                "filename": "django/forms/widgets.py",
+                "start_index": 1310,
+                "end_index": 1322,
+                "start_line": 61,
+                "end_line": 61,
+                "max_line": 1200,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class AdminTextareaWidget(forms.Textarea):\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": \"vLargeTextField\", **(attrs or {})})\n\n\nclass AdminTextInputWidget(forms.TextInput):\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": \"vTextField\", **(attrs or {})})\n\n\nclass AdminEmailInputWidget(forms.EmailInput):\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": \"vTextField\", **(attrs or {})})\n\n\nclass AdminURLFieldWidget(forms.URLInput):\n    template_name = \"admin/widgets/url.html\"\n\n    def __init__(self, attrs=None, validator_class=URLValidator):\n        super().__init__(attrs={\"class\": \"vURLField\", **(attrs or {})})\n        self.validator = validator_class()\n\n    def get_context(self, name, value, attrs):\n        try:\n            self.validator(value if value else \"\")\n            url_valid = True\n        except ValidationError:\n            url_valid = False\n        context = super().get_context(name, value, attrs)\n        context[\"current_label\"] = _(\"Currently:\")\n        context[\"change_label\"] = _(\"Change:\")\n        context[\"widget\"][\"href\"] = (\n            smart_urlquote(context[\"widget\"][\"value\"]) if value else \"\"\n        )\n        context[\"url_valid\"] = url_valid\n        return context\n\n\nclass AdminIntegerFieldWidget(forms.NumberInput):\n    class_name = \"vIntegerField\"\n\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": self.class_name, **(attrs or {})})\n\n\nclass AdminBigIntegerFieldWidget(AdminIntegerFieldWidget):\n    class_name = \"vBigIntegerField\"\n\n\nclass AdminUUIDInputWidget(forms.TextInput):\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": \"vUUIDField\", **(attrs or {})})\n\n\n# Mapping of lowercase language codes [returned by Django's get_language()] to\n# language codes supported by select2.\n# See django/contrib/admin/static/admin/js/vendor/select2/i18n/*\nSELECT2_TRANSLATIONS = {\n    x.lower(): x\n    for x in [\n        \"ar\",\n        \"az\",\n        \"bg\",\n        \"ca\",\n        \"cs\",\n        \"da\",\n        \"de\",\n        \"el\",\n        \"en\",\n        \"es\",\n        \"et\",\n        \"eu\",\n        \"fa\",\n        \"fi\",\n        \"fr\",\n        \"gl\",\n        \"he\",\n        \"hi\",\n        \"hr\",\n        \"hu\",\n        \"id\",\n        \"is\",\n        \"it\",\n        \"ja\",\n        \"km\",\n        \"ko\",\n        \"lt\",\n        \"lv\",\n        \"mk\",\n        \"ms\",\n        \"nb\",\n        \"nl\",\n        \"pl\",\n        \"pt-BR\",\n        \"pt\",\n        \"ro\",\n        \"ru\",\n        \"sk\",\n        \"sr-Cyrl\",\n        \"sr\",\n        \"sv\",\n        \"th\",\n        \"tr\",\n        \"uk\",\n        \"vi\",\n    ]\n}\nSELECT2_TRANSLATIONS.update({\"zh-hans\": \"zh-CN\", \"zh-hant\": \"zh-TW\"})",
+                "filename": "django/contrib/admin/widgets.py",
+                "start_index": 11903,
+                "end_index": 14597,
+                "start_line": 354,
+                "end_line": 461,
+                "max_line": 595,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class BaseModelAdmin(metaclass=forms.MediaDefiningClass):",
+                "filename": "django/contrib/admin/options.py",
+                "start_index": 3959,
+                "end_index": 4016,
+                "start_line": 124,
+                "end_line": 124,
+                "max_line": 2529,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "{\n        const options = $.extend({}, $.fn.formset.defaults, opts);\n        const $this = $(this);\n        const $parent = $this.parent();\n        const updateElementIndex = function(el, prefix, ndx) {\n            const id_regex = new RegExp(\"(\" + prefix + \"-(\\\\d+|__prefix__))\");\n            const replacement = prefix + \"-\" + ndx;\n            if ($(el).prop(\"for\")) {\n                $(el).prop(\"for\", $(el).prop(\"for\").replace(id_regex, replacement));\n            }\n            if (el.id) {\n                el.id = el.id.replace(id_regex, replacement);\n            }\n            if (el.name) {\n                el.name = el.name.replace(id_regex, replacement);\n            }\n        };\n        const totalForms = $(\"#id_\" + options.prefix + \"-TOTAL_FORMS\").prop(\"autocomplete\", \"off\");\n        let nextIndex = parseInt(totalForms.val(), 10);\n        const maxForms = $(\"#id_\" + options.prefix + \"-MAX_NUM_FORMS\").prop(\"autocomplete\", \"off\");\n        const minForms = $(\"#id_\" + options.prefix + \"-MIN_NUM_FORMS\").prop(\"autocomplete\", \"off\");\n        let addButton;\n\n        /**\n         * The \"Add another MyModel\" button below the inline forms.\n         */\n        const addInlineAddButton = function() {\n            if (addButton === null) {\n                if ($this.prop(\"tagName\") === \"TR\") {\n                    // If forms are laid out as table rows, insert the\n                    // \"add\" button in a new table row:\n                    const numCols = $this.eq(-1).children().length;\n                    $parent.append('<tr class=\"' + options.addCssClass + '\"><td colspan=\"' + numCols + '\"><a href=\"#\">' + options.addText + \"</a></tr>\");\n                    addButton = $parent.find(\"tr:last a\");\n                } else {\n                    // Otherwise, insert it immediately after the last form:\n                    $this.filter(\":last\").after('<div class=\"' + options.addCssClass + '\"><a href=\"#\">' + options.addText + \"</a></div>\");\n                    addButton = $this.filter(\":last\").next().find(\"a\");\n                }\n            }\n            addButton.on('click', addInlineClickHandler);\n        };",
+                "filename": "django/contrib/admin/static/admin/js/inlines.js",
+                "start_index": 598,
+                "end_index": 2720,
+                "start_line": 19,
+                "end_line": 320,
+                "max_line": 359,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def media_property(cls):\n    def _media(self):\n        # Get the media property of the superclass, if it exists\n        sup_cls = super(cls, self)\n        try:\n            base = sup_cls.media\n        except AttributeError:\n            base = Media()\n\n        # Get the media definition for this class\n        definition = getattr(cls, \"Media\", None)\n        if definition:\n            extend = getattr(definition, \"extend\", True)\n            if extend:\n                if extend is True:\n                    m = base\n                else:\n                    m = Media()\n                    for medium in extend:\n                        m += base[medium]\n                return m + Media(definition)\n            return Media(definition)\n        return base\n\n    return property(_media)\n\n\nclass MediaDefiningClass(type):\n    \"\"\"\n    Metaclass for classes that can have media definitions.\n    \"\"\"\n\n    def __new__(mcs, name, bases, attrs):\n        new_class = super().__new__(mcs, name, bases, attrs)\n\n        if \"media\" not in attrs:\n            new_class.media = media_property(new_class)\n\n        return new_class",
+                "filename": "django/forms/widgets.py",
+                "start_index": 5569,
+                "end_index": 6684,
+                "start_line": 184,
+                "end_line": 222,
+                "max_line": 1200,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "def _update_unget_history(self, num_bytes):\n        \"\"\"\n        Update the unget history as a sanity check to see if we've pushed\n        back the same number of bytes in one chunk. If we keep ungetting the\n        same number of bytes many times (here, 50), we're mostly likely in an\n        infinite loop of some sort. This is usually caused by a\n        maliciously-malformed MIME request.\n        \"\"\"\n        self._unget_history = [num_bytes] + self._unget_history[:49]\n        number_equal = len(\n            [\n                current_number\n                for current_number in self._unget_history\n                if current_number == num_bytes\n            ]\n        )\n\n        if number_equal > 40:\n            raise SuspiciousMultipartForm(\n                \"The multipart parser got stuck, which shouldn't happen with\"\n                \" normal uploaded files. Check for malicious upload activity;\"\n                \" if there is none, report this to the Django developers.\"\n            )",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 20094,
+                "end_index": 21089,
+                "start_line": 508,
+                "end_line": 530,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/forms/widgets.py": [
+                {
+                    "chunk": {
+                        "code": "@staticmethod\n    def merge(*lists):\n        \"\"\"\n        Merge lists while trying to keep the relative order of the elements.\n        Warn if the lists have the same elements in a different relative order.\n\n        For static assets it can be important to have them included in the DOM\n        in a certain order. In JavaScript you may not be able to reference a\n        global or in CSS you might want to override a style.\n        \"\"\"\n        ts = TopologicalSorter()\n        for head, *tail in filter(None, lists):\n            ts.add(head)  # Ensure that the first items are included.\n            for item in tail:\n                if head != item:  # Avoid circular dependency to self.\n                    ts.add(item, head)\n                head = item\n        try:\n            return list(ts.static_order())\n        except CycleError:\n            warnings.warn(\n                \"Detected duplicate Media files in an opposite order: {}\".format(\n                    \", \".join(repr(list_) for list_ in lists)\n                ),\n                MediaOrderConflictWarning,\n            )\n            return list(dict.fromkeys(chain.from_iterable(filter(None, lists))))\n\n    def __add__(self, other):\n        combined = Media()\n        combined._css_lists = self._css_lists[:]\n        combined._js_lists = self._js_lists[:]\n        for item in other._css_lists:\n            if item and item not in self._css_lists:\n                combined._css_lists.append(item)\n        for item in other._js_lists:\n            if item and item not in self._js_lists:\n                combined._js_lists.append(item)\n        return combined",
+                        "filename": "django/forms/widgets.py",
+                        "start_index": 3946,
+                        "end_index": 5566,
+                        "start_line": 143,
+                        "end_line": 181,
+                        "max_line": 1200,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the __add__ method of the Media class, which is directly related to the performance issue described. The method's implementation likely needs to be optimized to handle large numbers of Media objects efficiently."
+                },
+                {
+                    "chunk": {
+                        "code": "def __init__(self, media=None, css=None, js=None):\n        if media is not None:\n            css = getattr(media, \"css\", {})\n            js = getattr(media, \"js\", [])\n        else:\n            if css is None:\n                css = {}\n            if js is None:\n                js = []\n        self._css_lists = [css]\n        self._js_lists = [js]\n\n    def __repr__(self):\n        return \"Media(css=%r, js=%r)\" % (self._css, self._js)\n\n    def __str__(self):\n        return self.render()\n\n    @property\n    def _css(self):\n        css = defaultdict(list)\n        for css_list in self._css_lists:\n            for medium, sublist in css_list.items():\n                css[medium].append(sublist)\n        return {medium: self.merge(*lists) for medium, lists in css.items()}\n\n    @property\n    def _js(self):\n        return self.merge(*self._js_lists)\n\n    def render(self):\n        return mark_safe(\n            \"\\n\".join(\n                chain.from_iterable(\n                    getattr(self, \"render_\" + name)() for name in MEDIA_TYPES\n                )\n            )\n        )\n\n    def render_js(self):\n        return [\n            path.__html__()\n            if hasattr(path, \"__html__\")\n            else format_html('<script src=\"{}\"></script>', self.absolute_path(path))\n            for path in self._js\n        ]\n\n    def render_css(self):\n        # To keep rendering order consistent, we can't just iterate over items().\n        # We need to sort the keys, and iterate over the sorted list.\n        media = sorted(self._css)\n        return chain.from_iterable(\n            [\n                path.__html__()\n                if hasattr(path, \"__html__\")\n                else format_html(\n                    '<link href=\"{}\" media=\"{}\" rel=\"stylesheet\">',\n                    self.absolute_path(path),\n                    medium,\n                )\n                for path in self._css[medium]\n            ]\n            for medium in media\n        )\n\n    def absolute_path(self, path):\n        \"\"\"\n        Given a relative or absolute path to a static asset, return an absolute\n        path. An absolute path will be returned unchanged while a relative path\n        will be passed to django.templatetags.static.static().\n        \"\"\"\n        if path.startswith((\"http://\", \"https://\", \"/\")):\n            return path\n        return static(path)\n\n    def __getitem__(self, name):\n        \"\"\"Return a Media object that only contains media of the given type.\"\"\"\n        if name in MEDIA_TYPES:\n            return Media(**{str(name): getattr(self, \"_\" + name)})\n        raise KeyError('Unknown media type \"%s\"' % name)",
+                        "filename": "django/forms/widgets.py",
+                        "start_index": 1327,
+                        "end_index": 3940,
+                        "start_line": 62,
+                        "end_line": 141,
+                        "max_line": 1200,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet initializes the Media class and defines the _css and _js properties, which are used in the __add__ method. Understanding how these properties are initialized and used is necessary for optimizing the __add__ method."
+                },
+                {
+                    "chunk": {
+                        "code": "class Media:",
+                        "filename": "django/forms/widgets.py",
+                        "start_index": 1310,
+                        "end_index": 1322,
+                        "start_line": 61,
+                        "end_line": 61,
+                        "max_line": 1200,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is the declaration of the Media class. While it doesn't contain the code that needs to be changed, it is necessary to look at this to understand the context of the Media class within the widgets.py file."
+                }
+            ]
+        },
+        "solution_task": "- Optimize the `Media.__add__` method in `django/forms/widgets.py` to handle large numbers of Media objects more efficiently.\n- Implement a threshold for direct list addition and switch to a more efficient concatenation method when the threshold is exceeded.\n- Consider using a set or dict to avoid adding duplicate items, which can be faster than checking `if item not in` for large lists.\n\n```python\nclass Media:\n    # ... (existing code)\n\n    def __add__(self, other):\n        combined = Media()\n        # Use set for efficient deduplication\n        combined._css_lists = list(set(self._css_lists + other._css_lists))\n        combined._js_lists = list(set(self._js_lists + other._js_lists))\n        return combined\n```\n\n- If the threshold logic is still desired, you can implement it as follows:\n\n```python\nclass Media:\n    # ... (existing code)\n\n    def __add__(self, other):\n        combined = Media()\n        # Threshold for switching to a more efficient concatenation method\n        threshold = 1000\n        if len(self._css_lists) + len(other._css_lists) > threshold:\n            combined._css_lists = list(set(self._css_lists + other._css_lists))\n        else:\n            combined._css_lists = self._css_lists + other._css_lists\n\n        if len(self._js_lists) + len(other._js_lists) > threshold:\n            combined._js_lists = list(set(self._js_lists + other._js_lists))\n        else:\n            combined._js_lists = self._js_lists + other._js_lists\n\n        return combined\n```\n\n- Ensure that the `Media.merge` method is not contributing to the performance issue. If it is, consider optimizing it as well.",
+        "bouncer_response": {
+            "score": 3,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher. RESPONSES that are tangentially relevant but lack actionable content should receive scores between 1 and 3.",
+            "supporting_evidence": "The RESPONSE suggests optimizing the `Media.__add__` method and implementing a threshold for list addition, which is relevant to the PROMPT's issue. However, the suggestion to use a set or dict for deduplication is not actionable in this context because the PROMPT does not indicate that duplicate items are a concern; the issue is with performance degradation due to the size of the lists. The code provided does not address the specific performance issue described in the PROMPT, which is related to the number of Media objects being added, not the presence of duplicates. Additionally, the RESPONSE does not consider the potential side effects of using sets, such as the loss of order, which could be important for CSS and JS files. The RESPONSE also fails to address the specific sample code and performance measurements provided in the PROMPT, which are crucial for validating any proposed solution.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711727130.847153,
+        "result": "Doesn't seem like we have fully grasped all the specifics of this ticket \ud83d\ude41.                   But we've outlined some ideas that might help you get started:\n\n- Optimize the `Media.__add__` method in `django/forms/widgets.py` to handle large numbers of Media objects more efficiently.\n- Implement a threshold for direct list addition and switch to a more efficient concatenation method when the threshold is exceeded.\n- Consider using a set or dict to avoid adding duplicate items, which can be faster than checking `if item not in` for large lists.\n\n```python\nclass Media:\n    # ... (existing code)\n\n    def __add__(self, other):\n        combined = Media()\n        # Use set for efficient deduplication\n        combined._css_lists = list(set(self._css_lists + other._css_lists))\n        combined._js_lists = list(set(self._js_lists + other._js_lists))\n        return combined\n```\n\n- If the threshold logic is still desired, you can implement it as follows:\n\n```python\nclass Media:\n    # ... (existing code)\n\n    def __add__(self, other):\n        combined = Media()\n        # Threshold for switching to a more efficient concatenation method\n        threshold = 1000\n        if len(self._css_lists) + len(other._css_lists) > threshold:\n            combined._css_lists = list(set(self._css_lists + other._css_lists))\n        else:\n            combined._css_lists = self._css_lists + other._css_lists\n\n        if len(self._js_lists) + len(other._js_lists) > threshold:\n            combined._js_lists = list(set(self._js_lists + other._js_lists))\n        else:\n            combined._js_lists = self._js_lists + other._js_lists\n\n        return combined\n```\n\n- Ensure that the `Media.merge` method is not contributing to the performance issue. If it is, consider optimizing it as well.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [forms](https://github.com/testbed/django__django__3.2/tree//django/forms)- [Lines 143 - 181](https://github.com/testbed/django__django__3.2/blob//django/forms/widgets.py#L143-L181)\n\n This snippet contains the __add__ method of the Media class, which is directly related to the performance issue described. The method's implementation likely needs to be optimized to handle large numbers of Media objects efficiently. \n\n\n   - [Lines 62 - 141](https://github.com/testbed/django__django__3.2/blob//django/forms/widgets.py#L62-L141)\n\n This snippet initializes the Media class and defines the _css and _js properties, which are used in the __add__ method. Understanding how these properties are initialized and used is necessary for optimizing the __add__ method. \n\n\n   - [Lines 61 - 61](https://github.com/testbed/django__django__3.2/blob//django/forms/widgets.py#L61-L61)\n\n This snippet is the declaration of the Media class. While it doesn't contain the code that needs to be changed, it is necessary to look at this to understand the context of the Media class within the widgets.py file."
+    }
+}

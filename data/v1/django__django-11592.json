@@ -1,0 +1,206 @@
+{
+    "id": "django__django-11592",
+    "repo_name": "testbed/django__django__3.0",
+    "task_id": 182024092527906308,
+    "title": "Start passing FileResponse.block_size to wsgi.file_wrapper.",
+    "body": "Description\n\t \n\t\t(last modified by Chris Jerdonek)\n\t \nI noticed that Django's FileResponse class has a block_size attribute which can be customized by subclassing: \u200bhttps://github.com/django/django/blob/415e899dc46c2f8d667ff11d3e54eff759eaded4/django/http/response.py#L393\nbut it's not passed to wsgi.file_wrapper. Only the filelike object is passed:\nresponse = environ['wsgi.file_wrapper'](response.file_to_stream)\n(from: \u200bhttps://github.com/django/django/blob/415e899dc46c2f8d667ff11d3e54eff759eaded4/django/core/handlers/wsgi.py#L144 )\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.0.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `FileResponse.set_headers` method to pass `self.block_size` to `wsgi.file_wrapper` when setting the streaming content.\n- Ensure that `wsgi.file_wrapper` is called with the `block_size` attribute from the `FileResponse` instance.\n- If `wsgi.file_wrapper` does not currently accept a `block_size` parameter, update its definition to accept it and use it accordingly within its implementation.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [http](https://github.com/testbed/django__django__3.0/tree//django/http)- [Lines 34 - 556](https://github.com/testbed/django__django__3.0/blob//django/http/response.py#L34-L556)\n\n This snippet defines the block_size attribute and the _set_streaming_content method in the FileResponse class, which is directly related to the issue of the block_size not being passed to wsgi.file_wrapper. \n\n\n   - [Lines 558 - 610](https://github.com/testbed/django__django__3.0/blob//django/http/response.py#L558-L610)\n\n This snippet contains the set_headers method of the FileResponse class, which might be relevant when considering how the headers are set in relation to the block_size and streaming of the file.\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.0/tree//django/core) \u2192 [handlers](https://github.com/testbed/django__django__3.0/tree//django/core/handlers)- [Lines 1 - 53](https://github.com/testbed/django__django__3.0/blob//django/core/handlers/wsgi.py#L1-L53)\n\n This snippet is from the wsgi.py file where the wsgi.file_wrapper is used without the block_size attribute. It is necessary to modify this snippet to pass the block_size attribute to the wsgi.file_wrapper.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000263,
+        "snippet_processor": 0.03901,
+        "issue_star_creation": 0.01774,
+        "issue_star_solver": 0.07738,
+        "bouncer": 0.02554
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711728338.648557,
+        "relevant_snippets": [
+            {
+                "code": "class FileResponse(StreamingHttpResponse):",
+                "filename": "django/http/response.py",
+                "start_index": 18387,
+                "end_index": 18429,
+                "start_line": 531,
+                "end_line": 531,
+                "max_line": 734,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    A streaming HTTP response class optimized for files.\n    \"\"\"\n\n    block_size = 4096\n\n    def __init__(self, *args, as_attachment=False, filename=\"\", **kwargs):\n        self.as_attachment = as_attachment\n        self.filename = filename\n        self._no_explicit_content_type = (\n            \"content_type\" not in kwargs or kwargs[\"content_type\"] is None\n        )\n        super().__init__(*args, **kwargs)\n\n    def _set_streaming_content(self, value):\n        if not hasattr(value, \"read\"):\n            self.file_to_stream = None\n            return super()._set_streaming_content(value)\n\n        self.file_to_stream = filelike = value\n        if hasattr(filelike, \"close\"):\n            self._resource_closers.append(filelike.close)\n        value = iter(lambda: filelike.read(self.block_size), b\"\")\n        self.set_headers(filelike)\n        super()._set_streaming_content(value)",
+                "filename": "django/http/response.py",
+                "start_index": 18434,
+                "end_index": 19320,
+                "start_line": 34,
+                "end_line": 556,
+                "max_line": 734,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from io import IOBase\n\nfrom django.conf import settings\nfrom django.core import signals\nfrom django.core.handlers import base\nfrom django.http import HttpRequest, QueryDict, parse_cookie\nfrom django.urls import set_script_prefix\nfrom django.utils.encoding import repercent_broken_unicode\nfrom django.utils.functional import cached_property\nfrom django.utils.regex_helper import _lazy_re_compile\n\n_slashes_re = _lazy_re_compile(rb\"/+\")\n\n\nclass LimitedStream(IOBase):\n    \"\"\"\n    Wrap another stream to disallow reading it past a number of bytes.\n\n    Based on the implementation from werkzeug.wsgi.LimitedStream\n    See https://github.com/pallets/werkzeug/blob/dbf78f67/src/werkzeug/wsgi.py#L828\n    \"\"\"\n\n    def __init__(self, stream, limit):\n        self._read = stream.read\n        self._readline = stream.readline\n        self._pos = 0\n        self.limit = limit\n\n    def read(self, size=-1, /):\n        _pos = self._pos\n        limit = self.limit\n        if _pos >= limit:\n            return b\"\"\n        if size == -1 or size is None:\n            size = limit - _pos\n        else:\n            size = min(size, limit - _pos)\n        data = self._read(size)\n        self._pos += len(data)\n        return data\n\n    def readline(self, size=-1, /):\n        _pos = self._pos\n        limit = self.limit\n        if _pos >= limit:\n            return b\"\"\n        if size == -1 or size is None:\n            size = limit - _pos\n        else:\n            size = min(size, limit - _pos)\n        line = self._readline(size)\n        self._pos += len(line)\n        return line",
+                "filename": "django/core/handlers/wsgi.py",
+                "start_index": 0,
+                "end_index": 1563,
+                "start_line": 1,
+                "end_line": 53,
+                "max_line": 207,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "import os\nfrom io import BytesIO, StringIO, UnsupportedOperation\n\nfrom django.core.files.utils import FileProxyMixin\nfrom django.utils.functional import cached_property",
+                "filename": "django/core/files/base.py",
+                "start_index": 0,
+                "end_index": 168,
+                "start_line": 1,
+                "end_line": 5,
+                "max_line": 161,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "class ServerHandler(simple_server.ServerHandler):\n    http_version = \"1.1\"\n\n    def __init__(self, stdin, stdout, stderr, environ, **kwargs):\n        \"\"\"\n        Use a LimitedStream so that unread request data will be ignored at\n        the end of the request. WSGIRequest uses a LimitedStream but it\n        shouldn't discard the data since the upstream servers usually do this.\n        This fix applies only for testserver/runserver.\n        \"\"\"\n        try:\n            content_length = int(environ.get(\"CONTENT_LENGTH\"))\n        except (ValueError, TypeError):\n            content_length = 0\n        super().__init__(\n            LimitedStream(stdin, content_length), stdout, stderr, environ, **kwargs\n        )\n\n    def cleanup_headers(self):\n        super().cleanup_headers()\n        if (\n            self.environ[\"REQUEST_METHOD\"] == \"HEAD\"\n            and \"Content-Length\" in self.headers\n        ):\n            del self.headers[\"Content-Length\"]\n        # HTTP/1.1 requires support for persistent connections. Send 'close' if\n        # the content length is unknown to prevent clients from reusing the\n        # connection.\n        if (\n            self.environ[\"REQUEST_METHOD\"] != \"HEAD\"\n            and \"Content-Length\" not in self.headers\n        ):\n            self.headers[\"Connection\"] = \"close\"\n        # Persistent connections require threading server.\n        elif not isinstance(self.request_handler.server, socketserver.ThreadingMixIn):\n            self.headers[\"Connection\"] = \"close\"\n        # Mark the connection for closing if it's set as such above or if the\n        # application sent the header.\n        if self.headers.get(\"Connection\") == \"close\":\n            self.request_handler.close_connection = True\n\n    def close(self):\n        self.get_stdin().read()\n        super().close()\n\n    def finish_response(self):\n        if self.environ[\"REQUEST_METHOD\"] == \"HEAD\":\n            try:\n                deque(self.result, maxlen=0)  # Consume iterator.\n                # Don't call self.finish_content() as, if the headers have not\n                # been sent and Content-Length isn't set, it'll default to \"0\"\n                # which will prevent omission of the Content-Length header with\n                # HEAD requests as permitted by RFC 9110 Section 9.3.2.\n                # Instead, send the headers, if not sent yet.\n                if not self.headers_sent:\n                    self.send_headers()\n            finally:\n                self.close()\n        else:\n            super().finish_response()",
+                "filename": "django/core/servers/basehttp.py",
+                "start_index": 3688,
+                "end_index": 6224,
+                "start_line": 114,
+                "end_line": 173,
+                "max_line": 281,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "class File(FileProxyMixin):",
+                "filename": "django/core/files/base.py",
+                "start_index": 171,
+                "end_index": 198,
+                "start_line": 8,
+                "end_line": 8,
+                "max_line": 161,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from urllib.parse import urlparse\nfrom urllib.request import url2pathname\n\nfrom asgiref.sync import sync_to_async\n\nfrom django.conf import settings\nfrom django.contrib.staticfiles import utils\nfrom django.contrib.staticfiles.views import serve\nfrom django.core.handlers.asgi import ASGIHandler\nfrom django.core.handlers.exception import response_for_exception\nfrom django.core.handlers.wsgi import WSGIHandler, get_path_info\nfrom django.http import Http404\n\n\nclass StaticFilesHandlerMixin:\n    \"\"\"\n    Common methods used by WSGI and ASGI handlers.\n    \"\"\"\n\n    # May be used to differentiate between handler types (e.g. in a\n    # request_finished signal)\n    handles_files = True\n\n    def load_middleware(self):\n        # Middleware are already loaded for self.application; no need to reload\n        # them for self.\n        pass\n\n    def get_base_url(self):\n        utils.check_settings()\n        return settings.STATIC_URL\n\n    def _should_handle(self, path):\n        \"\"\"\n        Check if the path should be handled. Ignore the path if:\n        * the host is provided as part of the base_url\n        * the request's path isn't under the media path (or equal)\n        \"\"\"\n        return path.startswith(self.base_url[2]) and not self.base_url[1]\n\n    def file_path(self, url):\n        \"\"\"\n        Return the relative path to the media file on disk for the given URL.\n        \"\"\"\n        relative_url = url.removeprefix(self.base_url[2])\n        return url2pathname(relative_url)\n\n    def serve(self, request):\n        \"\"\"Serve the request path.\"\"\"\n        return serve(request, self.file_path(request.path), insecure=True)\n\n    def get_response(self, request):\n        try:\n            return self.serve(request)\n        except Http404 as e:\n            return response_for_exception(request, e)\n\n    async def get_response_async(self, request):\n        try:\n            return await sync_to_async(self.serve, thread_sensitive=False)(request)\n        except Http404 as e:\n            return await sync_to_async(response_for_exception, thread_sensitive=False)(\n                request, e\n            )\n\n\nclass StaticFilesHandler(StaticFilesHandlerMixin, WSGIHandler):\n    \"\"\"\n    WSGI middleware that intercepts calls to the static files directory, as\n    defined by the STATIC_URL setting, and serves those files.\n    \"\"\"\n\n    def __init__(self, application):\n        self.application = application\n        self.base_url = urlparse(self.get_base_url())\n        super().__init__()\n\n    def __call__(self, environ, start_response):\n        if not self._should_handle(get_path_info(environ)):\n            return self.application(environ, start_response)\n        return super().__call__(environ, start_response)",
+                "filename": "django/contrib/staticfiles/handlers.py",
+                "start_index": 0,
+                "end_index": 2710,
+                "start_line": 1,
+                "end_line": 81,
+                "max_line": 115,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "class FileUploadHandler:\n    \"\"\"\n    Base class for streaming upload handlers.\n    \"\"\"\n\n    chunk_size = 64 * 2**10  # : The default chunk size is 64 KB.\n\n    def __init__(self, request=None):\n        self.file_name = None\n        self.content_type = None\n        self.content_length = None\n        self.charset = None\n        self.content_type_extra = None\n        self.request = request\n\n    def handle_raw_input(\n        self, input_data, META, content_length, boundary, encoding=None\n    ):\n        \"\"\"\n        Handle the raw input from the client.\n\n        Parameters:\n\n            :input_data:\n                An object that supports reading via .read().\n            :META:\n                ``request.META``.\n            :content_length:\n                The (integer) value of the Content-Length header from the\n                client.\n            :boundary: The boundary from the Content-Type header. Be sure to\n                prepend two '--'.\n        \"\"\"\n        pass\n\n    def new_file(\n        self,\n        field_name,\n        file_name,\n        content_type,\n        content_length,\n        charset=None,\n        content_type_extra=None,\n    ):\n        \"\"\"\n        Signal that a new file has been started.\n\n        Warning: As with any data from the client, you should not trust\n        content_length (and sometimes won't even get it).\n        \"\"\"\n        self.field_name = field_name\n        self.file_name = file_name\n        self.content_type = content_type\n        self.content_length = content_length\n        self.charset = charset\n        self.content_type_extra = content_type_extra\n\n    def receive_data_chunk(self, raw_data, start):\n        \"\"\"\n        Receive data from the streamed upload parser. ``start`` is the position\n        in the file of the chunk.\n        \"\"\"\n        raise NotImplementedError(\n            \"subclasses of FileUploadHandler must provide a receive_data_chunk() method\"\n        )\n\n    def file_complete(self, file_size):\n        \"\"\"\n        Signal that a file has completed. File size corresponds to the actual\n        size accumulated by all the chunks.\n\n        Subclasses should return a valid ``UploadedFile`` object.\n        \"\"\"\n        raise NotImplementedError(\n            \"subclasses of FileUploadHandler must provide a file_complete() method\"\n        )\n\n    def upload_complete(self):\n        \"\"\"\n        Signal that the upload is complete. Subclasses should perform cleanup\n        that is necessary for this handler.\n        \"\"\"\n        pass\n\n    def upload_interrupted(self):\n        \"\"\"\n        Signal that the upload was interrupted. Subclasses should perform\n        cleanup that is necessary for this handler.\n        \"\"\"\n        pass",
+                "filename": "django/core/files/uploadhandler.py",
+                "start_index": 1610,
+                "end_index": 4308,
+                "start_line": 68,
+                "end_line": 189,
+                "max_line": 251,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "def set_headers(self, filelike):\n        \"\"\"\n        Set some common response headers (Content-Length, Content-Type, and\n        Content-Disposition) based on the `filelike` response content.\n        \"\"\"\n        filename = getattr(filelike, \"name\", \"\")\n        filename = filename if isinstance(filename, str) else \"\"\n        seekable = hasattr(filelike, \"seek\") and (\n            not hasattr(filelike, \"seekable\") or filelike.seekable()\n        )\n        if hasattr(filelike, \"tell\"):\n            if seekable:\n                initial_position = filelike.tell()\n                filelike.seek(0, io.SEEK_END)\n                self.headers[\"Content-Length\"] = filelike.tell() - initial_position\n                filelike.seek(initial_position)\n            elif hasattr(filelike, \"getbuffer\"):\n                self.headers[\"Content-Length\"] = (\n                    filelike.getbuffer().nbytes - filelike.tell()\n                )\n            elif os.path.exists(filename):\n                self.headers[\"Content-Length\"] = (\n                    os.path.getsize(filename) - filelike.tell()\n                )\n        elif seekable:\n            self.headers[\"Content-Length\"] = sum(\n                iter(lambda: len(filelike.read(self.block_size)), 0)\n            )\n            filelike.seek(-int(self.headers[\"Content-Length\"]), io.SEEK_END)\n\n        filename = os.path.basename(self.filename or filename)\n        if self._no_explicit_content_type:\n            if filename:\n                content_type, encoding = mimetypes.guess_type(filename)\n                # Encoding isn't set to prevent browsers from automatically\n                # uncompressing files.\n                content_type = {\n                    \"br\": \"application/x-brotli\",\n                    \"bzip2\": \"application/x-bzip\",\n                    \"compress\": \"application/x-compress\",\n                    \"gzip\": \"application/gzip\",\n                    \"xz\": \"application/x-xz\",\n                }.get(encoding, content_type)\n                self.headers[\"Content-Type\"] = (\n                    content_type or \"application/octet-stream\"\n                )\n            else:\n                self.headers[\"Content-Type\"] = \"application/octet-stream\"\n\n        if content_disposition := content_disposition_header(\n            self.as_attachment, filename\n        ):\n            self.headers[\"Content-Disposition\"] = content_disposition",
+                "filename": "django/http/response.py",
+                "start_index": 19326,
+                "end_index": 21716,
+                "start_line": 558,
+                "end_line": 610,
+                "max_line": 734,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    The descriptor for the file attribute on the model instance. Return a\n    FieldFile when accessed so you can write code like::\n\n        >>> from myapp.models import MyModel\n        >>> instance = MyModel.objects.get(pk=1)\n        >>> instance.file.size\n\n    Assign a file object on assignment so you can do::\n\n        >>> with open('/path/to/hello.world') as f:\n        ...     instance.file = File(f)\n    \"\"\"",
+                "filename": "django/db/models/fields/files.py",
+                "start_index": 4535,
+                "end_index": 4952,
+                "start_line": 152,
+                "end_line": 460,
+                "max_line": 511,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/http/response.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    A streaming HTTP response class optimized for files.\n    \"\"\"\n\n    block_size = 4096\n\n    def __init__(self, *args, as_attachment=False, filename=\"\", **kwargs):\n        self.as_attachment = as_attachment\n        self.filename = filename\n        self._no_explicit_content_type = (\n            \"content_type\" not in kwargs or kwargs[\"content_type\"] is None\n        )\n        super().__init__(*args, **kwargs)\n\n    def _set_streaming_content(self, value):\n        if not hasattr(value, \"read\"):\n            self.file_to_stream = None\n            return super()._set_streaming_content(value)\n\n        self.file_to_stream = filelike = value\n        if hasattr(filelike, \"close\"):\n            self._resource_closers.append(filelike.close)\n        value = iter(lambda: filelike.read(self.block_size), b\"\")\n        self.set_headers(filelike)\n        super()._set_streaming_content(value)",
+                        "filename": "django/http/response.py",
+                        "start_index": 18434,
+                        "end_index": 19320,
+                        "start_line": 34,
+                        "end_line": 556,
+                        "max_line": 734,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the block_size attribute and the _set_streaming_content method in the FileResponse class, which is directly related to the issue of the block_size not being passed to wsgi.file_wrapper."
+                },
+                {
+                    "chunk": {
+                        "code": "def set_headers(self, filelike):\n        \"\"\"\n        Set some common response headers (Content-Length, Content-Type, and\n        Content-Disposition) based on the `filelike` response content.\n        \"\"\"\n        filename = getattr(filelike, \"name\", \"\")\n        filename = filename if isinstance(filename, str) else \"\"\n        seekable = hasattr(filelike, \"seek\") and (\n            not hasattr(filelike, \"seekable\") or filelike.seekable()\n        )\n        if hasattr(filelike, \"tell\"):\n            if seekable:\n                initial_position = filelike.tell()\n                filelike.seek(0, io.SEEK_END)\n                self.headers[\"Content-Length\"] = filelike.tell() - initial_position\n                filelike.seek(initial_position)\n            elif hasattr(filelike, \"getbuffer\"):\n                self.headers[\"Content-Length\"] = (\n                    filelike.getbuffer().nbytes - filelike.tell()\n                )\n            elif os.path.exists(filename):\n                self.headers[\"Content-Length\"] = (\n                    os.path.getsize(filename) - filelike.tell()\n                )\n        elif seekable:\n            self.headers[\"Content-Length\"] = sum(\n                iter(lambda: len(filelike.read(self.block_size)), 0)\n            )\n            filelike.seek(-int(self.headers[\"Content-Length\"]), io.SEEK_END)\n\n        filename = os.path.basename(self.filename or filename)\n        if self._no_explicit_content_type:\n            if filename:\n                content_type, encoding = mimetypes.guess_type(filename)\n                # Encoding isn't set to prevent browsers from automatically\n                # uncompressing files.\n                content_type = {\n                    \"br\": \"application/x-brotli\",\n                    \"bzip2\": \"application/x-bzip\",\n                    \"compress\": \"application/x-compress\",\n                    \"gzip\": \"application/gzip\",\n                    \"xz\": \"application/x-xz\",\n                }.get(encoding, content_type)\n                self.headers[\"Content-Type\"] = (\n                    content_type or \"application/octet-stream\"\n                )\n            else:\n                self.headers[\"Content-Type\"] = \"application/octet-stream\"\n\n        if content_disposition := content_disposition_header(\n            self.as_attachment, filename\n        ):\n            self.headers[\"Content-Disposition\"] = content_disposition",
+                        "filename": "django/http/response.py",
+                        "start_index": 19326,
+                        "end_index": 21716,
+                        "start_line": 558,
+                        "end_line": 610,
+                        "max_line": 734,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the set_headers method of the FileResponse class, which might be relevant when considering how the headers are set in relation to the block_size and streaming of the file."
+                }
+            ],
+            "django/core/handlers/wsgi.py": [
+                {
+                    "chunk": {
+                        "code": "from io import IOBase\n\nfrom django.conf import settings\nfrom django.core import signals\nfrom django.core.handlers import base\nfrom django.http import HttpRequest, QueryDict, parse_cookie\nfrom django.urls import set_script_prefix\nfrom django.utils.encoding import repercent_broken_unicode\nfrom django.utils.functional import cached_property\nfrom django.utils.regex_helper import _lazy_re_compile\n\n_slashes_re = _lazy_re_compile(rb\"/+\")\n\n\nclass LimitedStream(IOBase):\n    \"\"\"\n    Wrap another stream to disallow reading it past a number of bytes.\n\n    Based on the implementation from werkzeug.wsgi.LimitedStream\n    See https://github.com/pallets/werkzeug/blob/dbf78f67/src/werkzeug/wsgi.py#L828\n    \"\"\"\n\n    def __init__(self, stream, limit):\n        self._read = stream.read\n        self._readline = stream.readline\n        self._pos = 0\n        self.limit = limit\n\n    def read(self, size=-1, /):\n        _pos = self._pos\n        limit = self.limit\n        if _pos >= limit:\n            return b\"\"\n        if size == -1 or size is None:\n            size = limit - _pos\n        else:\n            size = min(size, limit - _pos)\n        data = self._read(size)\n        self._pos += len(data)\n        return data\n\n    def readline(self, size=-1, /):\n        _pos = self._pos\n        limit = self.limit\n        if _pos >= limit:\n            return b\"\"\n        if size == -1 or size is None:\n            size = limit - _pos\n        else:\n            size = min(size, limit - _pos)\n        line = self._readline(size)\n        self._pos += len(line)\n        return line",
+                        "filename": "django/core/handlers/wsgi.py",
+                        "start_index": 0,
+                        "end_index": 1563,
+                        "start_line": 1,
+                        "end_line": 53,
+                        "max_line": 207,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is from the wsgi.py file where the wsgi.file_wrapper is used without the block_size attribute. It is necessary to modify this snippet to pass the block_size attribute to the wsgi.file_wrapper."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `FileResponse.set_headers` method to pass `self.block_size` to `wsgi.file_wrapper` when setting the streaming content.\n- Ensure that `wsgi.file_wrapper` is called with the `block_size` attribute from the `FileResponse` instance.\n- If `wsgi.file_wrapper` does not currently accept a `block_size` parameter, update its definition to accept it and use it accordingly within its implementation.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT. It suggests modifying the 'FileResponse.set_headers' method to pass 'self.block_size' to 'wsgi.file_wrapper', which is a direct response to the issue of the block_size attribute not being passed. Additionally, it advises ensuring that 'wsgi.file_wrapper' is called with the 'block_size' attribute from the 'FileResponse' instance and updating the definition of 'wsgi.file_wrapper' if it does not currently accept a 'block_size' parameter. The RESPONSE also provides relevant code snippets to check, which could help in locating the parts of the code that need to be modified. However, the RESPONSE does not provide the exact code changes needed, which would have made it more complete and actionable. Therefore, it scores a 7 as it offers clear guidance but lacks the final step of providing the specific code changes.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711728540.333976,
+        "result": "- Modify the `FileResponse.set_headers` method to pass `self.block_size` to `wsgi.file_wrapper` when setting the streaming content.\n- Ensure that `wsgi.file_wrapper` is called with the `block_size` attribute from the `FileResponse` instance.\n- If `wsgi.file_wrapper` does not currently accept a `block_size` parameter, update its definition to accept it and use it accordingly within its implementation.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [http](https://github.com/testbed/django__django__3.0/tree//django/http)- [Lines 34 - 556](https://github.com/testbed/django__django__3.0/blob//django/http/response.py#L34-L556)\n\n This snippet defines the block_size attribute and the _set_streaming_content method in the FileResponse class, which is directly related to the issue of the block_size not being passed to wsgi.file_wrapper. \n\n\n   - [Lines 558 - 610](https://github.com/testbed/django__django__3.0/blob//django/http/response.py#L558-L610)\n\n This snippet contains the set_headers method of the FileResponse class, which might be relevant when considering how the headers are set in relation to the block_size and streaming of the file.\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.0/tree//django/core) \u2192 [handlers](https://github.com/testbed/django__django__3.0/tree//django/core/handlers)- [Lines 1 - 53](https://github.com/testbed/django__django__3.0/blob//django/core/handlers/wsgi.py#L1-L53)\n\n This snippet is from the wsgi.py file where the wsgi.file_wrapper is used without the block_size attribute. It is necessary to modify this snippet to pass the block_size attribute to the wsgi.file_wrapper."
+    }
+}

@@ -1,0 +1,174 @@
+{
+    "id": "django__django-11283",
+    "repo_name": "testbed/django__django__3.0",
+    "task_id": 8200627819805945492,
+    "title": "Migration auth.0011_update_proxy_permissions fails for models recreated as a proxy.",
+    "body": "Description\n\t \n\t\t(last modified by Mariusz Felisiak)\n\t \nI am trying to update my project to Django 2.2. When I launch python manage.py migrate, I get this error message when migration auth.0011_update_proxy_permissions is applying (full stacktrace is available \u200bhere):\ndjango.db.utils.IntegrityError: duplicate key value violates unique constraint \"idx_18141_auth_permission_content_type_id_01ab375a_uniq\" DETAIL: Key (co.ntent_type_id, codename)=(12, add_agency) already exists.\nIt looks like the migration is trying to re-create already existing entries in the auth_permission table. At first I though it cloud because we recently renamed a model. But after digging and deleting the entries associated with the renamed model from our database in the auth_permission table, the problem still occurs with other proxy models.\nI tried to update directly from 2.0.13 and 2.1.8. The issues appeared each time. I also deleted my venv and recreated it without an effect.\nI searched for a ticket about this on the bug tracker but found nothing. I also posted this on \u200bdjango-users and was asked to report this here.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.0.git",
+    "requested_commit": "",
+    "mayil_response": "- Check if the `auth_permission` table contains any stale permissions that should have been deleted but were not. This can be done by inspecting the table directly in the database or by using Django's `Permission` model in the shell.\n- Ensure that the `update_proxy_model_permissions` function in the `0011_update_proxy_permissions.py` migration file handles the case where permissions for the new content type already exist. This can be done by adding a check before the `.update()` call to see if any `Permission` objects with the new `content_type` and `codename` already exist, and if so, delete them or skip the update for those specific permissions.\n- If the issue persists, consider manually deleting the conflicting permissions from the `auth_permission` table before running the migration. This can be done with a custom migration that deletes these permissions or by using a database management tool.\n- After resolving the issue, re-run the migrations with `python manage.py migrate` to ensure that all migrations are applied correctly.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.0/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.0/tree//django/contrib/auth) \u2192 [migrations](https://github.com/testbed/django__django__3.0/tree//django/contrib/auth/migrations)- [Lines 1 - 76](https://github.com/testbed/django__django__3.0/blob//django/contrib/auth/migrations/0011_update_proxy_permissions.py#L1-L76)\n\n This snippet contains the migration that is failing and causing the IntegrityError. It is directly related to the issue and will likely need to be modified to handle the case where permissions for proxy models already exist.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00019,
+        "snippet_processor": 0.022180000000000002,
+        "issue_star_creation": 0.03171,
+        "issue_star_solver": 0.06452000000000001,
+        "bouncer": 0.01938
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711729323.146187,
+        "relevant_snippets": [
+            {
+                "code": "import sys\n\nfrom django.core.management.color import color_style\nfrom django.db import IntegrityError, migrations, transaction\nfrom django.db.models import Q\n\nWARNING = \"\"\"\n    A problem arose migrating proxy model permissions for {old} to {new}.\n\n      Permission(s) for {new} already existed.\n      Codenames Q: {query}\n\n    Ensure to audit ALL permissions for {old} and {new}.\n\"\"\"\n\n\ndef update_proxy_model_permissions(apps, schema_editor, reverse=False):\n    \"\"\"\n    Update the content_type of proxy model permissions to use the ContentType\n    of the proxy model.\n    \"\"\"\n    style = color_style()\n    Permission = apps.get_model(\"auth\", \"Permission\")\n    ContentType = apps.get_model(\"contenttypes\", \"ContentType\")\n    alias = schema_editor.connection.alias\n    for Model in apps.get_models():\n        opts = Model._meta\n        if not opts.proxy:\n            continue\n        proxy_default_permissions_codenames = [\n            \"%s_%s\" % (action, opts.model_name) for action in opts.default_permissions\n        ]\n        permissions_query = Q(codename__in=proxy_default_permissions_codenames)\n        for codename, name in opts.permissions:\n            permissions_query |= Q(codename=codename, name=name)\n        content_type_manager = ContentType.objects.db_manager(alias)\n        concrete_content_type = content_type_manager.get_for_model(\n            Model, for_concrete_model=True\n        )\n        proxy_content_type = content_type_manager.get_for_model(\n            Model, for_concrete_model=False\n        )\n        old_content_type = proxy_content_type if reverse else concrete_content_type\n        new_content_type = concrete_content_type if reverse else proxy_content_type\n        try:\n            with transaction.atomic(using=alias):\n                Permission.objects.using(alias).filter(\n                    permissions_query,\n                    content_type=old_content_type,\n                ).update(content_type=new_content_type)\n        except IntegrityError:\n            old = \"{}_{}\".format(old_content_type.app_label, old_content_type.model)\n            new = \"{}_{}\".format(new_content_type.app_label, new_content_type.model)\n            sys.stdout.write(\n                style.WARNING(WARNING.format(old=old, new=new, query=permissions_query))\n            )\n\n\ndef revert_proxy_model_permissions(apps, schema_editor):\n    \"\"\"\n    Update the content_type of proxy model permissions to use the ContentType\n    of the concrete model.\n    \"\"\"\n    update_proxy_model_permissions(apps, schema_editor, reverse=True)\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0010_alter_group_name_max_length\"),\n        (\"contenttypes\", \"0002_remove_content_type_name\"),\n    ]\n    operations = [\n        migrations.RunPython(\n            update_proxy_model_permissions, revert_proxy_model_permissions\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0011_update_proxy_permissions.py",
+                "start_index": 0,
+                "end_index": 2859,
+                "start_line": 1,
+                "end_line": 76,
+                "max_line": 76,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "[\n        migrations.CreateModel(\n            name=\"Permission\",\n            fields=[\n                (\n                    \"id\",\n                    models.AutoField(\n                        verbose_name=\"ID\",\n                        serialize=False,\n                        auto_created=True,\n                        primary_key=True,\n                    ),\n                ),\n                (\"name\", models.CharField(max_length=50, verbose_name=\"name\")),\n                (\n                    \"content_type\",\n                    models.ForeignKey(\n                        to=\"contenttypes.ContentType\",\n                        on_delete=models.CASCADE,\n                        verbose_name=\"content type\",\n                    ),\n                ),\n                (\"codename\", models.CharField(max_length=100, verbose_name=\"codename\")),\n            ],\n            options={\n                \"ordering\": [\n                    \"content_type__app_label\",\n                    \"content_type__model\",\n                    \"codename\",\n                ],\n                \"unique_together\": {(\"content_type\", \"codename\")},\n                \"verbose_name\": \"permission\",\n                \"verbose_name_plural\": \"permissions\",\n            },\n            managers=[\n                (\"objects\", django.contrib.auth.models.PermissionManager()),\n            ],\n        ),\n        migrations.CreateModel(\n            name=\"Group\",\n            fields=[\n                (\n                    \"id\",\n                    models.AutoField(\n                        verbose_name=\"ID\",\n                        serialize=False,\n                        auto_created=True,\n                        primary_key=True,\n                    ),\n                ),\n                (\n                    \"name\",\n                    models.CharField(unique=True, max_length=80, verbose_name=\"name\"),\n                ),\n                (\n                    \"permissions\",\n                    models.ManyToManyField(\n                        to=\"auth.Permission\", verbose_name=\"permissions\", blank=True\n                    ),\n                ),\n            ],\n            options={\n                \"verbose_name\": \"group\",\n                \"verbose_name_plural\": \"groups\",\n            },\n            managers=[\n                (\"objects\", django.contrib.auth.models.GroupManager()),\n            ],\n        ),",
+                "filename": "django/contrib/auth/migrations/0001_initial.py",
+                "start_index": 277,
+                "end_index": 2644,
+                "start_line": 8,
+                "end_line": 203,
+                "max_line": 204,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "import django.contrib.contenttypes.models\nfrom django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = []\n\n    operations = [\n        migrations.CreateModel(\n            name=\"ContentType\",\n            fields=[\n                (\n                    \"id\",\n                    models.AutoField(\n                        verbose_name=\"ID\",\n                        serialize=False,\n                        auto_created=True,\n                        primary_key=True,\n                    ),\n                ),\n                (\"name\", models.CharField(max_length=100)),\n                (\"app_label\", models.CharField(max_length=100)),\n                (\n                    \"model\",\n                    models.CharField(\n                        max_length=100, verbose_name=\"python model class name\"\n                    ),\n                ),\n            ],\n            options={\n                \"ordering\": (\"name\",),\n                \"db_table\": \"django_content_type\",\n                \"verbose_name\": \"content type\",\n                \"verbose_name_plural\": \"content types\",\n            },\n            bases=(models.Model,),\n            managers=[\n                (\"objects\", django.contrib.contenttypes.models.ContentTypeManager()),\n            ],\n        ),\n        migrations.AlterUniqueTogether(\n            name=\"contenttype\",\n            unique_together={(\"app_label\", \"model\")},\n        ),\n    ]",
+                "filename": "django/contrib/contenttypes/migrations/0001_initial.py",
+                "start_index": 0,
+                "end_index": 1433,
+                "start_line": 1,
+                "end_line": 45,
+                "max_line": 45,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0011_update_proxy_permissions\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"user\",\n            name=\"first_name\",\n            field=models.CharField(\n                blank=True, max_length=150, verbose_name=\"first name\"\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0012_alter_user_first_name_max_length.py",
+                "start_index": 0,
+                "end_index": 410,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 17,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"permission\",\n            name=\"name\",\n            field=models.CharField(max_length=255, verbose_name=\"name\"),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0002_alter_permission_name_max_length.py",
+                "start_index": 0,
+                "end_index": 345,
+                "start_line": 1,
+                "end_line": 15,
+                "max_line": 15,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"sites\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.CreateModel(\n            name=\"Redirect\",\n            fields=[\n                (\n                    \"id\",\n                    models.AutoField(\n                        verbose_name=\"ID\",\n                        serialize=False,\n                        auto_created=True,\n                        primary_key=True,\n                    ),\n                ),\n                (\n                    \"site\",\n                    models.ForeignKey(\n                        to=\"sites.Site\",\n                        on_delete=models.CASCADE,\n                        verbose_name=\"site\",\n                    ),\n                ),\n                (\n                    \"old_path\",\n                    models.CharField(\n                        help_text=(\n                            \"This should be an absolute path, excluding the domain \"\n                            \"name. Example: \u201c/events/search/\u201d.\"\n                        ),\n                        max_length=200,\n                        verbose_name=\"redirect from\",\n                        db_index=True,\n                    ),\n                ),\n                (\n                    \"new_path\",\n                    models.CharField(\n                        help_text=(\n                            \"This can be either an absolute path (as above) or a full \"\n                            \"URL starting with \u201chttp://\u201d.\"\n                        ),\n                        max_length=200,\n                        verbose_name=\"redirect to\",\n                        blank=True,\n                    ),\n                ),\n            ],\n            options={\n                \"ordering\": [\"old_path\"],\n                \"unique_together\": {(\"site\", \"old_path\")},\n                \"db_table\": \"django_redirect\",\n                \"verbose_name\": \"redirect\",\n                \"verbose_name_plural\": \"redirects\",\n            },\n            bases=(models.Model,),\n        ),\n    ]",
+                "filename": "django/contrib/redirects/migrations/0001_initial.py",
+                "start_index": 0,
+                "end_index": 2092,
+                "start_line": 1,
+                "end_line": 64,
+                "max_line": 64,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.contrib.auth import validators\nfrom django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0007_alter_validators_add_error_messages\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"user\",\n            name=\"username\",\n            field=models.CharField(\n                error_messages={\"unique\": \"A user with that username already exists.\"},\n                help_text=(\n                    \"Required. 150 characters or fewer. Letters, digits and @/./+/-/_ \"\n                    \"only.\"\n                ),\n                max_length=150,\n                unique=True,\n                validators=[validators.UnicodeUsernameValidator()],\n                verbose_name=\"username\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0008_alter_user_username_max_length.py",
+                "start_index": 0,
+                "end_index": 813,
+                "start_line": 1,
+                "end_line": 26,
+                "max_line": 26,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.contrib.auth import validators\nfrom django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0006_require_contenttypes_0002\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"user\",\n            name=\"username\",\n            field=models.CharField(\n                error_messages={\"unique\": \"A user with that username already exists.\"},\n                help_text=(\n                    \"Required. 30 characters or fewer. Letters, digits and @/./+/-/_ \"\n                    \"only.\"\n                ),\n                max_length=30,\n                unique=True,\n                validators=[validators.UnicodeUsernameValidator()],\n                verbose_name=\"username\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0007_alter_validators_add_error_messages.py",
+                "start_index": 0,
+                "end_index": 801,
+                "start_line": 1,
+                "end_line": 26,
+                "max_line": 26,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"redirects\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"redirect\",\n            name=\"new_path\",\n            field=models.CharField(\n                blank=True,\n                help_text=(\n                    \"This can be either an absolute path (as above) or a full \"\n                    \"URL starting with a scheme such as \u201chttps://\u201d.\"\n                ),\n                max_length=200,\n                verbose_name=\"redirect to\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/redirects/migrations/0002_alter_redirect_new_path_help_text.py",
+                "start_index": 0,
+                "end_index": 630,
+                "start_line": 1,
+                "end_line": 23,
+                "max_line": 23,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\ndef add_legacy_name(apps, schema_editor):\n    alias = schema_editor.connection.alias\n    ContentType = apps.get_model(\"contenttypes\", \"ContentType\")\n    for ct in ContentType.objects.using(alias):\n        try:\n            ct.name = apps.get_model(ct.app_label, ct.model)._meta.object_name\n        except LookupError:\n            ct.name = ct.model\n        ct.save()\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"contenttypes\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.AlterModelOptions(\n            name=\"contenttype\",\n            options={\n                \"verbose_name\": \"content type\",\n                \"verbose_name_plural\": \"content types\",\n            },\n        ),\n        migrations.AlterField(\n            model_name=\"contenttype\",\n            name=\"name\",\n            field=models.CharField(max_length=100, null=True),\n        ),\n        migrations.RunPython(\n            migrations.RunPython.noop,\n            add_legacy_name,\n            hints={\"model_name\": \"contenttype\"},\n        ),\n        migrations.RemoveField(\n            model_name=\"contenttype\",\n            name=\"name\",\n        ),\n    ]",
+                "filename": "django/contrib/contenttypes/migrations/0002_remove_content_type_name.py",
+                "start_index": 0,
+                "end_index": 1198,
+                "start_line": 1,
+                "end_line": 42,
+                "max_line": 42,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/contrib/auth/migrations/0011_update_proxy_permissions.py": [
+                {
+                    "chunk": {
+                        "code": "import sys\n\nfrom django.core.management.color import color_style\nfrom django.db import IntegrityError, migrations, transaction\nfrom django.db.models import Q\n\nWARNING = \"\"\"\n    A problem arose migrating proxy model permissions for {old} to {new}.\n\n      Permission(s) for {new} already existed.\n      Codenames Q: {query}\n\n    Ensure to audit ALL permissions for {old} and {new}.\n\"\"\"\n\n\ndef update_proxy_model_permissions(apps, schema_editor, reverse=False):\n    \"\"\"\n    Update the content_type of proxy model permissions to use the ContentType\n    of the proxy model.\n    \"\"\"\n    style = color_style()\n    Permission = apps.get_model(\"auth\", \"Permission\")\n    ContentType = apps.get_model(\"contenttypes\", \"ContentType\")\n    alias = schema_editor.connection.alias\n    for Model in apps.get_models():\n        opts = Model._meta\n        if not opts.proxy:\n            continue\n        proxy_default_permissions_codenames = [\n            \"%s_%s\" % (action, opts.model_name) for action in opts.default_permissions\n        ]\n        permissions_query = Q(codename__in=proxy_default_permissions_codenames)\n        for codename, name in opts.permissions:\n            permissions_query |= Q(codename=codename, name=name)\n        content_type_manager = ContentType.objects.db_manager(alias)\n        concrete_content_type = content_type_manager.get_for_model(\n            Model, for_concrete_model=True\n        )\n        proxy_content_type = content_type_manager.get_for_model(\n            Model, for_concrete_model=False\n        )\n        old_content_type = proxy_content_type if reverse else concrete_content_type\n        new_content_type = concrete_content_type if reverse else proxy_content_type\n        try:\n            with transaction.atomic(using=alias):\n                Permission.objects.using(alias).filter(\n                    permissions_query,\n                    content_type=old_content_type,\n                ).update(content_type=new_content_type)\n        except IntegrityError:\n            old = \"{}_{}\".format(old_content_type.app_label, old_content_type.model)\n            new = \"{}_{}\".format(new_content_type.app_label, new_content_type.model)\n            sys.stdout.write(\n                style.WARNING(WARNING.format(old=old, new=new, query=permissions_query))\n            )\n\n\ndef revert_proxy_model_permissions(apps, schema_editor):\n    \"\"\"\n    Update the content_type of proxy model permissions to use the ContentType\n    of the concrete model.\n    \"\"\"\n    update_proxy_model_permissions(apps, schema_editor, reverse=True)\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0010_alter_group_name_max_length\"),\n        (\"contenttypes\", \"0002_remove_content_type_name\"),\n    ]\n    operations = [\n        migrations.RunPython(\n            update_proxy_model_permissions, revert_proxy_model_permissions\n        ),\n    ]",
+                        "filename": "django/contrib/auth/migrations/0011_update_proxy_permissions.py",
+                        "start_index": 0,
+                        "end_index": 2859,
+                        "start_line": 1,
+                        "end_line": 76,
+                        "max_line": 76,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the migration that is failing and causing the IntegrityError. It is directly related to the issue and will likely need to be modified to handle the case where permissions for proxy models already exist."
+                }
+            ]
+        },
+        "solution_task": "- Check if the `auth_permission` table contains any stale permissions that should have been deleted but were not. This can be done by inspecting the table directly in the database or by using Django's `Permission` model in the shell.\n- Ensure that the `update_proxy_model_permissions` function in the `0011_update_proxy_permissions.py` migration file handles the case where permissions for the new content type already exist. This can be done by adding a check before the `.update()` call to see if any `Permission` objects with the new `content_type` and `codename` already exist, and if so, delete them or skip the update for those specific permissions.\n- If the issue persists, consider manually deleting the conflicting permissions from the `auth_permission` table before running the migration. This can be done with a custom migration that deletes these permissions or by using a database management tool.\n- After resolving the issue, re-run the migrations with `python manage.py migrate` to ensure that all migrations are applied correctly.",
+        "bouncer_response": {
+            "score": 8,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a series of actionable steps that are directly related to the error encountered during the Django migration. It suggests checking for stale permissions in the `auth_permission` table, modifying the `update_proxy_model_permissions` function to handle existing permissions, and manually deleting conflicting permissions if necessary. Additionally, it provides a link to the relevant code snippet, which is useful for understanding the context of the migration file that may need to be modified. The RESPONSE does not address all aspects of the PROMPT, such as the fact that the user already tried deleting entries associated with the renamed model, which is why it does not score a 10.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711729522.1425889,
+        "result": "- Check if the `auth_permission` table contains any stale permissions that should have been deleted but were not. This can be done by inspecting the table directly in the database or by using Django's `Permission` model in the shell.\n- Ensure that the `update_proxy_model_permissions` function in the `0011_update_proxy_permissions.py` migration file handles the case where permissions for the new content type already exist. This can be done by adding a check before the `.update()` call to see if any `Permission` objects with the new `content_type` and `codename` already exist, and if so, delete them or skip the update for those specific permissions.\n- If the issue persists, consider manually deleting the conflicting permissions from the `auth_permission` table before running the migration. This can be done with a custom migration that deletes these permissions or by using a database management tool.\n- After resolving the issue, re-run the migrations with `python manage.py migrate` to ensure that all migrations are applied correctly.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.0/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.0/tree//django/contrib/auth) \u2192 [migrations](https://github.com/testbed/django__django__3.0/tree//django/contrib/auth/migrations)- [Lines 1 - 76](https://github.com/testbed/django__django__3.0/blob//django/contrib/auth/migrations/0011_update_proxy_permissions.py#L1-L76)\n\n This snippet contains the migration that is failing and causing the IntegrityError. It is directly related to the issue and will likely need to be modified to handle the case where permissions for proxy models already exist."
+    }
+}

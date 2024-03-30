@@ -1,0 +1,208 @@
+{
+    "id": "django__django-14645",
+    "repo_name": "testbed/django__django__4.0",
+    "task_id": 7267545642464626373,
+    "title": "decimal.InvalidOperation error on DecimalField form field",
+    "body": "Description\n\t\nI have a form with DecimalField and max_value argument:\nclass OrderForm(forms.ModelForm):\n\tsum = DecimalField(max_value=12)\n\tclass Meta:\n\t\tmodel = Order\n\t\tfields = ['sum']\n# model\nclass Order(models.Model):\n\tsum = models.DecimalField(\n\t\t'Sum',\n\t\tmax_digits=18,\n\t\tdecimal_places=2,\n\t\tdefault=0\n\t)\nIf I pass \"NaN\" value to this form it will fail with decimal.InvalidOperation error.\n\u200bhttps://github.com/django/django/pull/14645\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.0.git",
+    "requested_commit": "",
+    "mayil_response": "- To address the `decimal.InvalidOperation` error when passing \"NaN\" to the `OrderForm`, modify the `to_python` method in the `DecimalField` class within `django/forms/fields.py` to handle \"NaN\" values appropriately.\n- Add a check for \"NaN\" before attempting to convert the value to a `Decimal` instance:\n\n```python\nfrom decimal import Decimal, InvalidOperation\n\nclass DecimalField(IntegerField):\n    # ... [existing code] ...\n\n    def to_python(self, value):\n        if value in self.empty_values:\n            return None\n        if self.localize:\n            value = formats.sanitize_separators(value)\n        try:\n            if str(value).lower() == 'nan':\n                raise ValueError(\"NaN value is not allowed.\")\n            value = Decimal(str(value))\n        except (DecimalException, ValueError):\n            raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n        return value\n\n    # ... [existing code] ...\n```\n\n- Ensure that the `validate` method in the `DecimalField` class already handles non-finite values by raising a `ValidationError`, which it does in the provided snippet.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [forms](https://github.com/testbed/django__django__4.0/tree//django/forms)- [Lines 391 - 467](https://github.com/testbed/django__django__4.0/blob//django/forms/fields.py#L391-L467)\n\n This snippet contains the DecimalField class definition in the forms module, which is relevant to the issue as it handles the conversion and validation of decimal input, including the handling of 'NaN' values.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [core](https://github.com/testbed/django__django__4.0/tree//django/core)- [Lines 475 - 637](https://github.com/testbed/django__django__4.0/blob//django/core/validators.py#L475-L637)\n\n This snippet contains the DecimalValidator class which is used by the DecimalField for validating the number of digits and decimal places. It may need to be reviewed to ensure proper handling of 'NaN' values.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__4.0/tree//django/db/models) \u2192 [fields](https://github.com/testbed/django__django__4.0/tree//django/db/models/fields)- [Lines 162 - 2788](https://github.com/testbed/django__django__4.0/blob//django/db/models/fields/__init__.py#L162-L2788)\n\n This snippet from the models module defines the DecimalField at the model level, which is relevant for understanding how the field is defined and how it might interact with the form field.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00026399999999999997,
+        "snippet_processor": 0.044789999999999996,
+        "issue_star_creation": 0.01797,
+        "issue_star_solver": 0.06754,
+        "bouncer": 0.027520000000000003
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711721729.2848582,
+        "relevant_snippets": [
+            {
+                "code": "class DecimalField(IntegerField):\n    default_error_messages = {\n        \"invalid\": _(\"Enter a number.\"),\n    }\n\n    def __init__(\n        self,\n        *,\n        max_value=None,\n        min_value=None,\n        max_digits=None,\n        decimal_places=None,\n        **kwargs,\n    ):\n        self.max_digits, self.decimal_places = max_digits, decimal_places\n        super().__init__(max_value=max_value, min_value=min_value, **kwargs)\n        self.validators.append(validators.DecimalValidator(max_digits, decimal_places))\n\n    def to_python(self, value):\n        \"\"\"\n        Validate that the input is a decimal number. Return a Decimal\n        instance or None for empty values. Ensure that there are no more\n        than max_digits in the number and no more than decimal_places digits\n        after the decimal point.\n        \"\"\"\n        if value in self.empty_values:\n            return None\n        if self.localize:\n            value = formats.sanitize_separators(value)\n        try:\n            value = Decimal(str(value))\n        except DecimalException:\n            raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n        return value\n\n    def validate(self, value):\n        super().validate(value)\n        if value in self.empty_values:\n            return\n        if not value.is_finite():\n            raise ValidationError(\n                self.error_messages[\"invalid\"],\n                code=\"invalid\",\n                params={\"value\": value},\n            )\n\n    def widget_attrs(self, widget):\n        attrs = super().widget_attrs(widget)\n        if isinstance(widget, NumberInput) and \"step\" not in widget.attrs:\n            if self.decimal_places is not None:\n                # Use exponential notation for small values since they might\n                # be parsed as 0 otherwise. ref #20765\n                step = str(Decimal(1).scaleb(-self.decimal_places)).lower()\n            else:\n                step = \"any\"\n            attrs.setdefault(\"step\", step)\n        return attrs\n\n\nclass BaseTemporalField(Field):\n    def __init__(self, *, input_formats=None, **kwargs):\n        super().__init__(**kwargs)\n        if input_formats is not None:\n            self.input_formats = input_formats\n\n    def to_python(self, value):\n        value = value.strip()\n        # Try to strptime against each input format.\n        for format in self.input_formats:\n            try:\n                return self.strptime(value, format)\n            except (ValueError, TypeError):\n                continue\n        raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n\n    def strptime(self, value, format):\n        raise NotImplementedError(\"Subclasses must define this method.\")",
+                "filename": "django/forms/fields.py",
+                "start_index": 13474,
+                "end_index": 16186,
+                "start_line": 391,
+                "end_line": 467,
+                "max_line": 1412,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "False\n    default_error_messages = {\n        \"invalid\": _(\"\u201c%(value)s\u201d value must be a decimal number.\"),\n    }\n    description = _(\"Decimal number\")\n\n    def __init__(\n        self,\n        verbose_name=None,\n        name=None,\n        max_digits=None,\n        decimal_places=None,\n        **kwargs,\n    ):\n        self.max_digits, self.decimal_places = max_digits, decimal_places\n        super().__init__(verbose_name, name, **kwargs)\n\n    def check(self, **kwargs):\n        errors = super().check(**kwargs)\n\n        digits_errors = [\n            *self._check_decimal_places(),\n            *self._check_max_digits(),\n        ]\n        if not digits_errors:\n            errors.extend(self._check_decimal_places_and_max_digits(**kwargs))\n        else:\n            errors.extend(digits_errors)\n        return errors\n\n    def _check_decimal_places(self):\n        try:\n            decimal_places = int(self.decimal_places)\n            if decimal_places < 0:\n                raise ValueError()\n        except TypeError:\n            return [\n                checks.Error(\n                    \"DecimalFields must define a 'decimal_places' attribute.\",\n                    obj=self,\n                    id=\"fields.E130\",\n                )\n            ]\n        except ValueError:\n            return [\n                checks.Error(\n                    \"'decimal_places' must be a non-negative integer.\",\n                    obj=self,\n                    id=\"fields.E131\",\n                )\n            ]\n        else:\n            return []\n\n    def _check_max_digits(self):\n        try:\n            max_digits = int(self.max_digits)\n            if max_digits <= 0:\n                raise ValueError()\n        except TypeError:\n            return [\n                checks.Error(\n                    \"DecimalFields must define a 'max_digits' attribute.\",\n                    obj=self,\n                    id=\"fields.E132\",\n                )\n            ]\n        except ValueError:\n            return [\n                checks.Error(\n                    \"'max_digits' must be a positive integer.\",\n                    obj=self,\n                    id=\"fields.E133\",\n                )\n            ]\n        else:\n            return []\n\n    def _check_decimal_places_and_max_digits(self, **kwargs):\n        if int(self.decimal_places) > int(self.max_digits):\n            return [\n                checks.Error(\n                    \"'max_digits' must be greater or equal to 'decimal_places'.\",\n                    obj=self,\n                    id=\"fields.E134\",\n                )\n            ]\n        return []\n\n    @cached_property\n    def validators(self):\n        return super().validators + [\n            validators.DecimalValidator(self.max_digits, self.decimal_places)\n        ]\n\n    @cached_property\n    def context(self):\n        return decimal.Context(prec=self.max_digits)\n\n    def deconstruct(self):",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 60565,
+                "end_index": 63460,
+                "start_line": 162,
+                "end_line": 2788,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "from decimal import Decimal\n\nfrom django.contrib.gis.db.models.fields import BaseSpatialField, GeometryField\nfrom django.contrib.gis.db.models.sql import AreaField, DistanceField\nfrom django.contrib.gis.geos import GEOSGeometry\nfrom django.core.exceptions import FieldError\nfrom django.db import NotSupportedError\nfrom django.db.models import (\n    BinaryField,\n    BooleanField,\n    FloatField,\n    Func,\n    IntegerField,\n    TextField,\n    Transform,\n    Value,\n)\nfrom django.db.models.functions import Cast\nfrom django.utils.functional import cached_property\n\nNUMERIC_TYPES = (int, float, Decimal)",
+                "filename": "django/contrib/gis/db/models/functions.py",
+                "start_index": 0,
+                "end_index": 601,
+                "start_line": 1,
+                "end_line": 21,
+                "max_line": 569,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "from decimal import Decimal\n\nfrom django.conf import settings\nfrom django.utils.safestring import mark_safe",
+                "filename": "django/utils/numberformat.py",
+                "start_index": 0,
+                "end_index": 107,
+                "start_line": 1,
+                "end_line": 4,
+                "max_line": 105,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "value is None:\n            return value\n        try:\n            return int(value)\n        except (TypeError, ValueError):\n            raise exceptions.ValidationError(\n                self.error_messages[\"invalid\"],\n                code=\"invalid\",\n                params={\"value\": value},\n            )\n\n    def formfield(self, **kwargs):\n        return super().formfield(\n            **{\n                \"form_class\": forms.IntegerField,\n                **kwargs,\n            }\n        )\n\n\nclass BigIntegerField(IntegerField):",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 74316,
+                "end_index": 74844,
+                "start_line": 1177,
+                "end_line": 2144,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "f, value):\n        value = super().get_prep_value(value)\n        value = self.to_python(value)\n        if value is not None and settings.USE_TZ and timezone.is_naive(value):\n            # For backwards compatibility, interpret naive datetimes in local\n            # time. This won't work during DST change, but we can't do much\n            # about it, so we let the exceptions percolate up the call stack.\n            try:\n                name = \"%s.%s\" % (self.model.__name__, self.name)\n            except AttributeError:\n                name = \"(unbound)\"\n            warnings.warn(\n                \"DateTimeField %s received a naive datetime (%s)\"\n                \" while time zone support is active.\" % (name, value),\n                RuntimeWarning,\n            )\n            default_timezone = timezone.get_default_timezone()\n            value = timezone.make_aware(value, default_timezone)\n        return value\n\n    def get_db_prep_value(self, value, connection, prepared=False):\n        # Casts datetimes into the format expected by the backend\n        if not prepared:\n            value = self.get_prep_value(value)\n        return connection.ops.adapt_datetimefield_value(value)\n\n    def value_to_string(self, obj):\n        val = self.value_from_object(obj)\n        return \"\" if val is None else val.isoformat()\n\n    def formfield(self, **kwargs):\n        return super().formfield(\n            **{\n                \"form_class\": forms.DateTimeField,\n                **kwargs,\n            }\n        )\n\n\nclass DecimalField(Field)",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 59000,
+                "end_index": 60535,
+                "start_line": 745,
+                "end_line": 1680,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "Validate that the input does not exceed the maximum number of digits\n    expected, otherwise raise ValidationError.\n    \"\"\"\n\n    messages = {\n        \"invalid\": _(\"Enter a number.\"),\n        \"max_digits\": ngettext_lazy(\n            \"Ensure that there are no more than %(max)s digit in total.\",\n            \"Ensure that there are no more than %(max)s digits in total.\",\n            \"max\",\n        ),\n        \"max_decimal_places\": ngettext_lazy(\n            \"Ensure that there are no more than %(max)s decimal place.\",\n            \"Ensure that there are no more than %(max)s decimal places.\",\n            \"max\",\n        ),\n        \"max_whole_digits\": ngettext_lazy(\n            \"Ensure that there are no more than %(max)s digit before the decimal \"\n            \"point.\",\n            \"Ensure that there are no more than %(max)s digits before the decimal \"\n            \"point.\",\n            \"max\",\n        ),\n    }\n\n    def __init__(self, max_digits, decimal_places):\n        self.max_digits = max_digits\n        self.decimal_places = decimal_places\n\n    de",
+                "filename": "django/core/validators.py",
+                "start_index": 15655,
+                "end_index": 16708,
+                "start_line": 475,
+                "end_line": 637,
+                "max_line": 642,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "class IntegerField(Field):\n    widget = NumberInput\n    default_error_messages = {\n        \"invalid\": _(\"Enter a whole number.\"),\n    }\n    re_decimal = _lazy_re_compile(r\"\\.0*\\s*$\")\n\n    def __init__(self, *, max_value=None, min_value=None, step_size=None, **kwargs):\n        self.max_value, self.min_value, self.step_size = max_value, min_value, step_size\n        if kwargs.get(\"localize\") and self.widget == NumberInput:\n            # Localized number input is not well supported on most browsers\n            kwargs.setdefault(\"widget\", super().widget)\n        super().__init__(**kwargs)\n\n        if max_value is not None:\n            self.validators.append(validators.MaxValueValidator(max_value))\n        if min_value is not None:\n            self.validators.append(validators.MinValueValidator(min_value))\n        if step_size is not None:\n            self.validators.append(\n                validators.StepValueValidator(step_size, offset=min_value)\n            )\n\n    def to_python(self, value):\n        \"\"\"\n        Validate that int() can be called on the input. Return the result\n        of int() or None for empty values.\n        \"\"\"\n        value = super().to_python(value)\n        if value in self.empty_values:\n            return None\n        if self.localize:\n            value = formats.sanitize_separators(value)\n        # Strip trailing decimal and zeros.\n        try:\n            value = int(self.re_decimal.sub(\"\", str(value)))\n        except (ValueError, TypeError):\n            raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n        return value\n\n    def widget_attrs(self, widget):\n        attrs = super().widget_attrs(widget)\n        if isinstance(widget, NumberInput):\n            if self.min_value is not None:\n                attrs[\"min\"] = self.min_value\n            if self.max_value is not None:\n                attrs[\"max\"] = self.max_value\n            if self.step_size is not None:\n                attrs[\"step\"] = self.step_size\n        return attrs",
+                "filename": "django/forms/fields.py",
+                "start_index": 10189,
+                "end_index": 12194,
+                "start_line": 300,
+                "end_line": 753,
+                "max_line": 1412,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "class FloatField(IntegerField):\n    default_error_messages = {\n        \"invalid\": _(\"Enter a number.\"),\n    }\n\n    def to_python(self, value):\n        \"\"\"\n        Validate that float() can be called on the input. Return the result\n        of float() or None for empty values.\n        \"\"\"\n        value = super(IntegerField, self).to_python(value)\n        if value in self.empty_values:\n            return None\n        if self.localize:\n            value = formats.sanitize_separators(value)\n        try:\n            value = float(value)\n        except (ValueError, TypeError):\n            raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n        return value\n\n    def validate(self, value):\n        super().validate(value)\n        if value in self.empty_values:\n            return\n        if not math.isfinite(value):\n            raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n\n    def widget_attrs(self, widget):\n        attrs = super().widget_attrs(widget)\n        if isinstance(widget, NumberInput) and \"step\" not in widget.attrs:\n            if self.step_size is not None:\n                step = str(self.step_size)\n            else:\n                step = \"any\"\n            attrs.setdefault(\"step\", step)\n        return attrs",
+                "filename": "django/forms/fields.py",
+                "start_index": 12197,
+                "end_index": 13471,
+                "start_line": 352,
+                "end_line": 753,
+                "max_line": 1412,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            },
+            {
+                "code": "y_strings_allowed = False\n    default_error_messages = {\n        \"invalid\": _(\"\u201c%(value)s\u201d value must be a float.\"),\n    }\n    description = _(\"Floating point number\")\n\n    def get_prep_value(self, value):\n        value = super().get_prep_value(value)\n        if value is None:\n            return None\n        try:\n            return float(value)\n        except (TypeError, ValueError) as e:\n            raise e.__class__(\n                \"Field '%s' expected a number but got %r.\" % (self.name, value),\n            ) from e\n\n    def get_internal_type(self):\n        return \"FloatField\"\n\n    def to_python(self, value):\n        if value is None:\n            return value\n        try:\n            return float(value)\n        except (TypeError, ValueError):\n            raise exceptions.ValidationError(\n                self.error_messages[\"invalid\"],\n                code=\"invalid\",\n                params={\"value\": value},\n            )\n\n    def formfield(self, **kwargs):\n        return super().formfield(\n            **{\n                \"form_class\": forms.FloatField,\n                **kwargs,\n            }\n        )\n\n\nclass IntegerField(Field):\n    empty_",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 70394,
+                "end_index": 71554,
+                "start_line": 1149,
+                "end_line": 2713,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/forms/fields.py": [
+                {
+                    "chunk": {
+                        "code": "class DecimalField(IntegerField):\n    default_error_messages = {\n        \"invalid\": _(\"Enter a number.\"),\n    }\n\n    def __init__(\n        self,\n        *,\n        max_value=None,\n        min_value=None,\n        max_digits=None,\n        decimal_places=None,\n        **kwargs,\n    ):\n        self.max_digits, self.decimal_places = max_digits, decimal_places\n        super().__init__(max_value=max_value, min_value=min_value, **kwargs)\n        self.validators.append(validators.DecimalValidator(max_digits, decimal_places))\n\n    def to_python(self, value):\n        \"\"\"\n        Validate that the input is a decimal number. Return a Decimal\n        instance or None for empty values. Ensure that there are no more\n        than max_digits in the number and no more than decimal_places digits\n        after the decimal point.\n        \"\"\"\n        if value in self.empty_values:\n            return None\n        if self.localize:\n            value = formats.sanitize_separators(value)\n        try:\n            value = Decimal(str(value))\n        except DecimalException:\n            raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n        return value\n\n    def validate(self, value):\n        super().validate(value)\n        if value in self.empty_values:\n            return\n        if not value.is_finite():\n            raise ValidationError(\n                self.error_messages[\"invalid\"],\n                code=\"invalid\",\n                params={\"value\": value},\n            )\n\n    def widget_attrs(self, widget):\n        attrs = super().widget_attrs(widget)\n        if isinstance(widget, NumberInput) and \"step\" not in widget.attrs:\n            if self.decimal_places is not None:\n                # Use exponential notation for small values since they might\n                # be parsed as 0 otherwise. ref #20765\n                step = str(Decimal(1).scaleb(-self.decimal_places)).lower()\n            else:\n                step = \"any\"\n            attrs.setdefault(\"step\", step)\n        return attrs\n\n\nclass BaseTemporalField(Field):\n    def __init__(self, *, input_formats=None, **kwargs):\n        super().__init__(**kwargs)\n        if input_formats is not None:\n            self.input_formats = input_formats\n\n    def to_python(self, value):\n        value = value.strip()\n        # Try to strptime against each input format.\n        for format in self.input_formats:\n            try:\n                return self.strptime(value, format)\n            except (ValueError, TypeError):\n                continue\n        raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n\n    def strptime(self, value, format):\n        raise NotImplementedError(\"Subclasses must define this method.\")",
+                        "filename": "django/forms/fields.py",
+                        "start_index": 13474,
+                        "end_index": 16186,
+                        "start_line": 391,
+                        "end_line": 467,
+                        "max_line": 1412,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the DecimalField class definition in the forms module, which is relevant to the issue as it handles the conversion and validation of decimal input, including the handling of 'NaN' values."
+                }
+            ],
+            "django/core/validators.py": [
+                {
+                    "chunk": {
+                        "code": "Validate that the input does not exceed the maximum number of digits\n    expected, otherwise raise ValidationError.\n    \"\"\"\n\n    messages = {\n        \"invalid\": _(\"Enter a number.\"),\n        \"max_digits\": ngettext_lazy(\n            \"Ensure that there are no more than %(max)s digit in total.\",\n            \"Ensure that there are no more than %(max)s digits in total.\",\n            \"max\",\n        ),\n        \"max_decimal_places\": ngettext_lazy(\n            \"Ensure that there are no more than %(max)s decimal place.\",\n            \"Ensure that there are no more than %(max)s decimal places.\",\n            \"max\",\n        ),\n        \"max_whole_digits\": ngettext_lazy(\n            \"Ensure that there are no more than %(max)s digit before the decimal \"\n            \"point.\",\n            \"Ensure that there are no more than %(max)s digits before the decimal \"\n            \"point.\",\n            \"max\",\n        ),\n    }\n\n    def __init__(self, max_digits, decimal_places):\n        self.max_digits = max_digits\n        self.decimal_places = decimal_places\n\n    de",
+                        "filename": "django/core/validators.py",
+                        "start_index": 15655,
+                        "end_index": 16708,
+                        "start_line": 475,
+                        "end_line": 637,
+                        "max_line": 642,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the DecimalValidator class which is used by the DecimalField for validating the number of digits and decimal places. It may need to be reviewed to ensure proper handling of 'NaN' values."
+                }
+            ],
+            "django/db/models/fields/__init__.py": [
+                {
+                    "chunk": {
+                        "code": "False\n    default_error_messages = {\n        \"invalid\": _(\"\u201c%(value)s\u201d value must be a decimal number.\"),\n    }\n    description = _(\"Decimal number\")\n\n    def __init__(\n        self,\n        verbose_name=None,\n        name=None,\n        max_digits=None,\n        decimal_places=None,\n        **kwargs,\n    ):\n        self.max_digits, self.decimal_places = max_digits, decimal_places\n        super().__init__(verbose_name, name, **kwargs)\n\n    def check(self, **kwargs):\n        errors = super().check(**kwargs)\n\n        digits_errors = [\n            *self._check_decimal_places(),\n            *self._check_max_digits(),\n        ]\n        if not digits_errors:\n            errors.extend(self._check_decimal_places_and_max_digits(**kwargs))\n        else:\n            errors.extend(digits_errors)\n        return errors\n\n    def _check_decimal_places(self):\n        try:\n            decimal_places = int(self.decimal_places)\n            if decimal_places < 0:\n                raise ValueError()\n        except TypeError:\n            return [\n                checks.Error(\n                    \"DecimalFields must define a 'decimal_places' attribute.\",\n                    obj=self,\n                    id=\"fields.E130\",\n                )\n            ]\n        except ValueError:\n            return [\n                checks.Error(\n                    \"'decimal_places' must be a non-negative integer.\",\n                    obj=self,\n                    id=\"fields.E131\",\n                )\n            ]\n        else:\n            return []\n\n    def _check_max_digits(self):\n        try:\n            max_digits = int(self.max_digits)\n            if max_digits <= 0:\n                raise ValueError()\n        except TypeError:\n            return [\n                checks.Error(\n                    \"DecimalFields must define a 'max_digits' attribute.\",\n                    obj=self,\n                    id=\"fields.E132\",\n                )\n            ]\n        except ValueError:\n            return [\n                checks.Error(\n                    \"'max_digits' must be a positive integer.\",\n                    obj=self,\n                    id=\"fields.E133\",\n                )\n            ]\n        else:\n            return []\n\n    def _check_decimal_places_and_max_digits(self, **kwargs):\n        if int(self.decimal_places) > int(self.max_digits):\n            return [\n                checks.Error(\n                    \"'max_digits' must be greater or equal to 'decimal_places'.\",\n                    obj=self,\n                    id=\"fields.E134\",\n                )\n            ]\n        return []\n\n    @cached_property\n    def validators(self):\n        return super().validators + [\n            validators.DecimalValidator(self.max_digits, self.decimal_places)\n        ]\n\n    @cached_property\n    def context(self):\n        return decimal.Context(prec=self.max_digits)\n\n    def deconstruct(self):",
+                        "filename": "django/db/models/fields/__init__.py",
+                        "start_index": 60565,
+                        "end_index": 63460,
+                        "start_line": 162,
+                        "end_line": 2788,
+                        "max_line": 2869,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet from the models module defines the DecimalField at the model level, which is relevant for understanding how the field is defined and how it might interact with the form field."
+                }
+            ]
+        },
+        "solution_task": "- To address the `decimal.InvalidOperation` error when passing \"NaN\" to the `OrderForm`, modify the `to_python` method in the `DecimalField` class within `django/forms/fields.py` to handle \"NaN\" values appropriately.\n- Add a check for \"NaN\" before attempting to convert the value to a `Decimal` instance:\n\n```python\nfrom decimal import Decimal, InvalidOperation\n\nclass DecimalField(IntegerField):\n    # ... [existing code] ...\n\n    def to_python(self, value):\n        if value in self.empty_values:\n            return None\n        if self.localize:\n            value = formats.sanitize_separators(value)\n        try:\n            if str(value).lower() == 'nan':\n                raise ValueError(\"NaN value is not allowed.\")\n            value = Decimal(str(value))\n        except (DecimalException, ValueError):\n            raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n        return value\n\n    # ... [existing code] ...\n```\n\n- Ensure that the `validate` method in the `DecimalField` class already handles non-finite values by raising a `ValidationError`, which it does in the provided snippet.",
+        "bouncer_response": {
+            "score": 8,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable solution to the issue of handling 'NaN' values in a Django `DecimalField`. It suggests modifying the `to_python` method to check for 'NaN' values and raise a `ValueError` if such a value is encountered, which is a direct and relevant approach to the problem described in the PROMPT. The RESPONSE also includes a code snippet that can be implemented to resolve the issue, which adds to its utility. Additionally, the RESPONSE provides links to relevant code snippets in the Django repository that should be reviewed to ensure proper handling of 'NaN' values, which is helpful for a comprehensive solution. The reason for not giving a score of 10 is that the RESPONSE does not address the specific pull request mentioned in the PROMPT, which could contain relevant information or a proposed solution to the issue.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711721930.51906,
+        "result": "- To address the `decimal.InvalidOperation` error when passing \"NaN\" to the `OrderForm`, modify the `to_python` method in the `DecimalField` class within `django/forms/fields.py` to handle \"NaN\" values appropriately.\n- Add a check for \"NaN\" before attempting to convert the value to a `Decimal` instance:\n\n```python\nfrom decimal import Decimal, InvalidOperation\n\nclass DecimalField(IntegerField):\n    # ... [existing code] ...\n\n    def to_python(self, value):\n        if value in self.empty_values:\n            return None\n        if self.localize:\n            value = formats.sanitize_separators(value)\n        try:\n            if str(value).lower() == 'nan':\n                raise ValueError(\"NaN value is not allowed.\")\n            value = Decimal(str(value))\n        except (DecimalException, ValueError):\n            raise ValidationError(self.error_messages[\"invalid\"], code=\"invalid\")\n        return value\n\n    # ... [existing code] ...\n```\n\n- Ensure that the `validate` method in the `DecimalField` class already handles non-finite values by raising a `ValidationError`, which it does in the provided snippet.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [forms](https://github.com/testbed/django__django__4.0/tree//django/forms)- [Lines 391 - 467](https://github.com/testbed/django__django__4.0/blob//django/forms/fields.py#L391-L467)\n\n This snippet contains the DecimalField class definition in the forms module, which is relevant to the issue as it handles the conversion and validation of decimal input, including the handling of 'NaN' values.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [core](https://github.com/testbed/django__django__4.0/tree//django/core)- [Lines 475 - 637](https://github.com/testbed/django__django__4.0/blob//django/core/validators.py#L475-L637)\n\n This snippet contains the DecimalValidator class which is used by the DecimalField for validating the number of digits and decimal places. It may need to be reviewed to ensure proper handling of 'NaN' values.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__4.0/tree//django/db/models) \u2192 [fields](https://github.com/testbed/django__django__4.0/tree//django/db/models/fields)- [Lines 162 - 2788](https://github.com/testbed/django__django__4.0/blob//django/db/models/fields/__init__.py#L162-L2788)\n\n This snippet from the models module defines the DecimalField at the model level, which is relevant for understanding how the field is defined and how it might interact with the form field."
+    }
+}

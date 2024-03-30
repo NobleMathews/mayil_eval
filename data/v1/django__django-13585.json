@@ -1,0 +1,189 @@
+{
+    "id": "django__django-13585",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 954256334567128629,
+    "title": "Password reset token incompatibility.",
+    "body": "Description\n\t\nAs noted here \u200bhttps://docs.djangoproject.com/en/3.1/releases/3.1/#django-contrib-auth the hashing for password reset tokens has changed between 3.0 and 3.1 and work has been done to ensure existing tokens will still work (at least until 4.0).\nHowever the encoding of the token creation time has also changed. Specifically from days since 1/1/01 to seconds since 1/1/01. And it appears no work has been done to support tokens with the older values. So a token generated on Oct 1, 2020 will come through as 7213 days which will then get interpreted as 7213 seconds, aka 2am Jan 1, 2001.\nSo while exiting tokens in the wild will pass crypto validation they will all show as expired if your PASSWORD_RESET_TIMEOUT is less than ~20 years.\nThe code base I'm working on uses these tokens (perhaps unwisely) in some email links that are expected to have a 3 month lifetime and an upgrade from 3.0 to 3.1 looks likely to render all the tokens in the wild expired which is suboptimal.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Update the `PASSWORD_RESET_TIMEOUT` setting in `settings.py` to reflect a 3-month lifetime in seconds:\n  ```python\n  # settings.py\n  PASSWORD_RESET_TIMEOUT = 2592000 * 3  # 3 months in seconds\n  ```\n\n- Modify the `_num_seconds` method in `tokens.py` to ensure it uses the correct base date for timestamp calculation if you need to support tokens generated with Django 3.0:\n  ```python\n  # tokens.py\n  def _num_seconds(self, dt):\n      # Use the correct base date (e.g., 2001-1-1 for Django 3.0 tokens)\n      return int((dt - datetime(2001, 1, 1)).total_seconds())\n  ```\n\n- If necessary, implement a compatibility check in the `check_token` method to differentiate between tokens generated with Django 3.0 and 3.1, and adjust the validation logic accordingly:\n  ```python\n  # tokens.py\n  def check_token(self, user, token):\n      # ... existing code ...\n\n      # Check the timestamp is within limit.\n      if self._is_token_generated_with_django_3_0(token):\n          # Adjust the timestamp validation for Django 3.0 tokens\n          pass\n      else:\n          if (self._num_seconds(self._now()) - ts) > settings.PASSWORD_RESET_TIMEOUT:\n              return False\n\n      return True\n\n  def _is_token_generated_with_django_3_0(self, token):\n      # Implement logic to determine if the token was generated with Django 3.0\n      pass\n  ```\n\n- Ensure that the `make_token` method generates tokens with the correct timestamp encoding for the current Django version:\n  ```python\n  # tokens.py\n  def make_token(self, user):\n      # ... existing code ...\n      timestamp = self._num_seconds(self._now())\n      # Ensure the timestamp is encoded correctly for the current Django version\n      return self._make_token_with_timestamp(user, timestamp, self.secret)\n  ```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.2/tree//django/contrib/auth)- [Lines 98 - 129](https://github.com/testbed/django__django__3.2/blob//django/contrib/auth/tokens.py#L98-L129)\n\n This snippet contains the _make_hash_value and _num_seconds methods which are directly related to the generation of the hash value and the encoding of the token creation time, which is the core of the issue. \n\n\n   - [Lines 9 - 96](https://github.com/testbed/django__django__3.2/blob//django/contrib/auth/tokens.py#L9-L96)\n\n This snippet includes the make_token and check_token methods of the PasswordResetTokenGenerator class, which are responsible for creating and validating the password reset tokens. The issue is related to how tokens are generated and checked, so this snippet is relevant.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0002675,
+        "snippet_processor": 0.04624,
+        "issue_star_creation": 0.04094,
+        "issue_star_solver": 0.04981,
+        "bouncer": 0.02718
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711725876.067082,
+        "relevant_snippets": [
+            {
+                "code": "def _make_hash_value(self, user, timestamp):\n        \"\"\"\n        Hash the user's primary key, email (if available), and some user state\n        that's sure to change after a password reset to produce a token that is\n        invalidated when it's used:\n        1. The password field will change upon a password reset (even if the\n           same password is chosen, due to password salting).\n        2. The last_login field will usually be updated very shortly after\n           a password reset.\n        Failing those things, settings.PASSWORD_RESET_TIMEOUT eventually\n        invalidates the token.\n\n        Running this data through salted_hmac() prevents password cracking\n        attempts using the reset token, provided the secret isn't compromised.\n        \"\"\"\n        # Truncate microseconds so that tokens are consistent even if the\n        # database doesn't support microseconds.\n        login_timestamp = (\n            \"\"\n            if user.last_login is None\n            else user.last_login.replace(microsecond=0, tzinfo=None)\n        )\n        email_field = user.get_email_field_name()\n        email = getattr(user, email_field, \"\") or \"\"\n        return f\"{user.pk}{user.password}{login_timestamp}{timestamp}{email}\"\n\n    def _num_seconds(self, dt):\n        return int((dt - datetime(2001, 1, 1)).total_seconds())\n\n    def _now(self):\n        # Used for mocking in tests\n        return datetime.now()",
+                "filename": "django/contrib/auth/tokens.py",
+                "start_index": 2855,
+                "end_index": 4269,
+                "start_line": 98,
+                "end_line": 129,
+                "max_line": 132,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "default_token_generator = PasswordResetTokenGenerator()",
+                "filename": "django/contrib/auth/tokens.py",
+                "start_index": 4272,
+                "end_index": 4327,
+                "start_line": 132,
+                "end_line": 132,
+                "max_line": 132,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class PasswordResetTokenGenerator:",
+                "filename": "django/contrib/auth/tokens.py",
+                "start_index": 192,
+                "end_index": 226,
+                "start_line": 8,
+                "end_line": 8,
+                "max_line": 132,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import base64\nimport binascii\nimport functools\nimport hashlib\nimport importlib\nimport math\nimport warnings\n\nfrom django.conf import settings\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.core.signals import setting_changed\nfrom django.dispatch import receiver\nfrom django.utils.crypto import (\n    RANDOM_STRING_CHARS,\n    constant_time_compare,\n    get_random_string,\n    pbkdf2,\n)\nfrom django.utils.deprecation import RemovedInDjango51Warning\nfrom django.utils.module_loading import import_string\nfrom django.utils.translation import gettext_noop as _\n\nUNUSABLE_PASSWORD_PREFIX = \"!\"  # This will never be a valid encoded hash\nUNUSABLE_PASSWORD_SUFFIX_LENGTH = (\n    40  # number of random chars to add after UNUSABLE_PASSWORD_PREFIX\n)\n\n\ndef is_password_usable(encoded):\n    \"\"\"\n    Return True if this password wasn't generated by\n    User.set_unusable_password(), i.e. make_password(None).\n    \"\"\"\n    return encoded is None or not encoded.startswith(UNUSABLE_PASSWORD_PREFIX)\n\n\ndef verify_password(password, encoded, preferred=\"default\"):\n    \"\"\"\n    Return two booleans. The first is whether the raw password matches the\n    three part encoded digest, and the second whether to regenerate the\n    password.\n    \"\"\"\n    if password is None or not is_password_usable(encoded):\n        return False, False\n\n    preferred = get_hasher(preferred)\n    try:\n        hasher = identify_hasher(encoded)\n    except ValueError:\n        # encoded is gibberish or uses a hasher that's no longer installed.\n        return False, False\n\n    hasher_changed = hasher.algorithm != preferred.algorithm\n    must_update = hasher_changed or preferred.must_update(encoded)\n    is_correct = hasher.verify(password, encoded)\n\n    # If the hasher didn't change (we don't protect against enumeration if it\n    # does) and the password should get updated, try to close the timing gap\n    # between the work factor of the current encoded password and the default\n    # work factor.\n    if not is_correct and not hasher_changed and must_update:\n        hasher.harden_runtime(password, encoded)\n\n    return is_correct, must_update\n\n\ndef check_password(password, encoded, setter=None, preferred=\"default\"):\n    \"\"\"\n    Return a boolean of whether the raw password matches the three part encoded\n    digest.\n\n    If setter is specified, it'll be called when you need to regenerate the\n    password.\n    \"\"\"\n    is_correct, must_update = verify_password(password, encoded, preferred=preferred)\n    if setter and is_correct and must_update:\n        setter(password)\n    return is_correct\n\n\nasync def acheck_password(password, encoded, setter=None, preferred=\"default\"):\n    \"\"\"See check_password().\"\"\"\n    is_correct, must_update = verify_password(password, encoded, preferred=preferred)\n    if setter and is_correct and must_update:\n        await setter(password)\n    return is_correct",
+                "filename": "django/contrib/auth/hashers.py",
+                "start_index": 0,
+                "end_index": 2878,
+                "start_line": 1,
+                "end_line": 86,
+                "max_line": 842,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    Strategy object used to generate and check tokens for the password\n    reset mechanism.\n    \"\"\"\n\n    key_salt = \"django.contrib.auth.tokens.PasswordResetTokenGenerator\"\n    algorithm = None\n    _secret = None\n    _secret_fallbacks = None\n\n    def __init__(self):\n        self.algorithm = self.algorithm or \"sha256\"\n\n    def _get_secret(self):\n        return self._secret or settings.SECRET_KEY\n\n    def _set_secret(self, secret):\n        self._secret = secret\n\n    secret = property(_get_secret, _set_secret)\n\n    def _get_fallbacks(self):\n        if self._secret_fallbacks is None:\n            return settings.SECRET_KEY_FALLBACKS\n        return self._secret_fallbacks\n\n    def _set_fallbacks(self, fallbacks):\n        self._secret_fallbacks = fallbacks\n\n    secret_fallbacks = property(_get_fallbacks, _set_fallbacks)\n\n    def make_token(self, user):\n        \"\"\"\n        Return a token that can be used once to do a password reset\n        for the given user.\n        \"\"\"\n        return self._make_token_with_timestamp(\n            user,\n            self._num_seconds(self._now()),\n            self.secret,\n        )\n\n    def check_token(self, user, token):\n        \"\"\"\n        Check that a password reset token is correct for a given user.\n        \"\"\"\n        if not (user and token):\n            return False\n        # Parse the token\n        try:\n            ts_b36, _ = token.split(\"-\")\n        except ValueError:\n            return False\n\n        try:\n            ts = base36_to_int(ts_b36)\n        except ValueError:\n            return False\n\n        # Check that the timestamp/uid has not been tampered with\n        for secret in [self.secret, *self.secret_fallbacks]:\n            if constant_time_compare(\n                self._make_token_with_timestamp(user, ts, secret),\n                token,\n            ):\n                break\n        else:\n            return False\n\n        # Check the timestamp is within limit.\n        if (self._num_seconds(self._now()) - ts) > settings.PASSWORD_RESET_TIMEOUT:\n            return False\n\n        return True\n\n    def _make_token_with_timestamp(self, user, timestamp, secret):\n        # timestamp is number of seconds since 2001-1-1. Converted to base 36,\n        # this gives us a 6 digit string until about 2069.\n        ts_b36 = int_to_base36(timestamp)\n        hash_string = salted_hmac(\n            self.key_salt,\n            self._make_hash_value(user, timestamp),\n            secret=secret,\n            algorithm=self.algorithm,\n        ).hexdigest()[\n            ::2\n        ]  # Limit to shorten the URL.\n        return \"%s-%s\" % (ts_b36, hash_string)",
+                "filename": "django/contrib/auth/tokens.py",
+                "start_index": 231,
+                "end_index": 2849,
+                "start_line": 9,
+                "end_line": 96,
+                "max_line": 132,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import django.contrib.auth.models\nfrom django.contrib.auth import validators\nfrom django.db import migrations, models\nfrom django.utils import timezone",
+                "filename": "django/contrib/auth/migrations/0001_initial.py",
+                "start_index": 0,
+                "end_index": 151,
+                "start_line": 1,
+                "end_line": 4,
+                "max_line": 204,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class SHA1PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    The SHA1 password hashing algorithm (not recommended)\n    \"\"\"\n\n    algorithm = \"sha1\"\n\n    def __init__(self, *args, **kwargs):\n        warnings.warn(\n            \"django.contrib.auth.hashers.SHA1PasswordHasher is deprecated.\",\n            RemovedInDjango51Warning,\n            stacklevel=2,\n        )\n        super().__init__(*args, **kwargs)\n\n    def encode(self, password, salt):\n        self._check_encode_args(password, salt)\n        hash = hashlib.sha1((salt + password).encode()).hexdigest()\n        return \"%s$%s$%s\" % (self.algorithm, salt, hash)\n\n    def decode(self, encoded):\n        algorithm, salt, hash = encoded.split(\"$\", 2)\n        assert algorithm == self.algorithm\n        return {\n            \"algorithm\": algorithm,\n            \"hash\": hash,\n            \"salt\": salt,\n        }\n\n    def verify(self, password, encoded):\n        decoded = self.decode(encoded)\n        encoded_2 = self.encode(password, decoded[\"salt\"])\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"salt\"): mask_hash(decoded[\"salt\"], show=2),\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def must_update(self, encoded):\n        decoded = self.decode(encoded)\n        return must_update_salt(decoded[\"salt\"], self.salt_entropy)\n\n    def harden_runtime(self, password, encoded):\n        pass\n\n\nclass MD5PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    The Salted MD5 password hashing algorithm (not recommended)\n    \"\"\"\n\n    algorithm = \"md5\"\n\n    def encode(self, password, salt):\n        self._check_encode_args(password, salt)\n        hash = hashlib.md5((salt + password).encode()).hexdigest()\n        return \"%s$%s$%s\" % (self.algorithm, salt, hash)\n\n    def decode(self, encoded):\n        algorithm, salt, hash = encoded.split(\"$\", 2)\n        assert algorithm == self.algorithm\n        return {\n            \"algorithm\": algorithm,\n            \"hash\": hash,\n            \"salt\": salt,\n        }\n\n    def verify(self, password, encoded):\n        decoded = self.decode(encoded)\n        encoded_2 = self.encode(password, decoded[\"salt\"])\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"salt\"): mask_hash(decoded[\"salt\"], show=2),\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def must_update(self, encoded):\n        decoded = self.decode(encoded)\n        return must_update_salt(decoded[\"salt\"], self.salt_entropy)\n\n    def harden_runtime(self, password, encoded):\n        pass\n\n\n# RemovedInDjango51Warning.",
+                "filename": "django/contrib/auth/hashers.py",
+                "start_index": 21832,
+                "end_index": 24660,
+                "start_line": 645,
+                "end_line": 790,
+                "max_line": 842,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "import unicodedata\n\nfrom django import forms\nfrom django.contrib.auth import authenticate, get_user_model, password_validation\nfrom django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX, identify_hasher\nfrom django.contrib.auth.models import User\nfrom django.contrib.auth.tokens import default_token_generator\nfrom django.contrib.sites.shortcuts import get_current_site\nfrom django.core.exceptions import ValidationError\nfrom django.core.mail import EmailMultiAlternatives\nfrom django.template import loader\nfrom django.utils.encoding import force_bytes\nfrom django.utils.http import urlsafe_base64_encode\nfrom django.utils.text import capfirst\nfrom django.utils.translation import gettext\nfrom django.utils.translation import gettext_lazy as _\n\nUserModel = get_user_model()\n\n\ndef _unicode_ci_compare(s1, s2):\n    \"\"\"\n    Perform case-insensitive comparison of two identifiers, using the\n    recommended algorithm from Unicode Technical Report 36, section\n    2.11.2(B)(2).\n    \"\"\"\n    return (\n        unicodedata.normalize(\"NFKC\", s1).casefold()\n        == unicodedata.normalize(\"NFKC\", s2).casefold()\n    )\n\n\nclass ReadOnlyPasswordHashWidget(forms.Widget):\n    template_name = \"auth/widgets/read_only_password_hash.html\"\n    read_only = True\n\n    def get_context(self, name, value, attrs):\n        context = super().get_context(name, value, attrs)\n        summary = []\n        if not value or value.startswith(UNUSABLE_PASSWORD_PREFIX):\n            summary.append({\"label\": gettext(\"No password set.\")})\n        else:\n            try:\n                hasher = identify_hasher(value)\n            except ValueError:\n                summary.append(\n                    {\n                        \"label\": gettext(\n                            \"Invalid password format or unknown hashing algorithm.\"\n                        )\n                    }\n                )\n            else:\n                for key, value_ in hasher.safe_summary(value).items():\n                    summary.append({\"label\": gettext(key), \"value\": value_})\n        context[\"summary\"] = summary\n        return context\n\n    def id_for_label(self, id_):\n        return None\n\n\nclass ReadOnlyPasswordHashField(forms.Field):\n    widget = ReadOnlyPasswordHashWidget\n\n    def __init__(self, *args, **kwargs):\n        kwargs.setdefault(\"required\", False)\n        kwargs.setdefault(\"disabled\", True)\n        super().__init__(*args, **kwargs)\n\n\nclass UsernameField(forms.CharField):\n    def to_python(self, value):\n        return unicodedata.normalize(\"NFKC\", super().to_python(value))\n\n    def widget_attrs(self, widget):\n        return {\n            **super().widget_attrs(widget),\n            \"autocapitalize\": \"none\",\n            \"autocomplete\": \"username\",\n        }",
+                "filename": "django/contrib/auth/forms.py",
+                "start_index": 0,
+                "end_index": 2738,
+                "start_line": 1,
+                "end_line": 367,
+                "max_line": 510,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "class UnsaltedSHA1PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    Very insecure algorithm that you should *never* use; store SHA1 hashes\n    with an empty salt.\n\n    This class is implemented because Django used to accept such password\n    hashes. Some older Django installs still have these values lingering\n    around so we need to handle and upgrade them properly.\n    \"\"\"\n\n    algorithm = \"unsalted_sha1\"\n\n    def __init__(self, *args, **kwargs):\n        warnings.warn(\n            \"django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher is deprecated.\",\n            RemovedInDjango51Warning,\n            stacklevel=2,\n        )\n        super().__init__(*args, **kwargs)\n\n    def salt(self):\n        return \"\"\n\n    def encode(self, password, salt):\n        if salt != \"\":\n            raise ValueError(\"salt must be empty.\")\n        hash = hashlib.sha1(password.encode()).hexdigest()\n        return \"sha1$$%s\" % hash\n\n    def decode(self, encoded):\n        assert encoded.startswith(\"sha1$$\")\n        return {\n            \"algorithm\": self.algorithm,\n            \"hash\": encoded[6:],\n            \"salt\": None,\n        }\n\n    def verify(self, password, encoded):\n        encoded_2 = self.encode(password, \"\")\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def harden_runtime(self, password, encoded):\n        pass\n\n\n# RemovedInDjango51Warning.",
+                "filename": "django/contrib/auth/hashers.py",
+                "start_index": 24661,
+                "end_index": 26226,
+                "start_line": 738,
+                "end_line": 790,
+                "max_line": 842,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            },
+            {
+                "code": "from django.contrib.auth import validators\nfrom django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0003_alter_user_email_max_length\"),\n    ]\n\n    # No database changes; modifies validators and error_messages (#13147).\n    operations = [\n        migrations.AlterField(\n            model_name=\"user\",\n            name=\"username\",\n            field=models.CharField(\n                error_messages={\"unique\": \"A user with that username already exists.\"},\n                max_length=30,\n                validators=[validators.UnicodeUsernameValidator()],\n                help_text=(\n                    \"Required. 30 characters or fewer. Letters, digits and @/./+/-/_ \"\n                    \"only.\"\n                ),\n                unique=True,\n                verbose_name=\"username\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0004_alter_user_username_opts.py",
+                "start_index": 0,
+                "end_index": 879,
+                "start_line": 1,
+                "end_line": 27,
+                "max_line": 27,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/contrib/auth/tokens.py": [
+                {
+                    "chunk": {
+                        "code": "def _make_hash_value(self, user, timestamp):\n        \"\"\"\n        Hash the user's primary key, email (if available), and some user state\n        that's sure to change after a password reset to produce a token that is\n        invalidated when it's used:\n        1. The password field will change upon a password reset (even if the\n           same password is chosen, due to password salting).\n        2. The last_login field will usually be updated very shortly after\n           a password reset.\n        Failing those things, settings.PASSWORD_RESET_TIMEOUT eventually\n        invalidates the token.\n\n        Running this data through salted_hmac() prevents password cracking\n        attempts using the reset token, provided the secret isn't compromised.\n        \"\"\"\n        # Truncate microseconds so that tokens are consistent even if the\n        # database doesn't support microseconds.\n        login_timestamp = (\n            \"\"\n            if user.last_login is None\n            else user.last_login.replace(microsecond=0, tzinfo=None)\n        )\n        email_field = user.get_email_field_name()\n        email = getattr(user, email_field, \"\") or \"\"\n        return f\"{user.pk}{user.password}{login_timestamp}{timestamp}{email}\"\n\n    def _num_seconds(self, dt):\n        return int((dt - datetime(2001, 1, 1)).total_seconds())\n\n    def _now(self):\n        # Used for mocking in tests\n        return datetime.now()",
+                        "filename": "django/contrib/auth/tokens.py",
+                        "start_index": 2855,
+                        "end_index": 4269,
+                        "start_line": 98,
+                        "end_line": 129,
+                        "max_line": 132,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the _make_hash_value and _num_seconds methods which are directly related to the generation of the hash value and the encoding of the token creation time, which is the core of the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    Strategy object used to generate and check tokens for the password\n    reset mechanism.\n    \"\"\"\n\n    key_salt = \"django.contrib.auth.tokens.PasswordResetTokenGenerator\"\n    algorithm = None\n    _secret = None\n    _secret_fallbacks = None\n\n    def __init__(self):\n        self.algorithm = self.algorithm or \"sha256\"\n\n    def _get_secret(self):\n        return self._secret or settings.SECRET_KEY\n\n    def _set_secret(self, secret):\n        self._secret = secret\n\n    secret = property(_get_secret, _set_secret)\n\n    def _get_fallbacks(self):\n        if self._secret_fallbacks is None:\n            return settings.SECRET_KEY_FALLBACKS\n        return self._secret_fallbacks\n\n    def _set_fallbacks(self, fallbacks):\n        self._secret_fallbacks = fallbacks\n\n    secret_fallbacks = property(_get_fallbacks, _set_fallbacks)\n\n    def make_token(self, user):\n        \"\"\"\n        Return a token that can be used once to do a password reset\n        for the given user.\n        \"\"\"\n        return self._make_token_with_timestamp(\n            user,\n            self._num_seconds(self._now()),\n            self.secret,\n        )\n\n    def check_token(self, user, token):\n        \"\"\"\n        Check that a password reset token is correct for a given user.\n        \"\"\"\n        if not (user and token):\n            return False\n        # Parse the token\n        try:\n            ts_b36, _ = token.split(\"-\")\n        except ValueError:\n            return False\n\n        try:\n            ts = base36_to_int(ts_b36)\n        except ValueError:\n            return False\n\n        # Check that the timestamp/uid has not been tampered with\n        for secret in [self.secret, *self.secret_fallbacks]:\n            if constant_time_compare(\n                self._make_token_with_timestamp(user, ts, secret),\n                token,\n            ):\n                break\n        else:\n            return False\n\n        # Check the timestamp is within limit.\n        if (self._num_seconds(self._now()) - ts) > settings.PASSWORD_RESET_TIMEOUT:\n            return False\n\n        return True\n\n    def _make_token_with_timestamp(self, user, timestamp, secret):\n        # timestamp is number of seconds since 2001-1-1. Converted to base 36,\n        # this gives us a 6 digit string until about 2069.\n        ts_b36 = int_to_base36(timestamp)\n        hash_string = salted_hmac(\n            self.key_salt,\n            self._make_hash_value(user, timestamp),\n            secret=secret,\n            algorithm=self.algorithm,\n        ).hexdigest()[\n            ::2\n        ]  # Limit to shorten the URL.\n        return \"%s-%s\" % (ts_b36, hash_string)",
+                        "filename": "django/contrib/auth/tokens.py",
+                        "start_index": 231,
+                        "end_index": 2849,
+                        "start_line": 9,
+                        "end_line": 96,
+                        "max_line": 132,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the make_token and check_token methods of the PasswordResetTokenGenerator class, which are responsible for creating and validating the password reset tokens. The issue is related to how tokens are generated and checked, so this snippet is relevant."
+                }
+            ]
+        },
+        "solution_task": "- Update the `PASSWORD_RESET_TIMEOUT` setting in `settings.py` to reflect a 3-month lifetime in seconds:\n  ```python\n  # settings.py\n  PASSWORD_RESET_TIMEOUT = 2592000 * 3  # 3 months in seconds\n  ```\n\n- Modify the `_num_seconds` method in `tokens.py` to ensure it uses the correct base date for timestamp calculation if you need to support tokens generated with Django 3.0:\n  ```python\n  # tokens.py\n  def _num_seconds(self, dt):\n      # Use the correct base date (e.g., 2001-1-1 for Django 3.0 tokens)\n      return int((dt - datetime(2001, 1, 1)).total_seconds())\n  ```\n\n- If necessary, implement a compatibility check in the `check_token` method to differentiate between tokens generated with Django 3.0 and 3.1, and adjust the validation logic accordingly:\n  ```python\n  # tokens.py\n  def check_token(self, user, token):\n      # ... existing code ...\n\n      # Check the timestamp is within limit.\n      if self._is_token_generated_with_django_3_0(token):\n          # Adjust the timestamp validation for Django 3.0 tokens\n          pass\n      else:\n          if (self._num_seconds(self._now()) - ts) > settings.PASSWORD_RESET_TIMEOUT:\n              return False\n\n      return True\n\n  def _is_token_generated_with_django_3_0(self, token):\n      # Implement logic to determine if the token was generated with Django 3.0\n      pass\n  ```\n\n- Ensure that the `make_token` method generates tokens with the correct timestamp encoding for the current Django version:\n  ```python\n  # tokens.py\n  def make_token(self, user):\n      # ... existing code ...\n      timestamp = self._num_seconds(self._now())\n      # Ensure the timestamp is encoded correctly for the current Django version\n      return self._make_token_with_timestamp(user, timestamp, self.secret)\n  ```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a comprehensive solution to the problem of password reset token incompatibility between Django versions 3.0 and 3.1. It suggests updating the PASSWORD_RESET_TIMEOUT to reflect a 3-month lifetime, which is directly related to the issue of tokens expiring due to the change in the encoding of the token creation time. Additionally, it offers a modification to the _num_seconds method to use the correct base date for timestamp calculation, which is a crucial part of the problem. The RESPONSE also proposes implementing a compatibility check to differentiate between tokens generated with different Django versions, which is a necessary step to ensure that existing tokens remain valid. Lastly, it advises ensuring that the make_token method generates tokens with the correct timestamp encoding for the current Django version, which is essential for the generation of new, compatible tokens. The RESPONSE also references specific code snippets that need to be checked, which is valuable for the developer to locate the relevant sections of the code quickly.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711726623.5860841,
+        "result": "- Update the `PASSWORD_RESET_TIMEOUT` setting in `settings.py` to reflect a 3-month lifetime in seconds:\n  ```python\n  # settings.py\n  PASSWORD_RESET_TIMEOUT = 2592000 * 3  # 3 months in seconds\n  ```\n\n- Modify the `_num_seconds` method in `tokens.py` to ensure it uses the correct base date for timestamp calculation if you need to support tokens generated with Django 3.0:\n  ```python\n  # tokens.py\n  def _num_seconds(self, dt):\n      # Use the correct base date (e.g., 2001-1-1 for Django 3.0 tokens)\n      return int((dt - datetime(2001, 1, 1)).total_seconds())\n  ```\n\n- If necessary, implement a compatibility check in the `check_token` method to differentiate between tokens generated with Django 3.0 and 3.1, and adjust the validation logic accordingly:\n  ```python\n  # tokens.py\n  def check_token(self, user, token):\n      # ... existing code ...\n\n      # Check the timestamp is within limit.\n      if self._is_token_generated_with_django_3_0(token):\n          # Adjust the timestamp validation for Django 3.0 tokens\n          pass\n      else:\n          if (self._num_seconds(self._now()) - ts) > settings.PASSWORD_RESET_TIMEOUT:\n              return False\n\n      return True\n\n  def _is_token_generated_with_django_3_0(self, token):\n      # Implement logic to determine if the token was generated with Django 3.0\n      pass\n  ```\n\n- Ensure that the `make_token` method generates tokens with the correct timestamp encoding for the current Django version:\n  ```python\n  # tokens.py\n  def make_token(self, user):\n      # ... existing code ...\n      timestamp = self._num_seconds(self._now())\n      # Ensure the timestamp is encoded correctly for the current Django version\n      return self._make_token_with_timestamp(user, timestamp, self.secret)\n  ```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.2/tree//django/contrib/auth)- [Lines 98 - 129](https://github.com/testbed/django__django__3.2/blob//django/contrib/auth/tokens.py#L98-L129)\n\n This snippet contains the _make_hash_value and _num_seconds methods which are directly related to the generation of the hash value and the encoding of the token creation time, which is the core of the issue. \n\n\n   - [Lines 9 - 96](https://github.com/testbed/django__django__3.2/blob//django/contrib/auth/tokens.py#L9-L96)\n\n This snippet includes the make_token and check_token methods of the PasswordResetTokenGenerator class, which are responsible for creating and validating the password reset tokens. The issue is related to how tokens are generated and checked, so this snippet is relevant."
+    }
+}

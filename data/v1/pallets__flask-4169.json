@@ -1,0 +1,174 @@
+{
+    "id": "pallets__flask-4169",
+    "repo_name": "testbed/pallets__flask__2.0",
+    "task_id": 366313155832049246,
+    "title": "Exceptions are sometimes replaced with \"TypeError: exceptions must derive from BaseException\"",
+    "body": "```python\r\n# a.py\r\ndef create_app(): raise RuntimeError()\r\n```\r\n```\r\n$ FLASK_APP=a.py flask run --lazy-loading\r\n$ curl http://127.0.0.1:5000\r\n[...]\r\nTraceback (most recent call last):\r\n  File \"[...]/lib/python3.9/site-packages/flask/cli.py\", line 356, in __call__\r\n    self._flush_bg_loading_exception()\r\n  File \"[...]/lib/python3.9/site-packages/flask/cli.py\", line 344, in _flush_bg_loading_exception\r\n    raise exc_info\r\nTypeError: exceptions must derive from BaseException\r\n```\r\n\r\nI expected something about a RuntimeError.  `raise exc_info[1]` here worked for me https://github.com/pallets/flask/blob/7161776824734fc2797fe2b4fc974d183487ebf8/src/flask/cli.py#L342\r\n\r\n\r\nEnvironment:\r\n\r\n- Python version: 3.9.5\r\n- Flask version: 2.0.1\r\n\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/pallets__flask__2.0.git",
+    "requested_commit": "",
+    "mayil_response": "Based on the provided information, the issue seems to be related to the incorrect handling of exceptions during the lazy-loading process in Flask. The suggested fix is to modify the Flask code to correctly re-raise the exception using `raise exc_info[1]`.\n\nTo resolve the issue:\n\n- Locate the `_flush_bg_loading_exception` method in the `flask/cli.py` file.\n- Inside this method, replace the current exception raising mechanism with `raise exc_info[1]` to ensure that the original exception is re-raised correctly.\n- Ensure that `exc_info` is a tuple containing the exception type, value, and traceback, where `exc_info[1]` is the exception instance that should be raised.\n\n### Code snippets to check\n\n-  \u2192 [src](https://github.com/testbed/pallets__flask__2.0/tree//src) \u2192 [flask](https://github.com/testbed/pallets__flask__2.0/tree//src/flask)- [Lines 1 - 998](https://github.com/testbed/pallets__flask__2.0/blob//src/flask/cli.py#L1-L998)\n\n This snippet contains the code where the exception is being raised incorrectly, which is the root cause of the issue reported.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003915,
+        "snippet_processor": 0.04809,
+        "issue_star_creation": 0.02512,
+        "issue_star_solver": 0.05501,
+        "bouncer": 0.02568
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711742964.471595,
+        "relevant_snippets": [
+            {
+                "code": "from __future__ import annotations\n\nimport typing as t\n\nfrom .blueprints import Blueprint\nfrom .globals import request_ctx\nfrom .sansio.app import App\n\n\nclass UnexpectedUnicodeError(AssertionError, UnicodeError):\n    \"\"\"Raised in places where we want some better error reporting for\n    unexpected unicode or binary data.\n    \"\"\"\n\n\nclass DebugFilesKeyError(KeyError, AssertionError):\n    \"\"\"Raised from request.files during debugging.  The idea is that it can\n    provide a better error message than just a generic KeyError/BadRequest.\n    \"\"\"\n\n    def __init__(self, request, key):\n        form_matches = request.form.getlist(key)\n        buf = [\n            f\"You tried to access the file {key!r} in the request.files\"\n            \" dictionary but it does not exist. The mimetype for the\"\n            f\" request is {request.mimetype!r} instead of\"\n            \" 'multipart/form-data' which means that no file contents\"\n            \" were transmitted. To fix this error you should provide\"\n            ' enctype=\"multipart/form-data\" in your form.'\n        ]\n        if form_matches:\n            names = \", \".join(repr(x) for x in form_matches)\n            buf.append(\n                \"\\n\\nThe browser instead transmitted some file names. \"\n                f\"This was submitted: {names}\"\n            )\n        self.msg = \"\".join(buf)\n\n    def __str__(self):\n        return self.msg\n\n\nclass FormDataRoutingRedirect(AssertionError):\n    \"\"\"This exception is raised in debug mode if a routing redirect\n    would cause the browser to drop the method or body. This happens\n    when method is not GET, HEAD or OPTIONS and the status code is not\n    307 or 308.\n    \"\"\"\n\n    def __init__(self, request):\n        exc = request.routing_exception\n        buf = [\n            f\"A request was sent to '{request.url}', but routing issued\"\n            f\" a redirect to the canonical URL '{exc.new_url}'.\"\n        ]\n\n        if f\"{request.base_url}/\" == exc.new_url.partition(\"?\")[0]:\n            buf.append(\n                \" The URL was defined with a trailing slash. Flask\"\n                \" will redirect to the URL with a trailing slash if it\"\n                \" was accessed without one.\"\n            )\n\n        buf.append(\n            \" Send requests to the canonical URL, or use 307 or 308 for\"\n            \" routing redirects. Otherwise, browsers will drop form\"\n            \" data.\\n\\n\"\n            \"This exception is only raised in debug mode.\"\n        )\n        super().__init__(\"\".join(buf))",
+                "filename": "src/flask/debughelpers.py",
+                "start_index": 0,
+                "end_index": 2489,
+                "start_line": 1,
+                "end_line": 70,
+                "max_line": 160,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            },
+            {
+                "code": "from __future__ import annotations\n\nimport ast\nimport importlib.metadata\nimport inspect\nimport os\nimport platform\nimport re\nimport sys\nimport traceback\nimport typing as t\nfrom functools import update_wrapper\nfrom operator import itemgetter\n\nimport click\nfrom click.core import ParameterSource\nfrom werkzeug import run_simple\nfrom werkzeug.serving import is_running_from_reloader\nfrom werkzeug.utils import import_string\n\nfrom .globals import current_app\nfrom .helpers import get_debug_flag\nfrom .helpers import get_load_dotenv\n\nif t.TYPE_CHECKING:\n    from .app import Flask\n\n\nclass NoAppException(click.UsageError):\n    \"\"\"Raised if an application cannot be found or loaded.\"\"\"\n\n\ndef find_best_app(module):\n    \"\"\"Given a module instance this tries to find the best possible\n    application in the module or raises an exception.\n    \"\"\"\n    from . import Flask\n\n    # Search for the most common names first.\n    for attr_name in (\"app\", \"application\"):\n        app = getattr(module, attr_name, None)\n\n        if isinstance(app, Flask):\n            return app\n\n    # Otherwise find the only object that is a Flask instance.\n    matches = [v for v in module.__dict__.values() if isinstance(v, Flask)]\n\n    if len(matches) == 1:\n        return matches[0]\n    elif len(matches) > 1:\n        raise NoAppException(\n            \"Detected multiple Flask applications in module\"\n            f\" '{module.__name__}'. Use '{module.__name__}:name'\"\n            \" to specify the correct one.\"\n        )\n\n    # Search for app factory functions.\n    for attr_name in (\"create_app\", \"make_app\"):\n        app_factory = getattr(module, attr_name, None)\n\n        if inspect.isfunction(app_factory):\n            try:\n                app = app_factory()\n\n                if isinstance(app, Flask):\n                    return app\n            except TypeError as e:\n                if not _called_with_wrong_args(app_factory):\n                    raise\n\n                raise NoAppException(\n                    f\"Detected factory '{attr_name}' in module '{module.__name__}',\"\n                    \" but could not call it without arguments. Use\"\n                    f\" '{module.__name__}:{attr_name}(args)'\"\n                    \" to specify arguments.\"\n                ) from e\n\n    raise NoAppException(\n        \"Failed to find Flask application or factory in module\"\n        f\" '{module.__name__}'. Use '{module.__name__}:name'\"\n        \" to specify one.\"\n    )",
+                "filename": "src/flask/cli.py",
+                "start_index": 0,
+                "end_index": 2439,
+                "start_line": 1,
+                "end_line": 998,
+                "max_line": 1068,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            },
+            {
+                "code": "from __future__ import annotations\n\nimport typing as t\nfrom contextvars import ContextVar\n\nfrom werkzeug.local import LocalProxy\n\nif t.TYPE_CHECKING:  # pragma: no cover\n    from .app import Flask\n    from .ctx import _AppCtxGlobals\n    from .ctx import AppContext\n    from .ctx import RequestContext\n    from .sessions import SessionMixin\n    from .wrappers import Request\n\n\n_no_app_msg = \"\"\"\\\nWorking outside of application context.\n\nThis typically means that you attempted to use functionality that needed\nthe current application. To solve this, set up an application context\nwith app.app_context(). See the documentation for more information.\\\n\"\"\"\n_cv_app: ContextVar[AppContext] = ContextVar(\"flask.app_ctx\")\napp_ctx: AppContext = LocalProxy(  # type: ignore[assignment]\n    _cv_app, unbound_message=_no_app_msg\n)\ncurrent_app: Flask = LocalProxy(  # type: ignore[assignment]\n    _cv_app, \"app\", unbound_message=_no_app_msg\n)\ng: _AppCtxGlobals = LocalProxy(  # type: ignore[assignment]\n    _cv_app, \"g\", unbound_message=_no_app_msg\n)\n\n_no_req_msg = \"\"\"\\\nWorking outside of request context.\n\nThis typically means that you attempted to use functionality that needed\nan active HTTP request. Consult the documentation on testing for\ninformation about how to avoid this problem.\\\n\"\"\"\n_cv_request: ContextVar[RequestContext] = ContextVar(\"flask.request_ctx\")\nrequest_ctx: RequestContext = LocalProxy(  # type: ignore[assignment]\n    _cv_request, unbound_message=_no_req_msg\n)\nrequest: Request = LocalProxy(  # type: ignore[assignment]\n    _cv_request, \"request\", unbound_message=_no_req_msg\n)\nsession: SessionMixin = LocalProxy(  # type: ignore[assignment]\n    _cv_request, \"session\", unbound_message=_no_req_msg\n)",
+                "filename": "src/flask/globals.py",
+                "start_index": 0,
+                "end_index": 1712,
+                "start_line": 1,
+                "end_line": 51,
+                "max_line": 51,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            },
+            {
+                "code": "from task_app import create_app\n\nflask_app = create_app()\ncelery_app = flask_app.extensions[\"celery\"]",
+                "filename": "examples/celery/make_celery.py",
+                "start_index": 0,
+                "end_index": 101,
+                "start_line": 1,
+                "end_line": 4,
+                "max_line": 4,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            },
+            {
+                "code": "class Flask(App):",
+                "filename": "src/flask/app.py",
+                "start_index": 2552,
+                "end_index": 2569,
+                "start_line": 76,
+                "end_line": 76,
+                "max_line": 1477,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            },
+            {
+                "code": "from __future__ import annotations\n\nimport os\nimport sys\nimport typing as t\nimport weakref\nfrom collections.abc import Iterator as _abc_Iterator\nfrom datetime import timedelta\nfrom inspect import iscoroutinefunction\nfrom itertools import chain\nfrom types import TracebackType\nfrom urllib.parse import quote as _url_quote\n\nimport click\nfrom werkzeug.datastructures import Headers\nfrom werkzeug.datastructures import ImmutableDict\nfrom werkzeug.exceptions import BadRequestKeyError\nfrom werkzeug.exceptions import HTTPException\nfrom werkzeug.exceptions import InternalServerError\nfrom werkzeug.routing import BuildError\nfrom werkzeug.routing import MapAdapter\nfrom werkzeug.routing import RequestRedirect\nfrom werkzeug.routing import RoutingException\nfrom werkzeug.routing import Rule\nfrom werkzeug.serving import is_running_from_reloader\nfrom werkzeug.wrappers import Response as BaseResponse\n\nfrom . import cli\nfrom . import typing as ft\nfrom .ctx import AppContext\nfrom .ctx import RequestContext\nfrom .globals import _cv_app\nfrom .globals import _cv_request\nfrom .globals import current_app\nfrom .globals import g\nfrom .globals import request\nfrom .globals import request_ctx\nfrom .globals import session\nfrom .helpers import get_debug_flag\nfrom .helpers import get_flashed_messages\nfrom .helpers import get_load_dotenv\nfrom .helpers import send_from_directory\nfrom .sansio.app import App\nfrom .sansio.scaffold import _sentinel\nfrom .sessions import SecureCookieSessionInterface\nfrom .sessions import SessionInterface\nfrom .signals import appcontext_tearing_down\nfrom .signals import got_request_exception\nfrom .signals import request_finished\nfrom .signals import request_started\nfrom .signals import request_tearing_down\nfrom .templating import Environment\nfrom .wrappers import Request\nfrom .wrappers import Response\n\nif t.TYPE_CHECKING:  # pragma: no cover\n    from .testing import FlaskClient\n    from .testing import FlaskCliRunner\n\nT_shell_context_processor = t.TypeVar(\n    \"T_shell_context_processor\", bound=ft.ShellContextProcessorCallable\n)\nT_teardown = t.TypeVar(\"T_teardown\", bound=ft.TeardownCallable)\nT_template_filter = t.TypeVar(\"T_template_filter\", bound=ft.TemplateFilterCallable)\nT_template_global = t.TypeVar(\"T_template_global\", bound=ft.TemplateGlobalCallable)\nT_template_test = t.TypeVar(\"T_template_test\", bound=ft.TemplateTestCallable)\n\n\ndef _make_timedelta(value: timedelta | int | None) -> timedelta | None:\n    if value is None or isinstance(value, timedelta):\n        return value\n\n    return timedelta(seconds=value)",
+                "filename": "src/flask/app.py",
+                "start_index": 0,
+                "end_index": 2549,
+                "start_line": 1,
+                "end_line": 73,
+                "max_line": 1477,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            },
+            {
+                "code": "from __future__ import annotations\n\nimport contextvars\nimport sys\nimport typing as t\nfrom functools import update_wrapper\nfrom types import TracebackType\n\nfrom werkzeug.exceptions import HTTPException\n\nfrom . import typing as ft\nfrom .globals import _cv_app\nfrom .globals import _cv_request\nfrom .signals import appcontext_popped\nfrom .signals import appcontext_pushed\n\nif t.TYPE_CHECKING:  # pragma: no cover\n    from .app import Flask\n    from .sessions import SessionMixin\n    from .wrappers import Request\n\n\n# a singleton sentinel value for parameter defaults\n_sentinel = object()",
+                "filename": "src/flask/ctx.py",
+                "start_index": 0,
+                "end_index": 584,
+                "start_line": 1,
+                "end_line": 24,
+                "max_line": 440,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            },
+            {
+                "code": "def test_cli_runner(self, **kwargs: t.Any) -> FlaskCliRunner:\n        \"\"\"Create a CLI runner for testing CLI commands.\n        See :ref:`testing-cli`.\n\n        Returns an instance of :attr:`test_cli_runner_class`, by default\n        :class:`~flask.testing.FlaskCliRunner`. The Flask app object is\n        passed as the first argument.\n\n        .. versionadded:: 1.0\n        \"\"\"\n        cls = self.test_cli_runner_class\n\n        if cls is None:\n            from .testing import FlaskCliRunner as cls\n\n        return cls(self, **kwargs)  # type: ignore\n\n    def handle_http_exception(\n        self, e: HTTPException\n    ) -> HTTPException | ft.ResponseReturnValue:\n        \"\"\"Handles an HTTP exception.  By default this will invoke the\n        registered error handlers and fall back to returning the\n        exception as response.\n\n        .. versionchanged:: 1.0.3\n            ``RoutingException``, used internally for actions such as\n             slash redirects during routing, is not passed to error\n             handlers.\n\n        .. versionchanged:: 1.0\n            Exceptions are looked up by code *and* by MRO, so\n            ``HTTPException`` subclasses can be handled with a catch-all\n            handler for the base ``HTTPException``.\n\n        .. versionadded:: 0.3\n        \"\"\"\n        # Proxy exceptions don't have error codes.  We want to always return\n        # those unchanged as errors\n        if e.code is None:\n            return e\n\n        # RoutingExceptions are used internally to trigger routing\n        # actions, such as slash redirects raising RequestRedirect. They\n        # are not raised or handled in user code.\n        if isinstance(e, RoutingException):\n            return e\n\n        handler = self._find_error_handler(e, request.blueprints)\n        if handler is None:\n            return e\n        return self.ensure_sync(handler)(e)",
+                "filename": "src/flask/app.py",
+                "start_index": 27387,
+                "end_index": 29252,
+                "start_line": 677,
+                "end_line": 759,
+                "max_line": 1477,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            },
+            {
+                "code": "from __future__ import annotations\n\nimport logging\nimport os\nimport sys\nimport typing as t\nfrom datetime import timedelta\nfrom itertools import chain\n\nfrom werkzeug.exceptions import Aborter\nfrom werkzeug.exceptions import BadRequest\nfrom werkzeug.exceptions import BadRequestKeyError\nfrom werkzeug.routing import BuildError\nfrom werkzeug.routing import Map\nfrom werkzeug.routing import Rule\nfrom werkzeug.sansio.response import Response\nfrom werkzeug.utils import cached_property\nfrom werkzeug.utils import redirect as _wz_redirect\n\nfrom .. import typing as ft\nfrom ..config import Config\nfrom ..config import ConfigAttribute\nfrom ..ctx import _AppCtxGlobals\nfrom ..helpers import _split_blueprint_path\nfrom ..helpers import get_debug_flag\nfrom ..json.provider import DefaultJSONProvider\nfrom ..json.provider import JSONProvider\nfrom ..logging import create_logger\nfrom ..templating import DispatchingJinjaLoader\nfrom ..templating import Environment\nfrom .scaffold import _endpoint_from_view_func\nfrom .scaffold import find_package\nfrom .scaffold import Scaffold\nfrom .scaffold import setupmethod\n\nif t.TYPE_CHECKING:  # pragma: no cover\n    from werkzeug.wrappers import Response as BaseResponse\n    from .blueprints import Blueprint\n    from ..testing import FlaskClient\n    from ..testing import FlaskCliRunner\n\nT_shell_context_processor = t.TypeVar(\n    \"T_shell_context_processor\", bound=ft.ShellContextProcessorCallable\n)\nT_teardown = t.TypeVar(\"T_teardown\", bound=ft.TeardownCallable)\nT_template_filter = t.TypeVar(\"T_template_filter\", bound=ft.TemplateFilterCallable)\nT_template_global = t.TypeVar(\"T_template_global\", bound=ft.TemplateGlobalCallable)\nT_template_test = t.TypeVar(\"T_template_test\", bound=ft.TemplateTestCallable)\n\n\ndef _make_timedelta(value: timedelta | int | None) -> timedelta | None:\n    if value is None or isinstance(value, timedelta):\n        return value\n\n    return timedelta(seconds=value)",
+                "filename": "src/flask/sansio/app.py",
+                "start_index": 0,
+                "end_index": 1924,
+                "start_line": 1,
+                "end_line": 55,
+                "max_line": 964,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            },
+            {
+                "code": "from __future__ import annotations\n\nimport typing as t\n\nif t.TYPE_CHECKING:  # pragma: no cover\n    from _typeshed.wsgi import WSGIApplication  # noqa: F401\n    from werkzeug.datastructures import Headers  # noqa: F401\n    from werkzeug.sansio.response import Response  # noqa: F401\n\n# The possible types that are directly convertible or are a Response object.\nResponseValue = t.Union[\n    \"Response\",\n    str,\n    bytes,\n    t.List[t.Any],\n    # Only dict is actually accepted, but Mapping allows for TypedDict.\n    t.Mapping[str, t.Any],\n    t.Iterator[str],\n    t.Iterator[bytes],\n]\n\n# the possible types for an individual HTTP header\n# This should be a Union, but mypy doesn't pass unless it's a TypeVar.\nHeaderValue = t.Union[str, t.List[str], t.Tuple[str, ...]]\n\n# the possible types for HTTP headers\nHeadersValue = t.Union[\n    \"Headers\",\n    t.Mapping[str, HeaderValue],\n    t.Sequence[t.Tuple[str, HeaderValue]],\n]\n\n# The possible types returned by a route function.\nResponseReturnValue = t.Union[\n    ResponseValue,\n    t.Tuple[ResponseValue, HeadersValue],\n    t.Tuple[ResponseValue, int],\n    t.Tuple[ResponseValue, int, HeadersValue],\n    \"WSGIApplication\",\n]\n\n# Allow any subclass of werkzeug.Response, such as the one from Flask,\n# as a callback argument. Using werkzeug.Response directly makes a\n# callback annotated with flask.Response fail type checking.\nResponseClass = t.TypeVar(\"ResponseClass\", bound=\"Response\")\n\nAppOrBlueprintKey = t.Optional[str]  # The App key is None, whereas blueprints are named\nAfterRequestCallable = t.Union[\n    t.Callable[[ResponseClass], ResponseClass],\n    t.Callable[[ResponseClass], t.Awaitable[ResponseClass]],\n]\nBeforeFirstRequestCallable = t.Union[\n    t.Callable[[], None], t.Callable[[], t.Awaitable[None]]\n]\nBeforeRequestCallable = t.Union[\n    t.Callable[[], t.Optional[ResponseReturnValue]],\n    t.Callable[[], t.Awaitable[t.Optional[ResponseReturnValue]]],\n]\nShellContextProcessorCallable = t.Callable[[], t.Dict[str, t.Any]]\nTeardownCallable = t.Union[\n    t.Callable[[t.Optional[BaseException]], None],\n    t.Callable[[t.Optional[BaseException]], t.Awaitable[None]],\n]\nTemplateContextProcessorCallable = t.Union[\n    t.Callable[[], t.Dict[str, t.Any]],\n    t.Callable[[], t.Awaitable[t.Dict[str, t.Any]]],\n]\nTemplateFilterCallable = t.Callable[..., t.Any]\nTemplateGlobalCallable = t.Callable[..., t.Any]\nTemplateTestCallable = t.Callable[..., bool]\nURLDefaultCallable = t.Callable[[str, dict], None]\nURLValuePreprocessorCallable = t.Callable[[t.Optional[str], t.Optional[dict]], None]\n\n# This should take Exception, but that either breaks typing the argument\n# with a specific exception, or decorating multiple times with different\n# exceptions (and using a union type on the argument).\n# https://github.com/pallets/flask/issues/4095\n# https://github.com/pallets/flask/issues/4295\n# https://github.com/pallets/flask/issues/4297",
+                "filename": "src/flask/typing.py",
+                "start_index": 0,
+                "end_index": 2891,
+                "start_line": 1,
+                "end_line": 79,
+                "max_line": 88,
+                "git_instance": "github",
+                "repo_name": "testbed/pallets__flask__2.0",
+                "sha": ""
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "src/flask/cli.py": [
+                {
+                    "chunk": {
+                        "code": "from __future__ import annotations\n\nimport ast\nimport importlib.metadata\nimport inspect\nimport os\nimport platform\nimport re\nimport sys\nimport traceback\nimport typing as t\nfrom functools import update_wrapper\nfrom operator import itemgetter\n\nimport click\nfrom click.core import ParameterSource\nfrom werkzeug import run_simple\nfrom werkzeug.serving import is_running_from_reloader\nfrom werkzeug.utils import import_string\n\nfrom .globals import current_app\nfrom .helpers import get_debug_flag\nfrom .helpers import get_load_dotenv\n\nif t.TYPE_CHECKING:\n    from .app import Flask\n\n\nclass NoAppException(click.UsageError):\n    \"\"\"Raised if an application cannot be found or loaded.\"\"\"\n\n\ndef find_best_app(module):\n    \"\"\"Given a module instance this tries to find the best possible\n    application in the module or raises an exception.\n    \"\"\"\n    from . import Flask\n\n    # Search for the most common names first.\n    for attr_name in (\"app\", \"application\"):\n        app = getattr(module, attr_name, None)\n\n        if isinstance(app, Flask):\n            return app\n\n    # Otherwise find the only object that is a Flask instance.\n    matches = [v for v in module.__dict__.values() if isinstance(v, Flask)]\n\n    if len(matches) == 1:\n        return matches[0]\n    elif len(matches) > 1:\n        raise NoAppException(\n            \"Detected multiple Flask applications in module\"\n            f\" '{module.__name__}'. Use '{module.__name__}:name'\"\n            \" to specify the correct one.\"\n        )\n\n    # Search for app factory functions.\n    for attr_name in (\"create_app\", \"make_app\"):\n        app_factory = getattr(module, attr_name, None)\n\n        if inspect.isfunction(app_factory):\n            try:\n                app = app_factory()\n\n                if isinstance(app, Flask):\n                    return app\n            except TypeError as e:\n                if not _called_with_wrong_args(app_factory):\n                    raise\n\n                raise NoAppException(\n                    f\"Detected factory '{attr_name}' in module '{module.__name__}',\"\n                    \" but could not call it without arguments. Use\"\n                    f\" '{module.__name__}:{attr_name}(args)'\"\n                    \" to specify arguments.\"\n                ) from e\n\n    raise NoAppException(\n        \"Failed to find Flask application or factory in module\"\n        f\" '{module.__name__}'. Use '{module.__name__}:name'\"\n        \" to specify one.\"\n    )",
+                        "filename": "src/flask/cli.py",
+                        "start_index": 0,
+                        "end_index": 2439,
+                        "start_line": 1,
+                        "end_line": 998,
+                        "max_line": 1068,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pallets__flask__2.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the code where the exception is being raised incorrectly, which is the root cause of the issue reported."
+                }
+            ]
+        },
+        "solution_task": "Based on the provided information, the issue seems to be related to the incorrect handling of exceptions during the lazy-loading process in Flask. The suggested fix is to modify the Flask code to correctly re-raise the exception using `raise exc_info[1]`.\n\nTo resolve the issue:\n\n- Locate the `_flush_bg_loading_exception` method in the `flask/cli.py` file.\n- Inside this method, replace the current exception raising mechanism with `raise exc_info[1]` to ensure that the original exception is re-raised correctly.\n- Ensure that `exc_info` is a tuple containing the exception type, value, and traceback, where `exc_info[1]` is the exception instance that should be raised.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT. It correctly identifies the issue as being related to the incorrect handling of exceptions during the lazy-loading process in Flask and suggests modifying the Flask code to re-raise the exception properly. The RESPONSE also gives precise instructions on where to locate the method that needs to be changed and what to replace it with. Additionally, it provides a link to the relevant code snippet, which is helpful for locating the exact location of the issue. However, the RESPONSE could have been more comprehensive by explaining why the current exception handling is incorrect and why the proposed solution would work, which would have made it more informative.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711743016.1029289,
+        "result": "Based on the provided information, the issue seems to be related to the incorrect handling of exceptions during the lazy-loading process in Flask. The suggested fix is to modify the Flask code to correctly re-raise the exception using `raise exc_info[1]`.\n\nTo resolve the issue:\n\n- Locate the `_flush_bg_loading_exception` method in the `flask/cli.py` file.\n- Inside this method, replace the current exception raising mechanism with `raise exc_info[1]` to ensure that the original exception is re-raised correctly.\n- Ensure that `exc_info` is a tuple containing the exception type, value, and traceback, where `exc_info[1]` is the exception instance that should be raised.\n\n### Code snippets to check\n\n-  \u2192 [src](https://github.com/testbed/pallets__flask__2.0/tree//src) \u2192 [flask](https://github.com/testbed/pallets__flask__2.0/tree//src/flask)- [Lines 1 - 998](https://github.com/testbed/pallets__flask__2.0/blob//src/flask/cli.py#L1-L998)\n\n This snippet contains the code where the exception is being raised incorrectly, which is the root cause of the issue reported."
+    }
+}

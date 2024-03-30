@@ -1,0 +1,189 @@
+{
+    "id": "sphinx-doc__sphinx-10137",
+    "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+    "task_id": 7480623312171131535,
+    "title": "Allow to bail out extlink replacement suggestion",
+    "body": "Feature added via https://github.com/sphinx-doc/sphinx/pull/9800. Consider the following ext link:\r\n```\r\n# conf.py\r\nextlinks = {\r\n    \"user\": (\"https://github.com/%s\", \"@\"),\r\n}\r\n```\r\nand the following text:\r\n```\r\nAll pull requests and merges to the ``main`` branch are tested using `GitHub Actions <https://github.com/features/actions>`_ .\r\n````\r\n\r\n```\r\nhardcoded link 'https://github.com/features/actions' could be replaced by an extlink (try using ':user:`features/actions`' instead)\r\n```\r\n\r\nCan we somehow bailout out the check here, or perhaps the suggestion should only apply if there's no `/` in the extlink, @tk0miya what do you think? cc @hoefling\r\n\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/sphinx-doc__sphinx__5.3.git",
+    "requested_commit": "",
+    "mayil_response": "To implement the feature request to allow bailing out of the extlink replacement suggestion, you can modify the `ExternalLinksChecker` class in `sphinx/ext/extlinks.py`. Specifically, you can add a condition to the `check_uri` method to skip the warning if certain criteria are met, such as the presence of a `/` in the extlink.\n\nHere's a high-level overview of the steps to implement the feature:\n\n- Add a new configuration option to `conf.py` to enable or disable the bailout check.\n- Modify the `check_uri` method in the `ExternalLinksChecker` class to respect this new configuration option.\n- Update the documentation to describe the new configuration option.\n\nHere's a more detailed implementation:\n\n1. Add a new configuration option in `conf.py`:\n```python\n# conf.py\nextlinks_bailout_slash = True  # Set to False to disable bailout when '/' is present\n```\n\n2. Modify the `check_uri` method in `sphinx/ext/extlinks.py`:\n```python\ndef check_uri(self, refnode: nodes.reference) -> None:\n    # ... existing code ...\n\n    for alias, (base_uri, _caption) in self.app.config.extlinks.items():\n        uri_pattern = re.compile(re.escape(base_uri).replace('%s', '(?P<value>.+)'))\n\n        match = uri_pattern.match(uri)\n        if match:\n            value = match.groupdict().get('value')\n            if value:\n                # Check if bailout condition is met\n                if self.app.config.extlinks_bailout_slash and '/' in value:\n                    continue  # Bailout condition met, skip the warning\n\n                # ... existing code to build a replacement suggestion ...\n                logger.warning(msg, uri, replacement, location=refnode)\n```\n\n3. Update the documentation to describe the new configuration option:\n```rst\n.. confval:: extlinks_bailout_slash\n\n   If set to ``True``, the extlink replacement suggestion will not be triggered for links that contain a ``/`` after the base URL. This is useful for skipping suggestions for certain URLs that should not be replaced by extlinks.\n```\n\n4. Add the new configuration option to the `setup` function in `sphinx/ext/extlinks.py`:\n```python\ndef setup(app: Sphinx) -> dict[str, Any]:\n    # ... existing code ...\n    app.add_config_value('extlinks_bailout_slash', True, 'env')\n    # ... existing code ...\n```\n\nThis implementation adds a new configuration option `extlinks_bailout_slash` that, when set to `True`, will skip the extlink replacement suggestion if the matched value contains a `/`. This allows users to opt out of the suggestion for specific links.\n\n### Code snippets to check\n\n-  \u2192 [sphinx](https://github.com/testbed/sphinx-doc__sphinx__5.3/tree//sphinx) \u2192 [ext](https://github.com/testbed/sphinx-doc__sphinx__5.3/tree//sphinx/ext)- [Lines 1 - 84](https://github.com/testbed/sphinx-doc__sphinx__5.3/blob//sphinx/ext/extlinks.py#L1-L84)\n\n This snippet contains the ExternalLinksChecker class and the check_uri method where the logic for emitting a warning for hardcoded links that could be replaced by an extlink is implemented. The issue describes a problem with this warning system, so changes here are likely necessary to allow bailing out or refining the suggestion mechanism. \n\n\n   - [Lines 87 - 120](https://github.com/testbed/sphinx-doc__sphinx__5.3/blob//sphinx/ext/extlinks.py#L87-L120)\n\n This snippet defines the make_link_role function which creates the actual link nodes based on the extlinks configuration. Understanding how these roles are created may be necessary to address the issue of refining or bailing out the extlink replacement suggestion.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0002415,
+        "snippet_processor": 0.04437,
+        "issue_star_creation": 0.022489999999999996,
+        "issue_star_solver": 0.05494,
+        "bouncer": 0.02341
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711701822.7313228,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"Extension to save typing and prevent hard-coding of base URLs in reST files.\n\nThis adds a new config value called ``extlinks`` that is created like this::\n\n   extlinks = {'exmpl': ('https://example.invalid/%s.html', caption), ...}\n\nNow you can use e.g. :exmpl:`foo` in your documents.  This will create a\nlink to ``https://example.invalid/foo.html``.  The link caption depends on\nthe *caption* value given:\n\n- If it is ``None``, the caption will be the full URL.\n- If it is a string, it must contain ``%s`` exactly once.  In this case the\n  caption will be *caption* with the role content substituted for ``%s``.\n\nYou can also give an explicit caption, e.g. :exmpl:`Foo <foo>`.\n\nBoth, the url string and the caption string must escape ``%`` as ``%%``.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport re\nfrom typing import Any\n\nfrom docutils import nodes, utils\nfrom docutils.nodes import Node, system_message\nfrom docutils.parsers.rst.states import Inliner\n\nimport sphinx\nfrom sphinx.application import Sphinx\nfrom sphinx.locale import __\nfrom sphinx.transforms.post_transforms import SphinxPostTransform\nfrom sphinx.util import logging, rst\nfrom sphinx.util.nodes import split_explicit_title\nfrom sphinx.util.typing import RoleFunction\n\nlogger = logging.getLogger(__name__)\n\n\nclass ExternalLinksChecker(SphinxPostTransform):\n    \"\"\"\n    For each external link, check if it can be replaced by an extlink.\n\n    We treat each ``reference`` node without ``internal`` attribute as an external link.\n    \"\"\"\n\n    default_priority = 500\n\n    def run(self, **kwargs: Any) -> None:\n        if not self.config.extlinks_detect_hardcoded_links:\n            return\n\n        for refnode in self.document.findall(nodes.reference):\n            self.check_uri(refnode)\n\n    def check_uri(self, refnode: nodes.reference) -> None:\n        \"\"\"\n        If the URI in ``refnode`` has a replacement in ``extlinks``,\n        emit a warning with a replacement suggestion.\n        \"\"\"\n        if 'internal' in refnode or 'refuri' not in refnode:\n            return\n\n        uri = refnode['refuri']\n        title = refnode.astext()\n\n        for alias, (base_uri, _caption) in self.app.config.extlinks.items():\n            uri_pattern = re.compile(re.escape(base_uri).replace('%s', '(?P<value>.+)'))\n\n            match = uri_pattern.match(uri)\n            if (\n                match and\n                match.groupdict().get('value') and\n                '/' not in match.groupdict()['value']\n            ):\n                # build a replacement suggestion\n                msg = __('hardcoded link %r could be replaced by an extlink '\n                         '(try using %r instead)')\n                value = match.groupdict().get('value')\n                if uri != title:\n                    replacement = f\":{alias}:`{rst.escape(title)} <{value}>`\"\n                else:\n                    replacement = f\":{alias}:`{value}`\"\n                logger.warning(msg, uri, replacement, location=refnode)",
+                "filename": "sphinx/ext/extlinks.py",
+                "start_index": 0,
+                "end_index": 2976,
+                "start_line": 1,
+                "end_line": 84,
+                "max_line": 120,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            },
+            {
+                "code": "class CheckExternalLinksBuilder(DummyBuilder):",
+                "filename": "sphinx/builders/linkcheck.py",
+                "start_index": 3040,
+                "end_index": 3086,
+                "start_line": 108,
+                "end_line": 108,
+                "max_line": 592,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            },
+            {
+                "code": "class HyperlinkCollector(SphinxPostTransform):\n    builders = ('linkcheck',)\n    default_priority = 800\n\n    def run(self, **kwargs: Any) -> None:\n        builder = cast(CheckExternalLinksBuilder, self.app.builder)\n        hyperlinks = builder.hyperlinks\n\n        def add_uri(uri: str, node: nodes.Element) -> None:\n            newuri = self.app.emit_firstresult('linkcheck-process-uri', uri)\n            if newuri:\n                uri = newuri\n\n            try:\n                lineno = get_node_line(node)\n            except ValueError:\n                lineno = None\n            uri_info = Hyperlink(uri, self.env.docname, lineno)\n            if uri not in hyperlinks:\n                hyperlinks[uri] = uri_info\n\n        # reference nodes\n        for refnode in self.document.findall(nodes.reference):\n            if 'refuri' not in refnode:\n                continue\n            uri = refnode['refuri']\n            add_uri(uri, refnode)\n\n        # image nodes\n        for imgnode in self.document.findall(nodes.image):\n            uri = imgnode['candidates'].get('?')\n            if uri and '://' in uri:\n                add_uri(uri, imgnode)\n\n        # raw nodes\n        for rawnode in self.document.findall(nodes.raw):\n            uri = rawnode.get('source')\n            if uri and '://' in uri:\n                add_uri(uri, rawnode)\n\n\ndef rewrite_github_anchor(app: Sphinx, uri: str) -> str | None:\n    \"\"\"Rewrite anchor name of the hyperlink to github.com\n\n    The hyperlink anchors in github.com are dynamically generated.  This rewrites\n    them before checking and makes them comparable.\n    \"\"\"\n    parsed = urlparse(uri)\n    if parsed.hostname == \"github.com\" and parsed.fragment:\n        prefixed = parsed.fragment.startswith('user-content-')\n        if not prefixed:\n            fragment = f'user-content-{parsed.fragment}'\n            return urlunparse(parsed._replace(fragment=fragment))\n    return None\n\n\ndef compile_linkcheck_allowed_redirects(app: Sphinx, config: Config) -> None:\n    \"\"\"Compile patterns in linkcheck_allowed_redirects to the regexp objects.\"\"\"\n    for url, pattern in list(app.config.linkcheck_allowed_redirects.items()):\n        try:\n            app.config.linkcheck_allowed_redirects[re.compile(url)] = re.compile(pattern)\n        except re.error as exc:\n            logger.warning(__('Failed to compile regex in linkcheck_allowed_redirects: %r %s'),\n                           exc.pattern, exc.msg)\n        finally:\n            # Remove the original regexp-string\n            app.config.linkcheck_allowed_redirects.pop(url)",
+                "filename": "sphinx/builders/linkcheck.py",
+                "start_index": 19389,
+                "end_index": 21951,
+                "start_line": 493,
+                "end_line": 559,
+                "max_line": 592,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            },
+            {
+                "code": "def make_link_role(name: str, base_url: str, caption: str) -> RoleFunction:\n    # Check whether we have base_url and caption strings have an '%s' for\n    # expansion.  If not, fall back the the old behaviour and use the string as\n    # a prefix.\n    # Remark: It is an implementation detail that we use Pythons %-formatting.\n    # So far we only expose ``%s`` and require quoting of ``%`` using ``%%``.\n    def role(typ: str, rawtext: str, text: str, lineno: int,\n             inliner: Inliner, options: dict = {}, content: list[str] = [],\n             ) -> tuple[list[Node], list[system_message]]:\n        text = utils.unescape(text)\n        has_explicit_title, title, part = split_explicit_title(text)\n        full_url = base_url % part\n        if not has_explicit_title:\n            if caption is None:\n                title = full_url\n            else:\n                title = caption % part\n        pnode = nodes.reference(title, title, internal=False, refuri=full_url)\n        return [pnode], []\n    return role\n\n\ndef setup_link_roles(app: Sphinx) -> None:\n    for name, (base_url, caption) in app.config.extlinks.items():\n        app.add_role(name, make_link_role(name, base_url, caption))\n\n\ndef setup(app: Sphinx) -> dict[str, Any]:\n    app.add_config_value('extlinks', {}, 'env')\n    app.add_config_value('extlinks_detect_hardcoded_links', False, 'env')\n\n    app.connect('builder-inited', setup_link_roles)\n    app.add_post_transform(ExternalLinksChecker)\n    return {'version': sphinx.__display_version__, 'parallel_read_safe': True}",
+                "filename": "sphinx/ext/extlinks.py",
+                "start_index": 2979,
+                "end_index": 4522,
+                "start_line": 87,
+                "end_line": 120,
+                "max_line": 120,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            },
+            {
+                "code": "# Ref: https://help.github.com/en/github/building-a-strong-community/configuring-issue-templates-for-your-repository#configuring-the-template-chooser\nblank_issues_enabled: false  # default: true\ncontact_links:\n- name: Question\n  url: https://stackoverflow.com/questions/tagged/python-sphinx\n  about: For Q&A purpose, please use Stackoverflow with the tag python-sphinx\n- name: Discussion\n  url: https://groups.google.com/forum/#!forum/sphinx-users\n  about: For general discussion, please use sphinx-users mailing list.",
+                "filename": ".github/ISSUE_TEMPLATE/config.yml",
+                "start_index": 0,
+                "end_index": 518,
+                "start_line": 1,
+                "end_line": 9,
+                "max_line": 9,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            },
+            {
+                "code": "def setup(app: Sphinx) -> dict[str, Any]:\n    app.add_builder(CheckExternalLinksBuilder)\n    app.add_post_transform(HyperlinkCollector)\n\n    app.add_config_value('linkcheck_ignore', [], False)\n    app.add_config_value('linkcheck_exclude_documents', [], False)\n    app.add_config_value('linkcheck_allowed_redirects', {}, False)\n    app.add_config_value('linkcheck_auth', [], False)\n    app.add_config_value('linkcheck_request_headers', {}, False)\n    app.add_config_value('linkcheck_retries', 1, False)\n    app.add_config_value('linkcheck_timeout', None, False, [int, float])\n    app.add_config_value('linkcheck_workers', 5, False)\n    app.add_config_value('linkcheck_anchors', True, False)\n    # Anchors starting with ! are ignored since they are\n    # commonly used for dynamic pages\n    app.add_config_value('linkcheck_anchors_ignore', [\"^!\"], False)\n    app.add_config_value('linkcheck_rate_limit_timeout', 300.0, False)\n\n    app.add_event('linkcheck-process-uri')\n\n    app.connect('config-inited', compile_linkcheck_allowed_redirects, priority=800)\n\n    # FIXME: Disable URL rewrite handler for github.com temporarily.\n    # ref: https://github.com/sphinx-doc/sphinx/issues/9435\n    # app.connect('linkcheck-process-uri', rewrite_github_anchor)\n\n    return {\n        'version': 'builtin',\n        'parallel_read_safe': True,\n        'parallel_write_safe': True,\n    }",
+                "filename": "sphinx/builders/linkcheck.py",
+                "start_index": 21954,
+                "end_index": 23325,
+                "start_line": 562,
+                "end_line": 592,
+                "max_line": 592,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"\n    Checks for broken external links.\n    \"\"\"\n    name = 'linkcheck'\n    epilog = __('Look for any errors in the above output or in '\n                '%(outdir)s/output.txt')\n\n    def init(self) -> None:\n        self.broken_hyperlinks = 0\n        self.hyperlinks: dict[str, Hyperlink] = {}\n        # set a timeout for non-responding servers\n        socket.setdefaulttimeout(5.0)",
+                "filename": "sphinx/builders/linkcheck.py",
+                "start_index": 3091,
+                "end_index": 3473,
+                "start_line": 1,
+                "end_line": 120,
+                "max_line": 592,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            },
+            {
+                "code": "\"\"\"Add external links to module code in Python object descriptions.\"\"\"\n\nfrom __future__ import annotations\n\nfrom typing import Any\n\nfrom docutils import nodes\nfrom docutils.nodes import Node\n\nimport sphinx\nfrom sphinx import addnodes\nfrom sphinx.application import Sphinx\nfrom sphinx.errors import SphinxError\nfrom sphinx.locale import _\n\n\nclass LinkcodeError(SphinxError):\n    category = \"linkcode error\"\n\n\ndef doctree_read(app: Sphinx, doctree: Node) -> None:\n    env = app.builder.env\n\n    resolve_target = getattr(env.config, 'linkcode_resolve', None)\n    if not callable(env.config.linkcode_resolve):\n        raise LinkcodeError(\n            \"Function `linkcode_resolve` is not given in conf.py\")\n\n    domain_keys = {\n        'py': ['module', 'fullname'],\n        'c': ['names'],\n        'cpp': ['names'],\n        'js': ['object', 'fullname'],\n    }\n\n    for objnode in list(doctree.findall(addnodes.desc)):\n        domain = objnode.get('domain')\n        uris: set[str] = set()\n        for signode in objnode:\n            if not isinstance(signode, addnodes.desc_signature):\n                continue\n\n            # Convert signode to a specified format\n            info = {}\n            for key in domain_keys.get(domain, []):\n                value = signode.get(key)\n                if not value:\n                    value = ''\n                info[key] = value\n            if not info:\n                continue\n\n            # Call user code to resolve the link\n            uri = resolve_target(domain, info)\n            if not uri:\n                # no source\n                continue\n\n            if uri in uris or not uri:\n                # only one link per name, please\n                continue\n            uris.add(uri)\n\n            inline = nodes.inline('', _('[source]'), classes=['viewcode-link'])\n            onlynode = addnodes.only(expr='html')\n            onlynode += nodes.reference('', '', inline, internal=False, refuri=uri)\n            signode += onlynode\n\n\ndef setup(app: Sphinx) -> dict[str, Any]:\n    app.connect('doctree-read', doctree_read)\n    app.add_config_value('linkcode_resolve', None, '')\n    return {'version': sphinx.__display_version__, 'parallel_read_safe': True}",
+                "filename": "sphinx/ext/linkcode.py",
+                "start_index": 0,
+                "end_index": 2202,
+                "start_line": 1,
+                "end_line": 73,
+                "max_line": 73,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            },
+            {
+                "code": "class TokenXRefRole(XRefRole):\n    def process_link(self, env: BuildEnvironment, refnode: Element, has_explicit_title: bool,\n                     title: str, target: str) -> tuple[str, str]:\n        target = target.lstrip('~')  # a title-specific thing\n        if not self.has_explicit_title and title[0] == '~':\n            if ':' in title:\n                _, title = title.split(':')\n            else:\n                title = title[1:]\n        return title, target",
+                "filename": "sphinx/domains/std.py",
+                "start_index": 18682,
+                "end_index": 19148,
+                "start_line": 490,
+                "end_line": 499,
+                "max_line": 1117,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            },
+            {
+                "code": "class AnyXRefRole(XRefRole):\n    def process_link(self, env: BuildEnvironment, refnode: Element, has_explicit_title: bool,\n                     title: str, target: str) -> tuple[str, str]:\n        result = super().process_link(env, refnode, has_explicit_title, title, target)\n        # add all possible context info (i.e. std:program, py:module etc.)\n        refnode.attributes.update(env.ref_context)\n        return result\n\n\nclass PEP(ReferenceRole):\n    def run(self) -> tuple[list[Node], list[system_message]]:\n        target_id = 'index-%s' % self.env.new_serialno('index')\n        entries = [('single', _('Python Enhancement Proposals; PEP %s') % self.target,\n                    target_id, '', None)]\n\n        index = addnodes.index(entries=entries)\n        target = nodes.target('', '', ids=[target_id])\n        self.inliner.document.note_explicit_target(target)\n\n        try:\n            refuri = self.build_uri()\n            reference = nodes.reference('', '', internal=False, refuri=refuri, classes=['pep'])\n            if self.has_explicit_title:\n                reference += nodes.strong(self.title, self.title)\n            else:\n                title = \"PEP \" + self.title\n                reference += nodes.strong(title, title)\n        except ValueError:\n            msg = self.inliner.reporter.error(__('invalid PEP number %s') % self.target,\n                                              line=self.lineno)\n            prb = self.inliner.problematic(self.rawtext, self.rawtext, msg)\n            return [prb], [msg]\n\n        return [index, target, reference], []\n\n    def build_uri(self) -> str:\n        base_url = self.inliner.document.settings.pep_base_url\n        ret = self.target.split('#', 1)\n        if len(ret) == 2:\n            return base_url + 'pep-%04d/#%s' % (int(ret[0]), ret[1])\n        else:\n            return base_url + 'pep-%04d/' % int(ret[0])",
+                "filename": "sphinx/roles.py",
+                "start_index": 6255,
+                "end_index": 8132,
+                "start_line": 163,
+                "end_line": 204,
+                "max_line": 428,
+                "git_instance": "github",
+                "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                "sha": ""
+            }
+        ],
+        "classification": "feature request",
+        "snippet_processor_task": {
+            "sphinx/ext/extlinks.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"Extension to save typing and prevent hard-coding of base URLs in reST files.\n\nThis adds a new config value called ``extlinks`` that is created like this::\n\n   extlinks = {'exmpl': ('https://example.invalid/%s.html', caption), ...}\n\nNow you can use e.g. :exmpl:`foo` in your documents.  This will create a\nlink to ``https://example.invalid/foo.html``.  The link caption depends on\nthe *caption* value given:\n\n- If it is ``None``, the caption will be the full URL.\n- If it is a string, it must contain ``%s`` exactly once.  In this case the\n  caption will be *caption* with the role content substituted for ``%s``.\n\nYou can also give an explicit caption, e.g. :exmpl:`Foo <foo>`.\n\nBoth, the url string and the caption string must escape ``%`` as ``%%``.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport re\nfrom typing import Any\n\nfrom docutils import nodes, utils\nfrom docutils.nodes import Node, system_message\nfrom docutils.parsers.rst.states import Inliner\n\nimport sphinx\nfrom sphinx.application import Sphinx\nfrom sphinx.locale import __\nfrom sphinx.transforms.post_transforms import SphinxPostTransform\nfrom sphinx.util import logging, rst\nfrom sphinx.util.nodes import split_explicit_title\nfrom sphinx.util.typing import RoleFunction\n\nlogger = logging.getLogger(__name__)\n\n\nclass ExternalLinksChecker(SphinxPostTransform):\n    \"\"\"\n    For each external link, check if it can be replaced by an extlink.\n\n    We treat each ``reference`` node without ``internal`` attribute as an external link.\n    \"\"\"\n\n    default_priority = 500\n\n    def run(self, **kwargs: Any) -> None:\n        if not self.config.extlinks_detect_hardcoded_links:\n            return\n\n        for refnode in self.document.findall(nodes.reference):\n            self.check_uri(refnode)\n\n    def check_uri(self, refnode: nodes.reference) -> None:\n        \"\"\"\n        If the URI in ``refnode`` has a replacement in ``extlinks``,\n        emit a warning with a replacement suggestion.\n        \"\"\"\n        if 'internal' in refnode or 'refuri' not in refnode:\n            return\n\n        uri = refnode['refuri']\n        title = refnode.astext()\n\n        for alias, (base_uri, _caption) in self.app.config.extlinks.items():\n            uri_pattern = re.compile(re.escape(base_uri).replace('%s', '(?P<value>.+)'))\n\n            match = uri_pattern.match(uri)\n            if (\n                match and\n                match.groupdict().get('value') and\n                '/' not in match.groupdict()['value']\n            ):\n                # build a replacement suggestion\n                msg = __('hardcoded link %r could be replaced by an extlink '\n                         '(try using %r instead)')\n                value = match.groupdict().get('value')\n                if uri != title:\n                    replacement = f\":{alias}:`{rst.escape(title)} <{value}>`\"\n                else:\n                    replacement = f\":{alias}:`{value}`\"\n                logger.warning(msg, uri, replacement, location=refnode)",
+                        "filename": "sphinx/ext/extlinks.py",
+                        "start_index": 0,
+                        "end_index": 2976,
+                        "start_line": 1,
+                        "end_line": 84,
+                        "max_line": 120,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the ExternalLinksChecker class and the check_uri method where the logic for emitting a warning for hardcoded links that could be replaced by an extlink is implemented. The issue describes a problem with this warning system, so changes here are likely necessary to allow bailing out or refining the suggestion mechanism."
+                },
+                {
+                    "chunk": {
+                        "code": "def make_link_role(name: str, base_url: str, caption: str) -> RoleFunction:\n    # Check whether we have base_url and caption strings have an '%s' for\n    # expansion.  If not, fall back the the old behaviour and use the string as\n    # a prefix.\n    # Remark: It is an implementation detail that we use Pythons %-formatting.\n    # So far we only expose ``%s`` and require quoting of ``%`` using ``%%``.\n    def role(typ: str, rawtext: str, text: str, lineno: int,\n             inliner: Inliner, options: dict = {}, content: list[str] = [],\n             ) -> tuple[list[Node], list[system_message]]:\n        text = utils.unescape(text)\n        has_explicit_title, title, part = split_explicit_title(text)\n        full_url = base_url % part\n        if not has_explicit_title:\n            if caption is None:\n                title = full_url\n            else:\n                title = caption % part\n        pnode = nodes.reference(title, title, internal=False, refuri=full_url)\n        return [pnode], []\n    return role\n\n\ndef setup_link_roles(app: Sphinx) -> None:\n    for name, (base_url, caption) in app.config.extlinks.items():\n        app.add_role(name, make_link_role(name, base_url, caption))\n\n\ndef setup(app: Sphinx) -> dict[str, Any]:\n    app.add_config_value('extlinks', {}, 'env')\n    app.add_config_value('extlinks_detect_hardcoded_links', False, 'env')\n\n    app.connect('builder-inited', setup_link_roles)\n    app.add_post_transform(ExternalLinksChecker)\n    return {'version': sphinx.__display_version__, 'parallel_read_safe': True}",
+                        "filename": "sphinx/ext/extlinks.py",
+                        "start_index": 2979,
+                        "end_index": 4522,
+                        "start_line": 87,
+                        "end_line": 120,
+                        "max_line": 120,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sphinx-doc__sphinx__5.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the make_link_role function which creates the actual link nodes based on the extlinks configuration. Understanding how these roles are created may be necessary to address the issue of refining or bailing out the extlink replacement suggestion."
+                }
+            ]
+        },
+        "solution_task": "To implement the feature request to allow bailing out of the extlink replacement suggestion, you can modify the `ExternalLinksChecker` class in `sphinx/ext/extlinks.py`. Specifically, you can add a condition to the `check_uri` method to skip the warning if certain criteria are met, such as the presence of a `/` in the extlink.\n\nHere's a high-level overview of the steps to implement the feature:\n\n- Add a new configuration option to `conf.py` to enable or disable the bailout check.\n- Modify the `check_uri` method in the `ExternalLinksChecker` class to respect this new configuration option.\n- Update the documentation to describe the new configuration option.\n\nHere's a more detailed implementation:\n\n1. Add a new configuration option in `conf.py`:\n```python\n# conf.py\nextlinks_bailout_slash = True  # Set to False to disable bailout when '/' is present\n```\n\n2. Modify the `check_uri` method in `sphinx/ext/extlinks.py`:\n```python\ndef check_uri(self, refnode: nodes.reference) -> None:\n    # ... existing code ...\n\n    for alias, (base_uri, _caption) in self.app.config.extlinks.items():\n        uri_pattern = re.compile(re.escape(base_uri).replace('%s', '(?P<value>.+)'))\n\n        match = uri_pattern.match(uri)\n        if match:\n            value = match.groupdict().get('value')\n            if value:\n                # Check if bailout condition is met\n                if self.app.config.extlinks_bailout_slash and '/' in value:\n                    continue  # Bailout condition met, skip the warning\n\n                # ... existing code to build a replacement suggestion ...\n                logger.warning(msg, uri, replacement, location=refnode)\n```\n\n3. Update the documentation to describe the new configuration option:\n```rst\n.. confval:: extlinks_bailout_slash\n\n   If set to ``True``, the extlink replacement suggestion will not be triggered for links that contain a ``/`` after the base URL. This is useful for skipping suggestions for certain URLs that should not be replaced by extlinks.\n```\n\n4. Add the new configuration option to the `setup` function in `sphinx/ext/extlinks.py`:\n```python\ndef setup(app: Sphinx) -> dict[str, Any]:\n    # ... existing code ...\n    app.add_config_value('extlinks_bailout_slash', True, 'env')\n    # ... existing code ...\n```\n\nThis implementation adds a new configuration option `extlinks_bailout_slash` that, when set to `True`, will skip the extlink replacement suggestion if the matched value contains a `/`. This allows users to opt out of the suggestion for specific links.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant suggestions that can directly lead to the successful implementation or improvement of the requested feature.",
+            "supporting_evidence": "The RESPONSE provides a detailed, step-by-step guide on how to implement a feature that allows users to bail out of the extlink replacement suggestion. It suggests adding a new configuration option in 'conf.py', modifying the 'check_uri' method in the 'ExternalLinksChecker' class, updating the documentation, and adding the new configuration option to the 'setup' function. The RESPONSE also includes code snippets and a rationale for the changes, which are directly relevant to the feature request. The RESPONSE is comprehensive and addresses the feature request thoroughly, with only minor details potentially left to the discretion of the implementer.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711701901.7792158,
+        "result": "To implement the feature request to allow bailing out of the extlink replacement suggestion, you can modify the `ExternalLinksChecker` class in `sphinx/ext/extlinks.py`. Specifically, you can add a condition to the `check_uri` method to skip the warning if certain criteria are met, such as the presence of a `/` in the extlink.\n\nHere's a high-level overview of the steps to implement the feature:\n\n- Add a new configuration option to `conf.py` to enable or disable the bailout check.\n- Modify the `check_uri` method in the `ExternalLinksChecker` class to respect this new configuration option.\n- Update the documentation to describe the new configuration option.\n\nHere's a more detailed implementation:\n\n1. Add a new configuration option in `conf.py`:\n```python\n# conf.py\nextlinks_bailout_slash = True  # Set to False to disable bailout when '/' is present\n```\n\n2. Modify the `check_uri` method in `sphinx/ext/extlinks.py`:\n```python\ndef check_uri(self, refnode: nodes.reference) -> None:\n    # ... existing code ...\n\n    for alias, (base_uri, _caption) in self.app.config.extlinks.items():\n        uri_pattern = re.compile(re.escape(base_uri).replace('%s', '(?P<value>.+)'))\n\n        match = uri_pattern.match(uri)\n        if match:\n            value = match.groupdict().get('value')\n            if value:\n                # Check if bailout condition is met\n                if self.app.config.extlinks_bailout_slash and '/' in value:\n                    continue  # Bailout condition met, skip the warning\n\n                # ... existing code to build a replacement suggestion ...\n                logger.warning(msg, uri, replacement, location=refnode)\n```\n\n3. Update the documentation to describe the new configuration option:\n```rst\n.. confval:: extlinks_bailout_slash\n\n   If set to ``True``, the extlink replacement suggestion will not be triggered for links that contain a ``/`` after the base URL. This is useful for skipping suggestions for certain URLs that should not be replaced by extlinks.\n```\n\n4. Add the new configuration option to the `setup` function in `sphinx/ext/extlinks.py`:\n```python\ndef setup(app: Sphinx) -> dict[str, Any]:\n    # ... existing code ...\n    app.add_config_value('extlinks_bailout_slash', True, 'env')\n    # ... existing code ...\n```\n\nThis implementation adds a new configuration option `extlinks_bailout_slash` that, when set to `True`, will skip the extlink replacement suggestion if the matched value contains a `/`. This allows users to opt out of the suggestion for specific links.\n\n### Code snippets to check\n\n-  \u2192 [sphinx](https://github.com/testbed/sphinx-doc__sphinx__5.3/tree//sphinx) \u2192 [ext](https://github.com/testbed/sphinx-doc__sphinx__5.3/tree//sphinx/ext)- [Lines 1 - 84](https://github.com/testbed/sphinx-doc__sphinx__5.3/blob//sphinx/ext/extlinks.py#L1-L84)\n\n This snippet contains the ExternalLinksChecker class and the check_uri method where the logic for emitting a warning for hardcoded links that could be replaced by an extlink is implemented. The issue describes a problem with this warning system, so changes here are likely necessary to allow bailing out or refining the suggestion mechanism. \n\n\n   - [Lines 87 - 120](https://github.com/testbed/sphinx-doc__sphinx__5.3/blob//sphinx/ext/extlinks.py#L87-L120)\n\n This snippet defines the make_link_role function which creates the actual link nodes based on the extlinks configuration. Understanding how these roles are created may be necessary to address the issue of refining or bailing out the extlink replacement suggestion."
+    }
+}
