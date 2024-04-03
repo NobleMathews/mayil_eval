@@ -1,0 +1,253 @@
+{
+    "id": "sympy__sympy-13361",
+    "repo_name": "testbed/sympy__sympy__1.1",
+    "task_id": 2752440357001249845,
+    "title": "evalf with subs argument incorrectly evaluates expressions with floor",
+    "body": "```\r\nx = Symbol('x')\r\nsrepr((floor(x)+20).evalf(subs={x:0.5}))\r\n```\r\nreturns `Float('16.0', precision=1)` instead of 20. (Python 3.6.1, SymPy 1.1.1). It seems that incorrect `precision=1` attribute is somehow attached to the result of `floor(0.5)`, which is why 20 is then rounded to the nearest power of 2. \r\n\r\nConsidering that `(floor(x)+20).subs({x:0.5}).evalf()` works correctly, perhaps a fix would be to make `expr.evalf(subs=dict)` pass its subs argument to `subs` first, i.e., act the same as `expr.subs(dict).evalf()`\r\n\r\nBased on a [Stack Overflow post](https://stackoverflow.com/a/46453201)\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/sympy__sympy__1.1.git",
+    "requested_commit": "",
+    "mayil_response": "- The issue is with the `evalf` method when used with the `subs` argument, specifically with the `floor` function.\n- The correct behavior is achieved by calling `subs` before `evalf`, as in `(floor(x)+20).subs({x:0.5}).evalf()`.\n- The problem seems to be related to the precision handling when `evalf` is called with the `subs` argument directly.\n\nSolution:\n- Modify the `evalf` function to handle the `subs` argument correctly, ensuring that the substitution is applied with the correct precision before evaluation.\n- Ensure that the `floor` function is correctly evaluated after substitution and before the floating-point evaluation.\n- Check the `evalf` function in `sympy/core/evalf.py` for the handling of the `subs` argument and adjust the precision handling accordingly.\n- Specifically, look into the `evalf_subs` function to ensure that it correctly updates the precision of the substituted values.\n- Test the changes with the expression `(floor(x)+20).evalf(subs={x:0.5})` to ensure it now returns the expected result of `20.0`.\n\n### Code snippets to check\n\n-  \u2192 [sympy](https://github.com/testbed/sympy__sympy__1.1/tree//sympy) \u2192 [core](https://github.com/testbed/sympy__sympy__1.1/tree//sympy/core)- [Lines 1309 - 1495](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/core/evalf.py#L1309-L1495)\n\n This snippet contains the main evalf function which is likely where the subs option is processed and where the issue with precision may be occurring. \n\n\n   - [Lines 413 - 1228](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/core/evalf.py#L413-L1228)\n\n This snippet contains the evalf_floor function which is directly related to the issue with the floor function not evaluating correctly with the subs argument. \n\n\n   - [Lines 833 - 1228](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/core/evalf.py#L833-L1228)\n\n This snippet includes the evalf_subs function which is used to change all Float entries in subs to have a specific precision, which may be related to the issue.\n-  \u2192 [sympy](https://github.com/testbed/sympy__sympy__1.1/tree//sympy) \u2192 [functions](https://github.com/testbed/sympy__sympy__1.1/tree//sympy/functions) \u2192 [elementary](https://github.com/testbed/sympy__sympy__1.1/tree//sympy/functions/elementary)- [Lines 17 - 486](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/functions/elementary/integers.py#L17-L486)\n\n This snippet defines the floor function and its behavior, which is relevant to the issue since the problem occurs with the floor function. \n\n\n   - [Lines 1 - 81](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/functions/elementary/integers.py#L1-L81)\n\n This snippet is part of the implementation of the floor function and may contain relevant logic for how the floor function interacts with evalf.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0034869999999999996,
+        "snippet_processor": 0.0604,
+        "issue_star_creation": 0.020409999999999998,
+        "issue_star_solver": 0.045790000000000004,
+        "bouncer": 0.02438
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711749819.004212,
+        "relevant_snippets": [
+            {
+                "code": "def evalf_sum(expr, prec, options):\n    from sympy import Float\n    if 'subs' in options:\n        expr = expr.subs(options['subs'])\n    func = expr.function\n    limits = expr.limits\n    if len(limits) != 1 or len(limits[0]) != 3:\n        raise NotImplementedError\n    if func.is_zero:\n        return None, None, prec, None\n    prec2 = prec + 10\n    try:\n        n, a, b = limits[0]\n        if b != S.Infinity or a != int(a):\n            raise NotImplementedError\n        # Use fast hypergeometric summation if possible\n        v = hypsum(func, n, int(a), prec2)\n        delta = prec - fastlog(v)\n        if fastlog(v) < -10:\n            v = hypsum(func, n, int(a), delta)\n        return v, None, min(prec, delta), None\n    except NotImplementedError:\n        # Euler-Maclaurin summation for general series\n        eps = Float(2.0)**(-prec)\n        for i in range(1, 5):\n            m = n = 2**i * prec\n            s, err = expr.euler_maclaurin(m=m, n=n, eps=eps,\n                eval_integral=False)\n            err = err.evalf()\n            if err <= eps:\n                break\n        err = fastlog(evalf(abs(err), 20, options)[0])\n        re, im, re_acc, im_acc = evalf(s, prec2, options)\n        if re_acc is None:\n            re_acc = -err\n        if im_acc is None:\n            im_acc = -err\n        return re, im, re_acc, im_acc\n\n\n#----------------------------------------------------------------------------#\n#                                                                            #\n#                            Symbolic interface                              #\n#                                                                            #\n#----------------------------------------------------------------------------#\n\ndef evalf_symbol(x, prec, options):\n    val = options['subs'][x]\n    if isinstance(val, mpf):\n        if not val:\n            return None, None, None, None\n        return val._mpf_, None, prec, None\n    else:\n        if not '_cache' in options:\n            options['_cache'] = {}\n        cache = options['_cache']\n        cached, cached_prec = cache.get(x, (None, MINUS_INF))\n        if cached_prec >= prec:\n            return cached\n        v = evalf(sympify(val), prec, options)\n        cache[x] = (v, prec)\n        return v\n\nevalf_table = None",
+                "filename": "sympy/core/evalf.py",
+                "start_index": 39943,
+                "end_index": 42223,
+                "start_line": 1184,
+                "end_line": 1247,
+                "max_line": 1560,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def evalf_log(expr, prec, options):\n    from sympy import Abs, Add, log\n    if len(expr.args)>1:\n        expr = expr.doit()\n        return evalf(expr, prec, options)\n    arg = expr.args[0]\n    workprec = prec + 10\n    xre, xim, xacc, _ = evalf(arg, workprec, options)\n\n    if xim:\n        # XXX: use get_abs etc instead\n        re = evalf_log(\n            log(Abs(arg, evaluate=False), evaluate=False), prec, options)\n        im = mpf_atan2(xim, xre or fzero, prec)\n        return re[0], im, re[2], prec\n\n    imaginary_term = (mpf_cmp(xre, fzero) < 0)\n\n    re = mpf_log(mpf_abs(xre), prec, rnd)\n    size = fastlog(re)\n    if prec - size > workprec and re != fzero:\n        # We actually need to compute 1+x accurately, not x\n        arg = Add(S.NegativeOne, arg, evaluate=False)\n        xre, xim, _, _ = evalf_add(arg, prec, options)\n        prec2 = workprec - fastlog(xre)\n        # xre is now x - 1 so we add 1 back here to calculate x\n        re = mpf_log(mpf_abs(mpf_add(xre, fone, prec2)), prec, rnd)\n\n    re_acc = prec\n\n    if imaginary_term:\n        return re, mpf_pi(prec), re_acc, prec\n    else:\n        return re, None, re_acc, None\n\n\ndef evalf_atan(v, prec, options):\n    arg = v.args[0]\n    xre, xim, reacc, imacc = evalf(arg, prec + 5, options)\n    if xre is xim is None:\n        return (None,)*4\n    if xim:\n        raise NotImplementedError\n    return mpf_atan(xre, prec, rnd), None, prec, None\n\n\ndef evalf_subs(prec, subs):\n    \"\"\" Change all Float entries in `subs` to have precision prec. \"\"\"\n    newsubs = {}\n    for a, b in subs.items():\n        b = S(b)\n        if b.is_Float:\n            b = b._eval_evalf(prec)\n        newsubs[a] = b\n    return newsubs\n\n\ndef evalf_piecewise(expr, prec, options):\n    from sympy import Float, Integer\n    if 'subs' in options:\n        expr = expr.subs(evalf_subs(prec, options['subs']))\n        newopts = options.copy()\n        del newopts['subs']\n        if hasattr(expr, 'func'):\n            return evalf(expr, prec, newopts)\n        if type(expr) == float:\n            return evalf(Float(expr), prec, newopts)\n        if type(expr) == int:\n            return evalf(Integer(expr), prec, newopts)\n\n    # We still have undefined symbols\n    raise NotImplementedError\n\n\ndef evalf_bernoulli(expr, prec, options):\n    arg = expr.args[0]\n    if not arg.is_Integer:\n        raise ValueError(\"Bernoulli number index must be an integer\")\n    n = int(arg)\n    b = mpf_bernoulli(n, prec, rnd)\n    if b == fzero:\n        return None, None, None, None\n    return b, None, prec, None\n\n#----------------------------------------------------------------------------#\n#                                                                            #\n#                            High-level operations                           #\n#                                                                            #\n#----------------------------------------------------------------------------#",
+                "filename": "sympy/core/evalf.py",
+                "start_index": 28375,
+                "end_index": 31298,
+                "start_line": 833,
+                "end_line": 1228,
+                "max_line": 1560,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "def evalf_ceiling(expr, prec, options):\n    return get_integer_part(expr.args[0], 1, options)\n\n\ndef evalf_floor(expr, prec, options):\n    return get_integer_part(expr.args[0], -1, options)\n\n#----------------------------------------------------------------------------#\n#                                                                            #\n#                            Arithmetic operations                           #\n#                                                                            #\n#----------------------------------------------------------------------------#",
+                "filename": "sympy/core/evalf.py",
+                "start_index": 13684,
+                "end_index": 14268,
+                "start_line": 413,
+                "end_line": 1228,
+                "max_line": 1560,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def evalf(x, prec, options):\n    from sympy import re as re_, im as im_\n    try:\n        rf = evalf_table[x.func]\n        r = rf(x, prec, options)\n    except KeyError:\n        # Fall back to ordinary evalf if possible\n        if 'subs' in options:\n            x = x.subs(evalf_subs(prec, options['subs']))\n        xe = x._eval_evalf(prec)\n        if xe is None:\n            raise NotImplementedError\n        as_real_imag = getattr(xe, \"as_real_imag\", None)\n        if as_real_imag is None:\n            raise NotImplementedError # e.g. FiniteSet(-1.0, 1.0).evalf()\n        re, im = as_real_imag()\n        if re.has(re_) or im.has(im_):\n            raise NotImplementedError\n        if re == 0:\n            re = None\n            reprec = None\n        elif re.is_number:\n            re = re._to_mpmath(prec, allow_ints=False)._mpf_\n            reprec = prec\n        else:\n            raise NotImplementedError\n        if im == 0:\n            im = None\n            imprec = None\n        elif im.is_number:\n            im = im._to_mpmath(prec, allow_ints=False)._mpf_\n            imprec = prec\n        else:\n            raise NotImplementedError\n        r = re, im, reprec, imprec\n\n    if options.get(\"verbose\"):\n        print(\"### input\", x)\n        print(\"### output\", to_str(r[0] or fzero, 50))\n        print(\"### raw\", r) # r[0], r[2]\n        print()\n    chop = options.get('chop', False)\n    if chop:\n        if chop is True:\n            chop_prec = prec\n        else:\n            # convert (approximately) from given tolerance;\n            # the formula here will will make 1e-i rounds to 0 for\n            # i in the range +/-27 while 2e-i will not be chopped\n            chop_prec = int(round(-3.321*math.log10(chop) + 2.5))\n            if chop_prec == 3:\n                chop_prec -= 1\n        r = chop_parts(r, chop_prec)\n    if options.get(\"strict\"):\n        check_target(x, r, prec)\n    return r",
+                "filename": "sympy/core/evalf.py",
+                "start_index": 44556,
+                "end_index": 46458,
+                "start_line": 1309,
+                "end_line": 1495,
+                "max_line": 1560,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\n    With no = 1, computes ceiling(expr)\n    With no = -1, computes floor(expr)\n\n    Note: this function either gives the exact result or signals failure.\n    \"\"\"\n    from sympy.functions.elementary.complexes import re, im\n    # The expression is likely less than 2^30 or so\n    assumed_size = 30\n    ire, iim, ire_acc, iim_acc = evalf(expr, assumed_size, options)\n\n    # We now know the size, so we can calculate how much extra precision\n    # (if any) is needed to get within the nearest integer\n    if ire and iim:\n        gap = max(fastlog(ire) - ire_acc, fastlog(iim) - iim_acc)\n    elif ire:\n        gap = fastlog(ire) - ire_acc\n    elif iim:\n        gap = fastlog(iim) - iim_acc\n    else:\n        # ... or maybe the expression was exactly zero\n        if return_ints:\n            return 0, 0\n        else:\n            return None, None, None, None\n\n    margin = 10\n\n    if gap >= -margin:\n        prec = margin + assumed_size + gap\n        ire, iim, ire_acc, iim_acc = evalf(\n            expr, prec, options)\n    else:\n        prec = assumed_size\n\n    # We can now easily find the nearest integer, but to find floor/ceil, we\n    # must also calculate whether the difference to the nearest integer is\n    # positive or negative (which may fail if very close).",
+                "filename": "sympy/core/evalf.py",
+                "start_index": 9826,
+                "end_index": 11094,
+                "start_line": 1,
+                "end_line": 344,
+                "max_line": 1560,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\n        Evaluate the given formula to an accuracy of *n* digits.\n\n        Parameters\n        ==========\n\n        subs : dict, optional\n            Substitute numerical values for symbols, e.g.\n            ``subs={x:3, y:1+pi}``. The substitutions must be given as a\n            dictionary.\n\n        maxn : int, optional\n            Allow a maximum temporary working precision of maxn digits.\n\n        chop : bool or number, optional\n            Specifies how to replace tiny real or imaginary parts in\n            subresults by exact zeros.\n\n            When ``True`` the chop value defaults to standard precision.\n\n            Otherwise the chop value is used to determine the\n            magnitude of \"small\" for purposes of chopping.\n\n            >>> from sympy import N\n            >>> x = 1e-4\n            >>> N(x, chop=True)\n            0.000100000000000000\n            >>> N(x, chop=1e-5)\n            0.000100000000000000\n            >>> N(x, chop=1e-4)\n            0\n\n        strict : bool, optional\n            Raise ``PrecisionExhausted`` if any subresult fails to\n            evaluate to full accuracy, given the available maxprec.\n\n        quad : str, optional\n            Choose algorithm for numerical quadrature. By default,\n            tanh-sinh quadrature is used. For oscillatory\n            integrals on an infinite interval, try ``quad='osc'``.\n\n        verbose : bool, optional\n            Print debug information.\n\n        Notes\n        =====\n\n        When Floats are naively substituted into an expression,\n        precision errors may adversely affect the result. For example,\n        adding 1e16 (a Float) to 1 will truncate to 1e16; if 1e16 is\n        then subtracted, the result will be 0.\n        That is exactly what happens in the following:\n\n        >>> from sympy.abc import x, y, z\n        >>> values = {x: 1e16, y: 1, z: 1e16}\n        >>> (x + y - z).subs(values)\n        0\n\n        Using the subs argument for evalf is the accurate way to\n        evaluate such an expression:\n\n        >>> (x + y - z).evalf(subs=values)\n        1.00000000000000\n        \"\"\"\n        from sympy import Float, Number\n        n = n if n is not None else 15\n\n        if subs and is_sequence(subs):\n            raise TypeError('subs must be given as a dictionary')\n\n        # for sake of sage that doesn't like evalf(1)\n        if n == 1 and isinstance(self, Number):\n            from sympy.core.expr import _mag\n            rv = self.evalf(2, subs, maxn, chop, strict, quad, verbose)\n            m = _mag(rv)\n            rv = rv.round(1 - m)\n            return rv\n\n        if not evalf_table:\n            _create_evalf_table()\n        prec = dps_to_prec(n)\n        options = {'maxprec': max(prec, int(maxn*LG10)), 'chop': chop,\n               'strict': strict, 'verbose': verbose}\n        if subs is not None:\n            options['subs'] = subs\n        if quad is not None:\n            options['quad'] = quad",
+                "filename": "sympy/core/evalf.py",
+                "start_index": 46681,
+                "end_index": 49606,
+                "start_line": 1,
+                "end_line": 1459,
+                "max_line": 1560,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "#!/usr/bin/env python\n\n\"\"\"Precision Example\n\nDemonstrates SymPy's arbitrary integer precision abilities\n\"\"\"\n\nimport sympy\nfrom sympy import Mul, Pow, S\n\n\ndef main():\n    x = Pow(2, 50, evaluate=False)\n    y = Pow(10, -50, evaluate=False)\n    # A large, unevaluated expression\n    m = Mul(x, y, evaluate=False)\n    # Evaluating the expression\n    e = S(2)**50/S(10)**50\n    print(\"{} == {}\".format(m, e))\n\nif __name__ == \"__main__\":\n    main()",
+                "filename": "examples/beginner/precision.py",
+                "start_index": 0,
+                "end_index": 442,
+                "start_line": 1,
+                "end_line": 22,
+                "max_line": 22,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _eval_evalf(self, prec):\n        m, x = (self.args[0], None) if len(self.args) == 1 else self.args\n\n        if x is None and m.is_Integer and m.is_nonnegative:\n            from mpmath import mp\n            from sympy import Expr\n            m = m._to_mpmath(prec)\n            with workprec(prec):\n                res = mp.eulernum(m)\n            return Expr._from_mpmath(res, prec)\n        if x and x.is_number and m.is_Integer and m.is_nonnegative:\n            from mpmath import mp\n            from sympy import Expr\n            m = int(m)\n            x = x._to_mpmath(prec)\n            with workprec(prec):\n                res = mp.eulerpoly(m, x)\n            return Expr._from_mpmath(res, prec)",
+                "filename": "sympy/functions/combinatorial/numbers.py",
+                "start_index": 34449,
+                "end_index": 35151,
+                "start_line": 907,
+                "end_line": 1062,
+                "max_line": 2046,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from sympy.core import Add, S\nfrom sympy.core.evalf import get_integer_part, PrecisionExhausted\nfrom sympy.core.function import Function\nfrom sympy.core.logic import fuzzy_or\nfrom sympy.core.numbers import Integer\nfrom sympy.core.relational import Gt, Lt, Ge, Le, Relational\nfrom sympy.core.symbol import Symbol\nfrom sympy.core.sympify import _sympify\n\n\n###############################################################################\n######################### FLOOR and CEILING FUNCTIONS #########################\n###############################################################################\n\n\nclass RoundFunction(Function):\n    \"\"\"The base class for rounding functions.\"\"\"\n\n    @classmethod\n    def eval(cls, arg):\n        from sympy import im\n        v = cls._eval_number(arg)\n        if v is not None:\n            return v\n\n        if arg.is_integer or arg.is_finite is False:\n            return arg\n        if arg.is_imaginary or (S.ImaginaryUnit*arg).is_real:\n            i = im(arg)\n            if not i.has(S.ImaginaryUnit):\n                return cls(i)*S.ImaginaryUnit\n            return cls(arg, evaluate=False)\n\n        # Integral, numerical, symbolic part\n        ipart = npart = spart = S.Zero\n\n        # Extract integral (or complex integral) terms\n        terms = Add.make_args(arg)\n\n        for t in terms:\n            if t.is_integer or (t.is_imaginary and im(t).is_integer):\n                ipart += t\n            elif t.has(Symbol):\n                spart += t\n            else:\n                npart += t\n\n        if not (npart or spart):\n            return ipart\n\n        # Evaluate npart numerically if independent of spart\n        if npart and (\n            not spart or\n            npart.is_real and (spart.is_imaginary or (S.ImaginaryUnit*spart).is_real) or\n                npart.is_imaginary and spart.is_real):\n            try:\n                r, i = get_integer_part(\n                    npart, cls._dir, {}, return_ints=True)\n                ipart += Integer(r) + Integer(i)*S.ImaginaryUnit\n                npart = S.Zero\n            except (PrecisionExhausted, NotImplementedError):\n                pass\n\n        spart += npart\n        if not spart:\n            return ipart\n        elif spart.is_imaginary or (S.ImaginaryUnit*spart).is_real:\n            return ipart + cls(im(spart), evaluate=False)*S.ImaginaryUnit\n        elif isinstance(spart, (floor, ceiling)):\n            return ipart + spart\n        else:\n            return ipart + cls(spart, evaluate=False)\n\n    def _eval_is_finite(self):\n        return self.args[0].is_finite\n\n    def _eval_is_real(self):\n        return self.args[0].is_real\n\n    def _eval_is_integer(self):\n        return self.args[0].is_real",
+                "filename": "sympy/functions/elementary/integers.py",
+                "start_index": 0,
+                "end_index": 2703,
+                "start_line": 1,
+                "end_line": 81,
+                "max_line": 531,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\n    Floor is a univariate function which returns the largest integer\n    value not greater than its argument. This implementation\n    generalizes floor to complex numbers by taking the floor of the\n    real and imaginary parts separately.\n\n    Examples\n    ========\n\n    >>> from sympy import floor, E, I, S, Float, Rational\n    >>> floor(17)\n    17\n    >>> floor(Rational(23, 10))\n    2\n    >>> floor(2*E)\n    5\n    >>> floor(-Float(0.567))\n    -1\n    >>> floor(-I/2)\n    -I\n    >>> floor(S(5)/2 + 5*I/2)\n    2 + 2*I\n\n    See Also\n    ========\n\n    sympy.functions.elementary.integers.ceiling\n\n    References\n    ==========\n\n    .. [1] \"Concrete mathematics\" by Graham, pp. 87\n    .. [2] http://mathworld.wolfram.com/FloorFunction.html\n\n    \"\"\"\n    _dir = -1\n\n    @classmethod\n    def _eval_number(cls, arg):\n        if arg.is_Number:\n            return arg.floor()\n        elif any(isinstance(i, j)\n                for i in (arg, -arg) for j in (floor, ceiling)):\n            return arg\n        if arg.is_NumberSymbol:\n            return arg.approximation_interval(Integer)[0]\n\n    def _eval_nseries(self, x, n, logx):\n        r = self.subs(x, 0)\n        args = self.args[0]\n        args0 = args.subs(x, 0)\n        if args0 == r:\n            direction = (args - args0).leadterm(x)[0]\n            if direction.is_positive:\n                return r\n            else:\n                return r - 1\n        else:\n            return r\n\n    def _eval_is_negative(self):\n        return self.args[0].is_negative\n\n    def _eval_is_nonnegative(self):\n        return self.args[0].is_nonnegative\n\n    def _eval_rewrite_as_ceiling(self, arg, **kwargs):\n        return -ceiling(-arg)\n\n    def _eval_rewrite_as_frac(self, arg, **kwargs):\n        return arg - frac(arg)\n\n    def _eval_Eq(self, other):\n        if isinstance(self, floor):\n            if (self.rewrite(ceiling) == other) or \\\n                    (self.rewrite(frac) == other):\n                return S.true\n\n    def __le__(self, other):\n        other = S(other)\n        if self.args[0].is_real:\n            if other.is_integer:\n                return self.args[0] < other + 1\n            if other.is_number and other.is_real:\n                return self.args[0] < ceiling(other)\n        if self.args[0] == other and other.is_real:\n            return S.true\n        if other is S.Infinity and self.is_finite:\n            return S.true\n\n        return Le(self, other, evaluate=False)\n\n    def __ge__(self, other):\n        other = S(other)\n        if self.args[0].is_real:\n            if other.is_integer:\n                return self.args[0] >= other\n            if other.is_number and other.is_real:\n                return self.args[0] >= ceiling(other)\n        if self.args[0] == other and other.is_real:\n            return S.false\n        if other is S.NegativeInfinity and self.is_finite:\n            return S.true\n\n        return Ge(self, other, evaluate=False)",
+                "filename": "sympy/functions/elementary/integers.py",
+                "start_index": 2738,
+                "end_index": 5655,
+                "start_line": 17,
+                "end_line": 486,
+                "max_line": 531,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.1",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "sympy/core/evalf.py": [
+                {
+                    "chunk": {
+                        "code": "def evalf(x, prec, options):\n    from sympy import re as re_, im as im_\n    try:\n        rf = evalf_table[x.func]\n        r = rf(x, prec, options)\n    except KeyError:\n        # Fall back to ordinary evalf if possible\n        if 'subs' in options:\n            x = x.subs(evalf_subs(prec, options['subs']))\n        xe = x._eval_evalf(prec)\n        if xe is None:\n            raise NotImplementedError\n        as_real_imag = getattr(xe, \"as_real_imag\", None)\n        if as_real_imag is None:\n            raise NotImplementedError # e.g. FiniteSet(-1.0, 1.0).evalf()\n        re, im = as_real_imag()\n        if re.has(re_) or im.has(im_):\n            raise NotImplementedError\n        if re == 0:\n            re = None\n            reprec = None\n        elif re.is_number:\n            re = re._to_mpmath(prec, allow_ints=False)._mpf_\n            reprec = prec\n        else:\n            raise NotImplementedError\n        if im == 0:\n            im = None\n            imprec = None\n        elif im.is_number:\n            im = im._to_mpmath(prec, allow_ints=False)._mpf_\n            imprec = prec\n        else:\n            raise NotImplementedError\n        r = re, im, reprec, imprec\n\n    if options.get(\"verbose\"):\n        print(\"### input\", x)\n        print(\"### output\", to_str(r[0] or fzero, 50))\n        print(\"### raw\", r) # r[0], r[2]\n        print()\n    chop = options.get('chop', False)\n    if chop:\n        if chop is True:\n            chop_prec = prec\n        else:\n            # convert (approximately) from given tolerance;\n            # the formula here will will make 1e-i rounds to 0 for\n            # i in the range +/-27 while 2e-i will not be chopped\n            chop_prec = int(round(-3.321*math.log10(chop) + 2.5))\n            if chop_prec == 3:\n                chop_prec -= 1\n        r = chop_parts(r, chop_prec)\n    if options.get(\"strict\"):\n        check_target(x, r, prec)\n    return r",
+                        "filename": "sympy/core/evalf.py",
+                        "start_index": 44556,
+                        "end_index": 46458,
+                        "start_line": 1309,
+                        "end_line": 1495,
+                        "max_line": 1560,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sympy__sympy__1.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the main evalf function which is likely where the subs option is processed and where the issue with precision may be occurring."
+                },
+                {
+                    "chunk": {
+                        "code": "def evalf_ceiling(expr, prec, options):\n    return get_integer_part(expr.args[0], 1, options)\n\n\ndef evalf_floor(expr, prec, options):\n    return get_integer_part(expr.args[0], -1, options)\n\n#----------------------------------------------------------------------------#\n#                                                                            #\n#                            Arithmetic operations                           #\n#                                                                            #\n#----------------------------------------------------------------------------#",
+                        "filename": "sympy/core/evalf.py",
+                        "start_index": 13684,
+                        "end_index": 14268,
+                        "start_line": 413,
+                        "end_line": 1228,
+                        "max_line": 1560,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sympy__sympy__1.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the evalf_floor function which is directly related to the issue with the floor function not evaluating correctly with the subs argument."
+                },
+                {
+                    "chunk": {
+                        "code": "def evalf_log(expr, prec, options):\n    from sympy import Abs, Add, log\n    if len(expr.args)>1:\n        expr = expr.doit()\n        return evalf(expr, prec, options)\n    arg = expr.args[0]\n    workprec = prec + 10\n    xre, xim, xacc, _ = evalf(arg, workprec, options)\n\n    if xim:\n        # XXX: use get_abs etc instead\n        re = evalf_log(\n            log(Abs(arg, evaluate=False), evaluate=False), prec, options)\n        im = mpf_atan2(xim, xre or fzero, prec)\n        return re[0], im, re[2], prec\n\n    imaginary_term = (mpf_cmp(xre, fzero) < 0)\n\n    re = mpf_log(mpf_abs(xre), prec, rnd)\n    size = fastlog(re)\n    if prec - size > workprec and re != fzero:\n        # We actually need to compute 1+x accurately, not x\n        arg = Add(S.NegativeOne, arg, evaluate=False)\n        xre, xim, _, _ = evalf_add(arg, prec, options)\n        prec2 = workprec - fastlog(xre)\n        # xre is now x - 1 so we add 1 back here to calculate x\n        re = mpf_log(mpf_abs(mpf_add(xre, fone, prec2)), prec, rnd)\n\n    re_acc = prec\n\n    if imaginary_term:\n        return re, mpf_pi(prec), re_acc, prec\n    else:\n        return re, None, re_acc, None\n\n\ndef evalf_atan(v, prec, options):\n    arg = v.args[0]\n    xre, xim, reacc, imacc = evalf(arg, prec + 5, options)\n    if xre is xim is None:\n        return (None,)*4\n    if xim:\n        raise NotImplementedError\n    return mpf_atan(xre, prec, rnd), None, prec, None\n\n\ndef evalf_subs(prec, subs):\n    \"\"\" Change all Float entries in `subs` to have precision prec. \"\"\"\n    newsubs = {}\n    for a, b in subs.items():\n        b = S(b)\n        if b.is_Float:\n            b = b._eval_evalf(prec)\n        newsubs[a] = b\n    return newsubs\n\n\ndef evalf_piecewise(expr, prec, options):\n    from sympy import Float, Integer\n    if 'subs' in options:\n        expr = expr.subs(evalf_subs(prec, options['subs']))\n        newopts = options.copy()\n        del newopts['subs']\n        if hasattr(expr, 'func'):\n            return evalf(expr, prec, newopts)\n        if type(expr) == float:\n            return evalf(Float(expr), prec, newopts)\n        if type(expr) == int:\n            return evalf(Integer(expr), prec, newopts)\n\n    # We still have undefined symbols\n    raise NotImplementedError\n\n\ndef evalf_bernoulli(expr, prec, options):\n    arg = expr.args[0]\n    if not arg.is_Integer:\n        raise ValueError(\"Bernoulli number index must be an integer\")\n    n = int(arg)\n    b = mpf_bernoulli(n, prec, rnd)\n    if b == fzero:\n        return None, None, None, None\n    return b, None, prec, None\n\n#----------------------------------------------------------------------------#\n#                                                                            #\n#                            High-level operations                           #\n#                                                                            #\n#----------------------------------------------------------------------------#",
+                        "filename": "sympy/core/evalf.py",
+                        "start_index": 28375,
+                        "end_index": 31298,
+                        "start_line": 833,
+                        "end_line": 1228,
+                        "max_line": 1560,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sympy__sympy__1.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the evalf_subs function which is used to change all Float entries in subs to have a specific precision, which may be related to the issue."
+                }
+            ],
+            "sympy/functions/elementary/integers.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    Floor is a univariate function which returns the largest integer\n    value not greater than its argument. This implementation\n    generalizes floor to complex numbers by taking the floor of the\n    real and imaginary parts separately.\n\n    Examples\n    ========\n\n    >>> from sympy import floor, E, I, S, Float, Rational\n    >>> floor(17)\n    17\n    >>> floor(Rational(23, 10))\n    2\n    >>> floor(2*E)\n    5\n    >>> floor(-Float(0.567))\n    -1\n    >>> floor(-I/2)\n    -I\n    >>> floor(S(5)/2 + 5*I/2)\n    2 + 2*I\n\n    See Also\n    ========\n\n    sympy.functions.elementary.integers.ceiling\n\n    References\n    ==========\n\n    .. [1] \"Concrete mathematics\" by Graham, pp. 87\n    .. [2] http://mathworld.wolfram.com/FloorFunction.html\n\n    \"\"\"\n    _dir = -1\n\n    @classmethod\n    def _eval_number(cls, arg):\n        if arg.is_Number:\n            return arg.floor()\n        elif any(isinstance(i, j)\n                for i in (arg, -arg) for j in (floor, ceiling)):\n            return arg\n        if arg.is_NumberSymbol:\n            return arg.approximation_interval(Integer)[0]\n\n    def _eval_nseries(self, x, n, logx):\n        r = self.subs(x, 0)\n        args = self.args[0]\n        args0 = args.subs(x, 0)\n        if args0 == r:\n            direction = (args - args0).leadterm(x)[0]\n            if direction.is_positive:\n                return r\n            else:\n                return r - 1\n        else:\n            return r\n\n    def _eval_is_negative(self):\n        return self.args[0].is_negative\n\n    def _eval_is_nonnegative(self):\n        return self.args[0].is_nonnegative\n\n    def _eval_rewrite_as_ceiling(self, arg, **kwargs):\n        return -ceiling(-arg)\n\n    def _eval_rewrite_as_frac(self, arg, **kwargs):\n        return arg - frac(arg)\n\n    def _eval_Eq(self, other):\n        if isinstance(self, floor):\n            if (self.rewrite(ceiling) == other) or \\\n                    (self.rewrite(frac) == other):\n                return S.true\n\n    def __le__(self, other):\n        other = S(other)\n        if self.args[0].is_real:\n            if other.is_integer:\n                return self.args[0] < other + 1\n            if other.is_number and other.is_real:\n                return self.args[0] < ceiling(other)\n        if self.args[0] == other and other.is_real:\n            return S.true\n        if other is S.Infinity and self.is_finite:\n            return S.true\n\n        return Le(self, other, evaluate=False)\n\n    def __ge__(self, other):\n        other = S(other)\n        if self.args[0].is_real:\n            if other.is_integer:\n                return self.args[0] >= other\n            if other.is_number and other.is_real:\n                return self.args[0] >= ceiling(other)\n        if self.args[0] == other and other.is_real:\n            return S.false\n        if other is S.NegativeInfinity and self.is_finite:\n            return S.true\n\n        return Ge(self, other, evaluate=False)",
+                        "filename": "sympy/functions/elementary/integers.py",
+                        "start_index": 2738,
+                        "end_index": 5655,
+                        "start_line": 17,
+                        "end_line": 486,
+                        "max_line": 531,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sympy__sympy__1.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the floor function and its behavior, which is relevant to the issue since the problem occurs with the floor function."
+                },
+                {
+                    "chunk": {
+                        "code": "from sympy.core import Add, S\nfrom sympy.core.evalf import get_integer_part, PrecisionExhausted\nfrom sympy.core.function import Function\nfrom sympy.core.logic import fuzzy_or\nfrom sympy.core.numbers import Integer\nfrom sympy.core.relational import Gt, Lt, Ge, Le, Relational\nfrom sympy.core.symbol import Symbol\nfrom sympy.core.sympify import _sympify\n\n\n###############################################################################\n######################### FLOOR and CEILING FUNCTIONS #########################\n###############################################################################\n\n\nclass RoundFunction(Function):\n    \"\"\"The base class for rounding functions.\"\"\"\n\n    @classmethod\n    def eval(cls, arg):\n        from sympy import im\n        v = cls._eval_number(arg)\n        if v is not None:\n            return v\n\n        if arg.is_integer or arg.is_finite is False:\n            return arg\n        if arg.is_imaginary or (S.ImaginaryUnit*arg).is_real:\n            i = im(arg)\n            if not i.has(S.ImaginaryUnit):\n                return cls(i)*S.ImaginaryUnit\n            return cls(arg, evaluate=False)\n\n        # Integral, numerical, symbolic part\n        ipart = npart = spart = S.Zero\n\n        # Extract integral (or complex integral) terms\n        terms = Add.make_args(arg)\n\n        for t in terms:\n            if t.is_integer or (t.is_imaginary and im(t).is_integer):\n                ipart += t\n            elif t.has(Symbol):\n                spart += t\n            else:\n                npart += t\n\n        if not (npart or spart):\n            return ipart\n\n        # Evaluate npart numerically if independent of spart\n        if npart and (\n            not spart or\n            npart.is_real and (spart.is_imaginary or (S.ImaginaryUnit*spart).is_real) or\n                npart.is_imaginary and spart.is_real):\n            try:\n                r, i = get_integer_part(\n                    npart, cls._dir, {}, return_ints=True)\n                ipart += Integer(r) + Integer(i)*S.ImaginaryUnit\n                npart = S.Zero\n            except (PrecisionExhausted, NotImplementedError):\n                pass\n\n        spart += npart\n        if not spart:\n            return ipart\n        elif spart.is_imaginary or (S.ImaginaryUnit*spart).is_real:\n            return ipart + cls(im(spart), evaluate=False)*S.ImaginaryUnit\n        elif isinstance(spart, (floor, ceiling)):\n            return ipart + spart\n        else:\n            return ipart + cls(spart, evaluate=False)\n\n    def _eval_is_finite(self):\n        return self.args[0].is_finite\n\n    def _eval_is_real(self):\n        return self.args[0].is_real\n\n    def _eval_is_integer(self):\n        return self.args[0].is_real",
+                        "filename": "sympy/functions/elementary/integers.py",
+                        "start_index": 0,
+                        "end_index": 2703,
+                        "start_line": 1,
+                        "end_line": 81,
+                        "max_line": 531,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sympy__sympy__1.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is part of the implementation of the floor function and may contain relevant logic for how the floor function interacts with evalf."
+                }
+            ]
+        },
+        "solution_task": "- The issue is with the `evalf` method when used with the `subs` argument, specifically with the `floor` function.\n- The correct behavior is achieved by calling `subs` before `evalf`, as in `(floor(x)+20).subs({x:0.5}).evalf()`.\n- The problem seems to be related to the precision handling when `evalf` is called with the `subs` argument directly.\n\nSolution:\n- Modify the `evalf` function to handle the `subs` argument correctly, ensuring that the substitution is applied with the correct precision before evaluation.\n- Ensure that the `floor` function is correctly evaluated after substitution and before the floating-point evaluation.\n- Check the `evalf` function in `sympy/core/evalf.py` for the handling of the `subs` argument and adjust the precision handling accordingly.\n- Specifically, look into the `evalf_subs` function to ensure that it correctly updates the precision of the substituted values.\n- Test the changes with the expression `(floor(x)+20).evalf(subs={x:0.5})` to ensure it now returns the expected result of `20.0`.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE identifies the issue with the evalf method when used with the subs argument and suggests a solution that involves modifying the evalf function to handle the subs argument correctly. It also provides specific guidance on checking the evalf_subs function to ensure it updates the precision of substituted values correctly. The RESPONSE includes links to the relevant code snippets in the SymPy repository, which could be useful for a developer looking to fix the bug. However, the RESPONSE does not provide a concrete code fix or a detailed explanation of how the precision handling should be adjusted, which would be necessary to fully resolve the issue.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711750017.903401,
+        "result": "- The issue is with the `evalf` method when used with the `subs` argument, specifically with the `floor` function.\n- The correct behavior is achieved by calling `subs` before `evalf`, as in `(floor(x)+20).subs({x:0.5}).evalf()`.\n- The problem seems to be related to the precision handling when `evalf` is called with the `subs` argument directly.\n\nSolution:\n- Modify the `evalf` function to handle the `subs` argument correctly, ensuring that the substitution is applied with the correct precision before evaluation.\n- Ensure that the `floor` function is correctly evaluated after substitution and before the floating-point evaluation.\n- Check the `evalf` function in `sympy/core/evalf.py` for the handling of the `subs` argument and adjust the precision handling accordingly.\n- Specifically, look into the `evalf_subs` function to ensure that it correctly updates the precision of the substituted values.\n- Test the changes with the expression `(floor(x)+20).evalf(subs={x:0.5})` to ensure it now returns the expected result of `20.0`.\n\n### Code snippets to check\n\n-  \u2192 [sympy](https://github.com/testbed/sympy__sympy__1.1/tree//sympy) \u2192 [core](https://github.com/testbed/sympy__sympy__1.1/tree//sympy/core)- [Lines 1309 - 1495](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/core/evalf.py#L1309-L1495)\n\n This snippet contains the main evalf function which is likely where the subs option is processed and where the issue with precision may be occurring. \n\n\n   - [Lines 413 - 1228](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/core/evalf.py#L413-L1228)\n\n This snippet contains the evalf_floor function which is directly related to the issue with the floor function not evaluating correctly with the subs argument. \n\n\n   - [Lines 833 - 1228](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/core/evalf.py#L833-L1228)\n\n This snippet includes the evalf_subs function which is used to change all Float entries in subs to have a specific precision, which may be related to the issue.\n-  \u2192 [sympy](https://github.com/testbed/sympy__sympy__1.1/tree//sympy) \u2192 [functions](https://github.com/testbed/sympy__sympy__1.1/tree//sympy/functions) \u2192 [elementary](https://github.com/testbed/sympy__sympy__1.1/tree//sympy/functions/elementary)- [Lines 17 - 486](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/functions/elementary/integers.py#L17-L486)\n\n This snippet defines the floor function and its behavior, which is relevant to the issue since the problem occurs with the floor function. \n\n\n   - [Lines 1 - 81](https://github.com/testbed/sympy__sympy__1.1/blob//sympy/functions/elementary/integers.py#L1-L81)\n\n This snippet is part of the implementation of the floor function and may contain relevant logic for how the floor function interacts with evalf.",
+        "context_relevance": 0.3,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant and answers the entire PROMPT completely.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT by acknowledging the problem with the `evalf` method when used with the `subs` argument and the `floor` function. It suggests a solution that is in line with the proposed fix in the PROMPT, which is to modify the `evalf` function to handle the `subs` argument correctly. The RESPONSE also provides a detailed plan for how to approach the problem, including specific code snippets to check and what to look for within those snippets. This shows a complete understanding of the issue and directly responds to the entire PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

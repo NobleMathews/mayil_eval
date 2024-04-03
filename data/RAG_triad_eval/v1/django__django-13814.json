@@ -1,0 +1,191 @@
+{
+    "id": "django__django-13814",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 757670222330055578,
+    "title": "Raising InvalidTemplateLibrary completely masks out real exception in get_package_libraries",
+    "body": "Description\n\t\nSummary\nIn django/template/backends/django.py, function get_package_libraries on line 119 completely masks out the ImportError and raises InvalidTemplateLibrary. This makes it incredibly difficult to debug application issues.\nProbably better not to handle the exception in the first place since it only raises another type and inner exception looses the stack trace.\nTo reproduce\nCreate two apps e.g. form_utils and reports. \nWrite a template tag in reports e.g. reports.templatetags.report_tags. (reports/templatetags/report_tags.py\nAdd a simple module in form_utils e.g. widgets.py. \nIn widgets.py, import a none-existent module e.g. from django.forms.util import flatatt (was removed in > django 1.4)\nimport form_utils.widget in report_tags e.g. from form_utils.widgets import CalendarWidget\nA quick way to reproduce the error would be to register some models with admin and navigate to /admin\nThe following error will be raised in get_package_libraries:\nInvalidTemplateLibrary at /admin/login/\nInvalid template library specified. ImportError raised when trying to load 'reports.templatetags.report_tags': No module named util\nRequest Method:\t\t GET\nRequest URL:\t\t \u200bhttp://localhost:2017/admin/login/?next=/admin/\nDjango Version:\t\t 1.10.1\nException Type:\t\t InvalidTemplateLibrary\nException Value:\t\t \nInvalid template library specified. ImportError raised when trying to load 'reports.templatetags.report_tags': No module named util\nException Location:\t\t D:\\repo\\django110\\lib\\site-packages\\django\\template\\backends\\django.py in get_package_libraries, line 130\nHowever, if the exception was not caught and \"wrongly\" re-raised as an InvalidTemplateLibrary, the following errors would be printed:\nImportError at /admin/login/\nNo module named util\nRequest Method:\t\t GET\nRequest URL:\t\t \u200bhttp://localhost:2017/admin/login/?next=/admin/\nDjango Version:\t\t 1.10.1\nException Type:\t\t ImportError\nException Value:\t\t \nNo module named util\nException Location:\t\t D:\\repo\\projects\\evincehr\\apps\\form_utils\\widgets.py in <module>, line 3\nThe second behavior is more appropriate to debugging the error and the error would be quickly found.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `get_package_libraries` function in `django/template/backends/django.py` to preserve the original `ImportError` stack trace.\n- Remove the `try-except` block that raises `InvalidTemplateLibrary` and let the original `ImportError` propagate.\n\n```python\ndef get_package_libraries(pkg):\n    \"\"\"\n    Recursively yield template tag libraries defined in submodules of a\n    package.\n    \"\"\"\n    for entry in walk_packages(pkg.__path__, pkg.__name__ + \".\"):\n        module = import_module(entry[1])\n        if hasattr(module, \"register\"):\n            yield entry[1]\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [template](https://github.com/testbed/django__django__3.2/tree//django/template) \u2192 [backends](https://github.com/testbed/django__django__3.2/tree//django/template/backends)- [Lines 87 - 136](https://github.com/testbed/django__django__3.2/blob//django/template/backends/django.py#L87-L136)\n\n This snippet contains the 'get_package_libraries' function where the issue occurs. The exception handling in this function is what needs to be modified to avoid masking the real ImportError.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003035,
+        "snippet_processor": 0.055850000000000004,
+        "issue_star_creation": 0.02406,
+        "issue_star_solver": 0.03527,
+        "bouncer": 0.01812
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711725112.752197,
+        "relevant_snippets": [
+            {
+                "code": "from functools import wraps\nfrom importlib import import_module\nfrom inspect import getfullargspec, unwrap\n\nfrom django.utils.html import conditional_escape\nfrom django.utils.itercompat import is_iterable\n\nfrom .base import Node, Template, token_kwargs\nfrom .exceptions import TemplateSyntaxError\n\n\nclass InvalidTemplateLibrary(Exception):\n    pass",
+                "filename": "django/template/library.py",
+                "start_index": 0,
+                "end_index": 348,
+                "start_line": 1,
+                "end_line": 13,
+                "max_line": 385,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from importlib import import_module\nfrom pkgutil import walk_packages\n\nfrom django.apps import apps\nfrom django.conf import settings\nfrom django.template import TemplateDoesNotExist\nfrom django.template.context import make_context\nfrom django.template.engine import Engine\nfrom django.template.library import InvalidTemplateLibrary\n\nfrom .base import BaseEngine\n\n\nclass DjangoTemplates(BaseEngine):\n    app_dirname = \"templates\"\n\n    def __init__(self, params):\n        params = params.copy()\n        options = params.pop(\"OPTIONS\").copy()\n        options.setdefault(\"autoescape\", True)\n        options.setdefault(\"debug\", settings.DEBUG)\n        options.setdefault(\"file_charset\", \"utf-8\")\n        libraries = options.get(\"libraries\", {})\n        options[\"libraries\"] = self.get_templatetag_libraries(libraries)\n        super().__init__(params)\n        self.engine = Engine(self.dirs, self.app_dirs, **options)\n\n    def from_string(self, template_code):\n        return Template(self.engine.from_string(template_code), self)\n\n    def get_template(self, template_name):\n        try:\n            return Template(self.engine.get_template(template_name), self)\n        except TemplateDoesNotExist as exc:\n            reraise(exc, self)\n\n    def get_templatetag_libraries(self, custom_libraries):\n        \"\"\"\n        Return a collation of template tag libraries from installed\n        applications and the supplied custom_libraries argument.\n        \"\"\"\n        libraries = get_installed_libraries()\n        libraries.update(custom_libraries)\n        return libraries\n\n\nclass Template:\n    def __init__(self, template, backend):\n        self.template = template\n        self.backend = backend\n\n    @property\n    def origin(self):\n        return self.template.origin\n\n    def render(self, context=None, request=None):\n        context = make_context(\n            context, request, autoescape=self.backend.engine.autoescape\n        )\n        try:\n            return self.template.render(context)\n        except TemplateDoesNotExist as exc:\n            reraise(exc, self.backend)\n\n\ndef copy_exception(exc, backend=None):\n    \"\"\"\n    Create a new TemplateDoesNotExist. Preserve its declared attributes and\n    template debug data but discard __traceback__, __context__, and __cause__\n    to make this object suitable for keeping around (in a cache, for example).\n    \"\"\"\n    backend = backend or exc.backend\n    new = exc.__class__(*exc.args, tried=exc.tried, backend=backend, chain=exc.chain)\n    if hasattr(exc, \"template_debug\"):\n        new.template_debug = exc.template_debug\n    return new\n\n\ndef reraise(exc, backend):\n    \"\"\"\n    Reraise TemplateDoesNotExist while maintaining template debug information.\n    \"\"\"\n    new = copy_exception(exc, backend)\n    raise new from exc",
+                "filename": "django/template/backends/django.py",
+                "start_index": 0,
+                "end_index": 2771,
+                "start_line": 1,
+                "end_line": 84,
+                "max_line": 136,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import functools\nimport inspect\nimport itertools\nimport re\nimport sys\nimport types\nimport warnings\nfrom pathlib import Path\n\nfrom django.conf import settings\nfrom django.http import Http404, HttpResponse, HttpResponseNotFound\nfrom django.template import Context, Engine, TemplateDoesNotExist\nfrom django.template.defaultfilters import pprint\nfrom django.urls import resolve\nfrom django.utils import timezone\nfrom django.utils.datastructures import MultiValueDict\nfrom django.utils.encoding import force_str\nfrom django.utils.module_loading import import_string\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.version import PY311, get_docs_version\nfrom django.views.decorators.debug import coroutine_functions_to_sensitive_variables\n\n# Minimal Django templates engine to render the error templates\n# regardless of the project's TEMPLATES setting. Templates are\n# read directly from the filesystem so that the error handler\n# works even if the template loader is broken.\nDEBUG_ENGINE = Engine(\n    debug=True,\n    libraries={\"i18n\": \"django.templatetags.i18n\"},\n)\n\n\ndef builtin_template_path(name):\n    \"\"\"\n    Return a path to a builtin template.\n\n    Avoid calling this function at the module level or in a class-definition\n    because __file__ may not exist, e.g. in frozen environments.\n    \"\"\"\n    return Path(__file__).parent / \"templates\" / name\n\n\nclass ExceptionCycleWarning(UserWarning):\n    pass\n\n\nclass CallableSettingWrapper:\n    \"\"\"\n    Object to wrap callable appearing in settings.\n    * Not to call in the debug page (#21345).\n    * Not to break the debug page if the callable forbidding to set attributes\n      (#23070).\n    \"\"\"\n\n    def __init__(self, callable_setting):\n        self._wrapped = callable_setting\n\n    def __repr__(self):\n        return repr(self._wrapped)\n\n\ndef technical_500_response(request, exc_type, exc_value, tb, status_code=500):\n    \"\"\"\n    Create a technical server error response. The last three arguments are\n    the values returned from sys.exc_info() and friends.\n    \"\"\"\n    reporter = get_exception_reporter_class(request)(request, exc_type, exc_value, tb)\n    if request.accepts(\"text/html\"):\n        html = reporter.get_traceback_html()\n        return HttpResponse(html, status=status_code)\n    else:\n        text = reporter.get_traceback_text()\n        return HttpResponse(\n            text, status=status_code, content_type=\"text/plain; charset=utf-8\"\n        )\n\n\n@functools.lru_cache\ndef get_default_exception_reporter_filter():\n    # Instantiate the default filter for the first time and cache it.\n    return import_string(settings.DEFAULT_EXCEPTION_REPORTER_FILTER)()\n\n\ndef get_exception_reporter_filter(request):\n    default_filter = get_default_exception_reporter_filter()\n    return getattr(request, \"exception_reporter_filter\", default_filter)",
+                "filename": "django/views/debug.py",
+                "start_index": 0,
+                "end_index": 2827,
+                "start_line": 1,
+                "end_line": 86,
+                "max_line": 665,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import copy\nfrom collections import defaultdict\n\nfrom django.conf import settings\nfrom django.template.backends.django import get_template_tag_modules\n\nfrom . import Error, Tags, Warning, register\n\nE001 = Error(\n    \"You have 'APP_DIRS': True in your TEMPLATES but also specify 'loaders' \"\n    \"in OPTIONS. Either remove APP_DIRS or remove the 'loaders' option.\",\n    id=\"templates.E001\",\n)\nE002 = Error(\n    \"'string_if_invalid' in TEMPLATES OPTIONS must be a string but got: {} ({}).\",\n    id=\"templates.E002\",\n)\nW003 = Warning(\n    \"{} is used for multiple template tag modules: {}\",\n    id=\"templates.E003\",\n)\n\n\n@register(Tags.templates)\ndef check_setting_app_dirs_loaders(app_configs, **kwargs):\n    return (\n        [E001]\n        if any(\n            conf.get(\"APP_DIRS\") and \"loaders\" in conf.get(\"OPTIONS\", {})\n            for conf in settings.TEMPLATES\n        )\n        else []\n    )\n\n\n@register(Tags.templates)\ndef check_string_if_invalid_is_string(app_configs, **kwargs):\n    errors = []\n    for conf in settings.TEMPLATES:\n        string_if_invalid = conf.get(\"OPTIONS\", {}).get(\"string_if_invalid\", \"\")\n        if not isinstance(string_if_invalid, str):\n            error = copy.copy(E002)\n            error.msg = error.msg.format(\n                string_if_invalid, type(string_if_invalid).__name__\n            )\n            errors.append(error)\n    return errors\n\n\n@register(Tags.templates)\ndef check_for_template_tags_with_the_same_name(app_configs, **kwargs):\n    errors = []\n    libraries = defaultdict(set)\n\n    for conf in settings.TEMPLATES:\n        custom_libraries = conf.get(\"OPTIONS\", {}).get(\"libraries\", {})\n        for module_name, module_path in custom_libraries.items():\n            libraries[module_name].add(module_path)\n\n    for module_name, module_path in get_template_tag_modules():\n        libraries[module_name].add(module_path)\n\n    for library_name, items in libraries.items():\n        if len(items) > 1:\n            errors.append(\n                Warning(\n                    W003.msg.format(\n                        repr(library_name),\n                        \", \".join(repr(item) for item in sorted(items)),\n                    ),\n                    id=W003.id,\n                )\n            )\n\n    return errors",
+                "filename": "django/core/checks/templates.py",
+                "start_index": 0,
+                "end_index": 2256,
+                "start_line": 1,
+                "end_line": 75,
+                "max_line": 75,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def get_template_tag_modules():\n    \"\"\"\n    Yield (module_name, module_path) pairs for all installed template tag\n    libraries.\n    \"\"\"\n    candidates = [\"django.templatetags\"]\n    candidates.extend(\n        f\"{app_config.name}.templatetags\" for app_config in apps.get_app_configs()\n    )\n\n    for candidate in candidates:\n        try:\n            pkg = import_module(candidate)\n        except ImportError:\n            # No templatetags package defined. This is safe to ignore.\n            continue\n\n        if hasattr(pkg, \"__path__\"):\n            for name in get_package_libraries(pkg):\n                yield name.removeprefix(candidate).lstrip(\".\"), name\n\n\ndef get_installed_libraries():\n    \"\"\"\n    Return the built-in template tag libraries and those from installed\n    applications. Libraries are stored in a dictionary where keys are the\n    individual module names, not the full module paths. Example:\n    django.templatetags.i18n is stored as i18n.\n    \"\"\"\n    return {\n        module_name: full_name for module_name, full_name in get_template_tag_modules()\n    }\n\n\ndef get_package_libraries(pkg):\n    \"\"\"\n    Recursively yield template tag libraries defined in submodules of a\n    package.\n    \"\"\"\n    for entry in walk_packages(pkg.__path__, pkg.__name__ + \".\"):\n        try:\n            module = import_module(entry[1])\n        except ImportError as e:\n            raise InvalidTemplateLibrary(\n                \"Invalid template library specified. ImportError raised when \"\n                \"trying to load '%s': %s\" % (entry[1], e)\n            ) from e\n\n        if hasattr(module, \"register\"):\n            yield entry[1]",
+                "filename": "django/template/backends/django.py",
+                "start_index": 2774,
+                "end_index": 4407,
+                "start_line": 87,
+                "end_line": 136,
+                "max_line": 136,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "\"\"\"\nThis module contains generic exceptions used by template backends. Although,\ndue to historical reasons, the Django template language also internally uses\nthese exceptions, other exceptions specific to the DTL should not be added\nhere.\n\"\"\"\n\n\nclass TemplateDoesNotExist(Exception):\n    \"\"\"\n    The exception used when a template does not exist. Optional arguments:\n\n    backend\n        The template backend class used when raising this exception.\n\n    tried\n        A list of sources that were tried when finding the template. This\n        is formatted as a list of tuples containing (origin, status), where\n        origin is an Origin object or duck type and status is a string with the\n        reason the template wasn't found.\n\n    chain\n        A list of intermediate TemplateDoesNotExist exceptions. This is used to\n        encapsulate multiple exceptions when loading templates from multiple\n        engines.\n    \"\"\"\n\n    def __init__(self, msg, tried=None, backend=None, chain=None):\n        self.backend = backend\n        if tried is None:\n            tried = []\n        self.tried = tried\n        if chain is None:\n            chain = []\n        self.chain = chain\n        super().__init__(msg)\n\n\nclass TemplateSyntaxError(Exception):\n    \"\"\"\n    The exception used for syntax errors during parsing or rendering.\n    \"\"\"\n\n    pass",
+                "filename": "django/template/exceptions.py",
+                "start_index": 0,
+                "end_index": 1341,
+                "start_line": 1,
+                "end_line": 44,
+                "max_line": 44,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import functools\n\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.utils.functional import cached_property\nfrom django.utils.module_loading import import_string\n\nfrom .base import Template\nfrom .context import Context, _builtin_context_processors\nfrom .exceptions import TemplateDoesNotExist\nfrom .library import import_library",
+                "filename": "django/template/engine.py",
+                "start_index": 0,
+                "end_index": 346,
+                "start_line": 1,
+                "end_line": 10,
+                "max_line": 212,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nDjango's support for templates.\n\nThe django.template namespace contains two independent subsystems:\n\n1. Multiple Template Engines: support for pluggable template backends,\n   built-in backends and backend-independent APIs\n2. Django Template Language: Django's own template engine, including its\n   built-in loaders, context processors, tags and filters.\n\nIdeally these subsystems would be implemented in distinct packages. However\nkeeping them together made the implementation of Multiple Template Engines\nless disruptive .\n\nHere's a breakdown of which modules belong to which subsystem.\n\nMultiple Template Engines:\n\n- django.template.backends.*\n- django.template.loader\n- django.template.response\n\nDjango Template Language:\n\n- django.template.base\n- django.template.context\n- django.template.context_processors\n- django.template.loaders.*\n- django.template.debug\n- django.template.defaultfilters\n- django.template.defaulttags\n- django.template.engine\n- django.template.loader_tags\n- django.template.smartif\n\nShared:\n\n- django.template.utils\n\n\"\"\"\n\n# Multiple Template Engines\n\nfrom .engine import Engine\nfrom .utils import EngineHandler\n\nengines = EngineHandler()\n\n__all__ = (\"Engine\", \"engines\")\n\n\n# Django Template Language\n\n# Public exceptions\nfrom .base import VariableDoesNotExist  # NOQA isort:skip\nfrom .context import Context, ContextPopException, RequestContext  # NOQA isort:skip\nfrom .exceptions import TemplateDoesNotExist, TemplateSyntaxError  # NOQA isort:skip\n\n# Template parts\nfrom .base import (  # NOQA isort:skip\n    Node,\n    NodeList,\n    Origin,\n    Template,\n    Variable,\n)\n\n# Library management\nfrom .library import Library  # NOQA isort:skip\n\n# Import the .autoreload module to trigger the registrations of signals.\nfrom . import autoreload  # NOQA isort:skip\n\n\n__all__ += (\"Template\", \"Context\", \"RequestContext\")",
+                "filename": "django/template/__init__.py",
+                "start_index": 0,
+                "end_index": 1844,
+                "start_line": 1,
+                "end_line": 75,
+                "max_line": 75,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import functools\nfrom collections import Counter\nfrom pathlib import Path\n\nfrom django.apps import apps\nfrom django.conf import settings\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.utils.functional import cached_property\nfrom django.utils.module_loading import import_string\n\n\nclass InvalidTemplateEngineError(ImproperlyConfigured):\n    pass",
+                "filename": "django/template/utils.py",
+                "start_index": 0,
+                "end_index": 365,
+                "start_line": 1,
+                "end_line": 13,
+                "max_line": 111,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import pkgutil\nfrom importlib import import_module\n\nfrom django.conf import settings\nfrom django.core.exceptions import ImproperlyConfigured\n\n# For backwards compatibility with Django < 3.2\nfrom django.utils.connection import ConnectionDoesNotExist  # NOQA: F401\nfrom django.utils.connection import BaseConnectionHandler\nfrom django.utils.functional import cached_property\nfrom django.utils.module_loading import import_string\n\nDEFAULT_DB_ALIAS = \"default\"\nDJANGO_VERSION_PICKLE_KEY = \"_django_version\"\n\n\nclass Error(Exception):\n    pass\n\n\nclass InterfaceError(Error):\n    pass\n\n\nclass DatabaseError(Error):\n    pass\n\n\nclass DataError(DatabaseError):\n    pass\n\n\nclass OperationalError(DatabaseError):\n    pass\n\n\nclass IntegrityError(DatabaseError):\n    pass\n\n\nclass InternalError(DatabaseError):\n    pass\n\n\nclass ProgrammingError(DatabaseError):\n    pass\n\n\nclass NotSupportedError(DatabaseError):\n    pass\n\n\nclass DatabaseErrorWrapper:\n    \"\"\"\n    Context manager and decorator that reraises backend-specific database\n    exceptions using Django's common wrappers.\n    \"\"\"\n\n    def __init__(self, wrapper):\n        \"\"\"\n        wrapper is a database wrapper.\n\n        It must have a Database attribute defining PEP-249 exceptions.\n        \"\"\"\n        self.wrapper = wrapper\n\n    def __enter__(self):\n        pass\n\n    def __exit__(self, exc_type, exc_value, traceback):\n        if exc_type is None:\n            return\n        for dj_exc_type in (\n            DataError,\n            OperationalError,\n            IntegrityError,\n            InternalError,\n            ProgrammingError,\n            NotSupportedError,\n            DatabaseError,\n            InterfaceError,\n            Error,\n        ):\n            db_exc_type = getattr(self.wrapper.Database, dj_exc_type.__name__)\n            if issubclass(exc_type, db_exc_type):\n                dj_exc_value = dj_exc_type(*exc_value.args)\n                # Only set the 'errors_occurred' flag for errors that may make\n                # the connection unusable.\n                if dj_exc_type not in (DataError, IntegrityError):\n                    self.wrapper.errors_occurred = True\n                raise dj_exc_value.with_traceback(traceback) from exc_value\n\n    def __call__(self, func):\n        # Note that we are intentionally not using @wraps here for performance\n        # reasons. Refs #21109.\n        def inner(*args, **kwargs):\n            with self:\n                return func(*args, **kwargs)\n\n        return inner",
+                "filename": "django/db/utils.py",
+                "start_index": 0,
+                "end_index": 2477,
+                "start_line": 1,
+                "end_line": 100,
+                "max_line": 278,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/template/backends/django.py": [
+                {
+                    "chunk": {
+                        "code": "def get_template_tag_modules():\n    \"\"\"\n    Yield (module_name, module_path) pairs for all installed template tag\n    libraries.\n    \"\"\"\n    candidates = [\"django.templatetags\"]\n    candidates.extend(\n        f\"{app_config.name}.templatetags\" for app_config in apps.get_app_configs()\n    )\n\n    for candidate in candidates:\n        try:\n            pkg = import_module(candidate)\n        except ImportError:\n            # No templatetags package defined. This is safe to ignore.\n            continue\n\n        if hasattr(pkg, \"__path__\"):\n            for name in get_package_libraries(pkg):\n                yield name.removeprefix(candidate).lstrip(\".\"), name\n\n\ndef get_installed_libraries():\n    \"\"\"\n    Return the built-in template tag libraries and those from installed\n    applications. Libraries are stored in a dictionary where keys are the\n    individual module names, not the full module paths. Example:\n    django.templatetags.i18n is stored as i18n.\n    \"\"\"\n    return {\n        module_name: full_name for module_name, full_name in get_template_tag_modules()\n    }\n\n\ndef get_package_libraries(pkg):\n    \"\"\"\n    Recursively yield template tag libraries defined in submodules of a\n    package.\n    \"\"\"\n    for entry in walk_packages(pkg.__path__, pkg.__name__ + \".\"):\n        try:\n            module = import_module(entry[1])\n        except ImportError as e:\n            raise InvalidTemplateLibrary(\n                \"Invalid template library specified. ImportError raised when \"\n                \"trying to load '%s': %s\" % (entry[1], e)\n            ) from e\n\n        if hasattr(module, \"register\"):\n            yield entry[1]",
+                        "filename": "django/template/backends/django.py",
+                        "start_index": 2774,
+                        "end_index": 4407,
+                        "start_line": 87,
+                        "end_line": 136,
+                        "max_line": 136,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'get_package_libraries' function where the issue occurs. The exception handling in this function is what needs to be modified to avoid masking the real ImportError."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `get_package_libraries` function in `django/template/backends/django.py` to preserve the original `ImportError` stack trace.\n- Remove the `try-except` block that raises `InvalidTemplateLibrary` and let the original `ImportError` propagate.\n\n```python\ndef get_package_libraries(pkg):\n    \"\"\"\n    Recursively yield template tag libraries defined in submodules of a\n    package.\n    \"\"\"\n    for entry in walk_packages(pkg.__path__, pkg.__name__ + \".\"):\n        module = import_module(entry[1])\n        if hasattr(module, \"register\"):\n            yield entry[1]\n```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT. It suggests modifying the 'get_package_libraries' function to preserve the original 'ImportError' stack trace and to remove the 'try-except' block that raises 'InvalidTemplateLibrary', allowing the original 'ImportError' to propagate. This directly addresses the issue of the real exception being masked by the 'InvalidTemplateLibrary' exception, which is the core problem described in the PROMPT. The RESPONSE also includes a revised code snippet for the 'get_package_libraries' function, which is helpful for implementing the suggested changes. Additionally, the RESPONSE provides a link to the relevant code in the Django repository, which is useful for context and verification. The only reason it does not score a 10 is that it does not explicitly mention how to handle the 'hasattr(module, \"register\")' check, which could still raise an ImportError that needs to be handled appropriately.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711725260.6370308,
+        "result": "- Modify the `get_package_libraries` function in `django/template/backends/django.py` to preserve the original `ImportError` stack trace.\n- Remove the `try-except` block that raises `InvalidTemplateLibrary` and let the original `ImportError` propagate.\n\n```python\ndef get_package_libraries(pkg):\n    \"\"\"\n    Recursively yield template tag libraries defined in submodules of a\n    package.\n    \"\"\"\n    for entry in walk_packages(pkg.__path__, pkg.__name__ + \".\"):\n        module = import_module(entry[1])\n        if hasattr(module, \"register\"):\n            yield entry[1]\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [template](https://github.com/testbed/django__django__3.2/tree//django/template) \u2192 [backends](https://github.com/testbed/django__django__3.2/tree//django/template/backends)- [Lines 87 - 136](https://github.com/testbed/django__django__3.2/blob//django/template/backends/django.py#L87-L136)\n\n This snippet contains the 'get_package_libraries' function where the issue occurs. The exception handling in this function is what needs to be modified to avoid masking the real ImportError.",
+        "context_relevance": 0.2800000000000001,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT to get a score of 10.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT by suggesting a modification to the `get_package_libraries` function to preserve the original `ImportError` stack trace and remove the exception handling that is causing the problem. It provides a solution that is relevant to the debugging difficulty mentioned in the PROMPT. Additionally, the RESPONSE includes a code snippet that is directly related to the problem and provides a link to the relevant section of the codebase, which is a specific request from the PROMPT. The RESPONSE is comprehensive and answers the entire PROMPT completely."
+        },
+        "qa_relevance": 1.0
+    }
+}

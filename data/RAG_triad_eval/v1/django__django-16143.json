@@ -1,0 +1,251 @@
+{
+    "id": "django__django-16143",
+    "repo_name": "testbed/django__django__4.2",
+    "task_id": 5498815444920655142,
+    "title": "TransactionManagmentError isn't helpful for tracking down cause",
+    "body": "Description\n\t\nThe error: \"TransactionManagementError: An error occurred in the current transaction. You can't execute queries until the end of the 'atomic' block.\" thrown from django/db/backends/init.py\", line 372, in validate_no_broken_transaction doesn't provide enough information to help track down the problem.\nThe exception is thrown if self.needs_rollback is True, but the underlying reason that self.needs_rollback has been set True has been lost, since it could have happened a long time previously.\nTransactions should keep track of why needs_rollback has been set, and use that to provide a more helpful error.\nBackground: I'm seeing this error being thrown when a task is run on a Celery queue, but not when run manually. Since it's via Celery, dropping into the debugger is impossible, and thus I'm back to trying to dump useful debug info.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Ensure that the database operations within the Celery task are wrapped in an `atomic` block to manage transactions properly.\n- Check for any unhandled exceptions within the Celery task that might be causing the transaction to be marked for rollback (`needs_rollback = True`).\n- Use `try...except` blocks around database operations to catch exceptions and handle them appropriately, possibly using `transaction.rollback()` if needed.\n- If the task involves multiple database operations that must be committed together, ensure they are all within the same `atomic` block.\n- If the task is part of a chain or group of tasks in Celery, ensure that the database transaction is not being shared across tasks unintentionally, as this can lead to transaction management errors.\n- If the error occurs intermittently, consider adding logging around the transaction management to capture more context when the error occurs.\n- Review the task code for any manual setting of `connection.needs_rollback` to `True` without a subsequent rollback or commit, and correct the logic as needed.\n- If using savepoints, ensure that `savepoint_rollback` is called if an exception occurs after a savepoint has been created.\n- If the task is performing database operations that are not idempotent, consider using the `on_commit` hook to defer execution of those operations until after the transaction has been successfully committed.\n- Verify that the database connection is not being closed or marked as needing rollback due to an error in a different part of the code that is executed before the task runs.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db)- [Lines 100 - 139](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L100-L139)\n\n This snippet shows where the 'needs_rollback' flag is set and an exception is stored, which is directly related to the issue of tracking down the cause of a TransactionManagementError. \n\n\n   - [Lines 113 - 299](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L113-L299)\n\n This snippet includes logic for setting 'needs_rollback' to True and handling savepoints, which is relevant to understanding when and why transactions are marked for rollback. \n\n\n   - [Lines 1 - 97](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L1-L97)\n\n This snippet defines the TransactionManagementError and functions related to transaction management, which may need to be modified to include more information about the cause of the error. \n\n\n   - [Lines 237 - 271](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L237-L271)\n\n This snippet contains logic for committing transactions and handling exceptions, which could be relevant for understanding how exceptions are handled in successful transactions. \n\n\n   - [Lines 182 - 222](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L182-L222)\n\n This snippet shows the logic for entering an atomic block and handling savepoints, which is relevant to the issue of tracking transaction states and errors.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00032649999999999997,
+        "snippet_processor": 0.052450000000000004,
+        "issue_star_creation": 0.04127,
+        "issue_star_solver": 0.06528,
+        "bouncer": 0.029540000000000004
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711706688.905329,
+        "relevant_snippets": [
+            {
+                "code": "else:\n                # This flag will be set to True again if there isn't a savepoint\n                # allowing to perform the rollback at this level.\n                connection.needs_rollback = False\n                if connection.in_atomic_block:\n                    # Roll back to savepoint if there is one, mark for rollback\n                    # otherwise.\n                    if sid is None:\n                        connection.needs_rollback = True\n                    else:\n                        try:\n                            connection.savepoint_rollback(sid)\n                            # The savepoint won't be reused. Release it to\n                            # minimize overhead for the database server.\n                            connection.savepoint_commit(sid)\n                        except Error:\n                            # If rolling back to a savepoint fails, mark for\n                            # rollback at a higher level and avoid shadowing\n                            # the original exception.\n                            connection.needs_rollback = True\n                else:\n                    # Roll back transaction\n                    try:\n                        connection.rollback()\n                    except Error:\n                        # An error during rollback means that something\n                        # went wrong with the connection. Drop it.\n                        connection.close()",
+                "filename": "django/db/transaction.py",
+                "start_index": 9581,
+                "end_index": 11023,
+                "start_line": 113,
+                "end_line": 299,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "@contextmanager\ndef mark_for_rollback_on_error(using=None):\n    \"\"\"\n    Internal low-level utility to mark a transaction as \"needs rollback\" when\n    an exception is raised while not enforcing the enclosed block to be in a\n    transaction. This is needed by Model.save() and friends to avoid starting a\n    transaction when in autocommit mode and a single query is executed.\n\n    It's equivalent to:\n\n        connection = get_connection(using)\n        if connection.get_autocommit():\n            yield\n        else:\n            with transaction.atomic(using=using, savepoint=False):\n                yield\n\n    but it uses low-level utilities to avoid performance overhead.\n    \"\"\"\n    try:\n        yield\n    except Exception as exc:\n        connection = get_connection(using)\n        if connection.in_atomic_block:\n            connection.needs_rollback = True\n            connection.rollback_exc = exc\n        raise\n\n\ndef on_commit(func, using=None, robust=False):\n    \"\"\"\n    Register `func` to be called when the current transaction is committed.\n    If the current transaction is rolled back, `func` will not be called.\n    \"\"\"\n    get_connection(using).on_commit(func, robust)\n\n\n#################################\n# Decorators / context managers #\n#################################",
+                "filename": "django/db/transaction.py",
+                "start_index": 2672,
+                "end_index": 3956,
+                "start_line": 100,
+                "end_line": 139,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "if connection.closed_in_transaction:\n                # The database will perform a rollback by itself.\n                # Wait until we exit the outermost block.\n                pass\n\n            elif exc_type is None and not connection.needs_rollback:\n                if connection.in_atomic_block:\n                    # Release savepoint if there is one\n                    if sid is not None:\n                        try:\n                            connection.savepoint_commit(sid)\n                        except DatabaseError:\n                            try:\n                                connection.savepoint_rollback(sid)\n                                # The savepoint won't be reused. Release it to\n                                # minimize overhead for the database server.\n                                connection.savepoint_commit(sid)\n                            except Error:\n                                # If rolling back to a savepoint fails, mark for\n                                # rollback at a higher level and avoid shadowing\n                                # the original exception.\n                                connection.needs_rollback = True\n                            raise\n                else:\n                    # Commit transaction\n                    try:\n                        connection.commit()\n                    except DatabaseError:\n                        try:\n                            connection.rollback()\n                        except Error:\n                            # An error during rollback means that something\n                            # went wrong with the connection. Drop it.\n                            connection.close()\n                        raise",
+                "filename": "django/db/transaction.py",
+                "start_index": 7841,
+                "end_index": 9568,
+                "start_line": 237,
+                "end_line": 271,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "while tb is not None:\n            # Support for __traceback_hide__ which is used by a few libraries\n            # to hide internal frames.\n            if tb.tb_frame.f_locals.get(\"__traceback_hide__\"):\n                tb = tb.tb_next\n                continue\n            filename = tb.tb_frame.f_code.co_filename\n            function = tb.tb_frame.f_code.co_name\n            lineno = tb.tb_lineno - 1\n            loader = tb.tb_frame.f_globals.get(\"__loader__\")\n            module_name = tb.tb_frame.f_globals.get(\"__name__\") or \"\"\n            (\n                pre_context_lineno,\n                pre_context,\n                context_line,\n                post_context,\n            ) = self._get_lines_from_file(\n                filename,\n                lineno,\n                7,\n                loader,\n                module_name,\n            )\n            if pre_context_lineno is None:\n                pre_context_lineno = lineno\n                pre_context = []\n                context_line = \"<source code not available>\"\n                post_context = []\n\n            colno = tb_area_colno = \"\"\n            if PY311:\n                _, _, start_column, end_column = next(\n                    itertools.islice(\n                        tb.tb_frame.f_code.co_positions(), tb.tb_lasti // 2, None\n                    )\n                )\n                if start_column and end_column:\n                    underline = \"^\" * (end_column - start_column)\n                    spaces = \" \" * (start_column + len(str(lineno + 1)) + 2)\n                    colno = f\"\\n{spaces}{underline}\"\n                    tb_area_spaces = \" \" * (\n                        4\n                        + start_column\n                        - (len(context_line) - len(context_line.lstrip()))\n                    )\n                    tb_area_colno = f\"\\n{tb_area_spaces}{underline}\"\n            yield {\n                \"exc_cause\": exc_cause,\n                \"exc_cause_explicit\": exc_cause_explicit,\n                \"tb\": tb,\n                \"type\": \"django\" if module_name.startswith(\"django.\") else \"user\",\n                \"filename\": filename,\n                \"function\": function,\n                \"lineno\": lineno + 1,\n                \"vars\": self.filter.get_traceback_frame_variables(\n                    self.request, tb.tb_frame\n                ),\n                \"id\": id(tb),\n                \"pre_context\": pre_context,\n                \"context_line\": context_line,\n                \"post_context\": post_context,\n                \"pre_context_lineno\": pre_context_lineno + 1,\n                \"colno\": colno,\n                \"tb_area_colno\": tb_area_colno,\n            }\n            tb = tb.tb_next",
+                "filename": "django/views/debug.py",
+                "start_index": 20950,
+                "end_index": 23634,
+                "start_line": 540,
+                "end_line": 605,
+                "max_line": 665,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from contextlib import ContextDecorator, contextmanager\n\nfrom django.db import (\n    DEFAULT_DB_ALIAS,\n    DatabaseError,\n    Error,\n    ProgrammingError,\n    connections,\n)\n\n\nclass TransactionManagementError(ProgrammingError):\n    \"\"\"Transaction management is used improperly.\"\"\"\n\n    pass\n\n\ndef get_connection(using=None):\n    \"\"\"\n    Get a database connection by name, or the default database connection\n    if no name is provided. This is a private API.\n    \"\"\"\n    if using is None:\n        using = DEFAULT_DB_ALIAS\n    return connections[using]\n\n\ndef get_autocommit(using=None):\n    \"\"\"Get the autocommit status of the connection.\"\"\"\n    return get_connection(using).get_autocommit()\n\n\ndef set_autocommit(autocommit, using=None):\n    \"\"\"Set the autocommit status of the connection.\"\"\"\n    return get_connection(using).set_autocommit(autocommit)\n\n\ndef commit(using=None):\n    \"\"\"Commit a transaction.\"\"\"\n    get_connection(using).commit()\n\n\ndef rollback(using=None):\n    \"\"\"Roll back a transaction.\"\"\"\n    get_connection(using).rollback()\n\n\ndef savepoint(using=None):\n    \"\"\"\n    Create a savepoint (if supported and required by the backend) inside the\n    current transaction. Return an identifier for the savepoint that will be\n    used for the subsequent rollback or commit.\n    \"\"\"\n    return get_connection(using).savepoint()\n\n\ndef savepoint_rollback(sid, using=None):\n    \"\"\"\n    Roll back the most recent savepoint (if one exists). Do nothing if\n    savepoints are not supported.\n    \"\"\"\n    get_connection(using).savepoint_rollback(sid)\n\n\ndef savepoint_commit(sid, using=None):\n    \"\"\"\n    Commit the most recent savepoint (if one exists). Do nothing if\n    savepoints are not supported.\n    \"\"\"\n    get_connection(using).savepoint_commit(sid)\n\n\ndef clean_savepoints(using=None):\n    \"\"\"\n    Reset the counter used to generate unique savepoint ids in this thread.\n    \"\"\"\n    get_connection(using).clean_savepoints()\n\n\ndef get_rollback(using=None):\n    \"\"\"Get the \"needs rollback\" flag -- for *advanced use* only.\"\"\"\n    return get_connection(using).get_rollback()\n\n\ndef set_rollback(rollback, using=None):\n    \"\"\"\n    Set or unset the \"needs rollback\" flag -- for *advanced use* only.\n\n    When `rollback` is `True`, trigger a rollback when exiting the innermost\n    enclosing atomic block that has `savepoint=True` (that's the default). Use\n    this to force a rollback without raising an exception.\n\n    When `rollback` is `False`, prevent such a rollback. Use this only after\n    rolling back to a known-good state! Otherwise, you break the atomic block\n    and data corruption may occur.\n    \"\"\"\n    return get_connection(using).set_rollback(rollback)",
+                "filename": "django/db/transaction.py",
+                "start_index": 0,
+                "end_index": 2669,
+                "start_line": 1,
+                "end_line": 97,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "import logging\n\nfrom django.contrib.sessions.backends.base import CreateError, SessionBase, UpdateError\nfrom django.core.exceptions import SuspiciousOperation\nfrom django.db import DatabaseError, IntegrityError, router, transaction\nfrom django.utils import timezone\nfrom django.utils.functional import cached_property",
+                "filename": "django/contrib/sessions/backends/db.py",
+                "start_index": 0,
+                "end_index": 317,
+                "start_line": 1,
+                "end_line": 7,
+                "max_line": 110,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "exc_cause = self._get_explicit_or_implicit_cause(exc_value)\n        exc_cause_explicit = getattr(exc_value, \"__cause__\", True)\n        if tb is None:\n            yield {\n                \"exc_cause\": exc_cause,\n                \"exc_cause_explicit\": exc_cause_explicit,\n                \"tb\": None,\n                \"type\": \"user\",\n            }",
+                "filename": "django/views/debug.py",
+                "start_index": 20600,
+                "end_index": 20941,
+                "start_line": 531,
+                "end_line": 604,
+                "max_line": 665,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@contextmanager\ndef wrap_oracle_errors():\n    try:\n        yield\n    except Database.DatabaseError as e:\n        # cx_Oracle raises a cx_Oracle.DatabaseError exception with the\n        # following attributes and values:\n        #  code = 2091\n        #  message = 'ORA-02091: transaction rolled back\n        #            'ORA-02291: integrity constraint (TEST_DJANGOTEST.SYS\n        #               _C00102056) violated - parent key not found'\n        #            or:\n        #            'ORA-00001: unique constraint (DJANGOTEST.DEFERRABLE_\n        #               PINK_CONSTRAINT) violated\n        # Convert that case to Django's IntegrityError exception.\n        x = e.args[0]\n        if (\n            hasattr(x, \"code\")\n            and hasattr(x, \"message\")\n            and x.code == 2091\n            and (\"ORA-02291\" in x.message or \"ORA-00001\" in x.message)\n        ):\n            raise IntegrityError(*tuple(e.args))\n        raise\n\n\nclass _UninitializedOperatorsDescriptor:\n    def __get__(self, instance, cls=None):\n        # If connection.operators is looked up before a connection has been\n        # created, transparently initialize connection.operators to avert an\n        # AttributeError.\n        if instance is None:\n            raise AttributeError(\"operators not available as class attribute\")\n        # Creating a cursor will initialize the operators.\n        instance.cursor().close()\n        return instance.__dict__[\"operators\"]",
+                "filename": "django/db/backends/oracle/base.py",
+                "start_index": 2229,
+                "end_index": 3680,
+                "start_line": 68,
+                "end_line": 103,
+                "max_line": 592,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.db import DatabaseError\n\n\nclass AmbiguityError(Exception):\n    \"\"\"More than one migration matches a name prefix.\"\"\"\n\n    pass\n\n\nclass BadMigrationError(Exception):\n    \"\"\"There's a bad migration (unreadable/bad format/etc.).\"\"\"\n\n    pass\n\n\nclass CircularDependencyError(Exception):\n    \"\"\"There's an impossible-to-resolve circular dependency.\"\"\"\n\n    pass\n\n\nclass InconsistentMigrationHistory(Exception):\n    \"\"\"An applied migration has some of its dependencies not applied.\"\"\"\n\n    pass\n\n\nclass InvalidBasesError(ValueError):\n    \"\"\"A model's base classes can't be resolved.\"\"\"\n\n    pass\n\n\nclass IrreversibleError(RuntimeError):\n    \"\"\"An irreversible migration is about to be reversed.\"\"\"\n\n    pass\n\n\nclass NodeNotFoundError(LookupError):\n    \"\"\"An attempt on a node is made that is not available in the graph.\"\"\"\n\n    def __init__(self, message, node, origin=None):\n        self.message = message\n        self.origin = origin\n        self.node = node\n\n    def __str__(self):\n        return self.message\n\n    def __repr__(self):\n        return \"NodeNotFoundError(%r)\" % (self.node,)\n\n\nclass MigrationSchemaMissing(DatabaseError):\n    pass\n\n\nclass InvalidMigrationPlan(ValueError):\n    pass",
+                "filename": "django/db/migrations/exceptions.py",
+                "start_index": 0,
+                "end_index": 1203,
+                "start_line": 1,
+                "end_line": 60,
+                "max_line": 60,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def __enter__(self):\n        connection = get_connection(self.using)\n\n        if (\n            self.durable\n            and connection.atomic_blocks\n            and not connection.atomic_blocks[-1]._from_testcase\n        ):\n            raise RuntimeError(\n                \"A durable atomic block cannot be nested within another \"\n                \"atomic block.\"\n            )\n        if not connection.in_atomic_block:\n            # Reset state when entering an outermost atomic block.\n            connection.commit_on_exit = True\n            connection.needs_rollback = False\n            if not connection.get_autocommit():\n                # Pretend we're already in an atomic block to bypass the code\n                # that disables autocommit to enter a transaction, and make a\n                # note to deal with this case in __exit__.\n                connection.in_atomic_block = True\n                connection.commit_on_exit = False\n\n        if connection.in_atomic_block:\n            # We're already in a transaction; create a savepoint, unless we\n            # were told not to or we're already waiting for a rollback. The\n            # second condition avoids creating useless savepoints and prevents\n            # overwriting needs_rollback until the rollback is performed.\n            if self.savepoint and not connection.needs_rollback:\n                sid = connection.savepoint()\n                connection.savepoint_ids.append(sid)\n            else:\n                connection.savepoint_ids.append(None)\n        else:\n            connection.set_autocommit(\n                False, force_begin_transaction_with_broken_autocommit=True\n            )\n            connection.in_atomic_block = True\n\n        if connection.in_atomic_block:\n            connection.atomic_blocks.append(self)",
+                "filename": "django/db/transaction.py",
+                "start_index": 5604,
+                "end_index": 7401,
+                "start_line": 182,
+                "end_line": 222,
+                "max_line": 340,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.4
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/transaction.py": [
+                {
+                    "chunk": {
+                        "code": "@contextmanager\ndef mark_for_rollback_on_error(using=None):\n    \"\"\"\n    Internal low-level utility to mark a transaction as \"needs rollback\" when\n    an exception is raised while not enforcing the enclosed block to be in a\n    transaction. This is needed by Model.save() and friends to avoid starting a\n    transaction when in autocommit mode and a single query is executed.\n\n    It's equivalent to:\n\n        connection = get_connection(using)\n        if connection.get_autocommit():\n            yield\n        else:\n            with transaction.atomic(using=using, savepoint=False):\n                yield\n\n    but it uses low-level utilities to avoid performance overhead.\n    \"\"\"\n    try:\n        yield\n    except Exception as exc:\n        connection = get_connection(using)\n        if connection.in_atomic_block:\n            connection.needs_rollback = True\n            connection.rollback_exc = exc\n        raise\n\n\ndef on_commit(func, using=None, robust=False):\n    \"\"\"\n    Register `func` to be called when the current transaction is committed.\n    If the current transaction is rolled back, `func` will not be called.\n    \"\"\"\n    get_connection(using).on_commit(func, robust)\n\n\n#################################\n# Decorators / context managers #\n#################################",
+                        "filename": "django/db/transaction.py",
+                        "start_index": 2672,
+                        "end_index": 3956,
+                        "start_line": 100,
+                        "end_line": 139,
+                        "max_line": 340,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows where the 'needs_rollback' flag is set and an exception is stored, which is directly related to the issue of tracking down the cause of a TransactionManagementError."
+                },
+                {
+                    "chunk": {
+                        "code": "else:\n                # This flag will be set to True again if there isn't a savepoint\n                # allowing to perform the rollback at this level.\n                connection.needs_rollback = False\n                if connection.in_atomic_block:\n                    # Roll back to savepoint if there is one, mark for rollback\n                    # otherwise.\n                    if sid is None:\n                        connection.needs_rollback = True\n                    else:\n                        try:\n                            connection.savepoint_rollback(sid)\n                            # The savepoint won't be reused. Release it to\n                            # minimize overhead for the database server.\n                            connection.savepoint_commit(sid)\n                        except Error:\n                            # If rolling back to a savepoint fails, mark for\n                            # rollback at a higher level and avoid shadowing\n                            # the original exception.\n                            connection.needs_rollback = True\n                else:\n                    # Roll back transaction\n                    try:\n                        connection.rollback()\n                    except Error:\n                        # An error during rollback means that something\n                        # went wrong with the connection. Drop it.\n                        connection.close()",
+                        "filename": "django/db/transaction.py",
+                        "start_index": 9581,
+                        "end_index": 11023,
+                        "start_line": 113,
+                        "end_line": 299,
+                        "max_line": 340,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes logic for setting 'needs_rollback' to True and handling savepoints, which is relevant to understanding when and why transactions are marked for rollback."
+                },
+                {
+                    "chunk": {
+                        "code": "from contextlib import ContextDecorator, contextmanager\n\nfrom django.db import (\n    DEFAULT_DB_ALIAS,\n    DatabaseError,\n    Error,\n    ProgrammingError,\n    connections,\n)\n\n\nclass TransactionManagementError(ProgrammingError):\n    \"\"\"Transaction management is used improperly.\"\"\"\n\n    pass\n\n\ndef get_connection(using=None):\n    \"\"\"\n    Get a database connection by name, or the default database connection\n    if no name is provided. This is a private API.\n    \"\"\"\n    if using is None:\n        using = DEFAULT_DB_ALIAS\n    return connections[using]\n\n\ndef get_autocommit(using=None):\n    \"\"\"Get the autocommit status of the connection.\"\"\"\n    return get_connection(using).get_autocommit()\n\n\ndef set_autocommit(autocommit, using=None):\n    \"\"\"Set the autocommit status of the connection.\"\"\"\n    return get_connection(using).set_autocommit(autocommit)\n\n\ndef commit(using=None):\n    \"\"\"Commit a transaction.\"\"\"\n    get_connection(using).commit()\n\n\ndef rollback(using=None):\n    \"\"\"Roll back a transaction.\"\"\"\n    get_connection(using).rollback()\n\n\ndef savepoint(using=None):\n    \"\"\"\n    Create a savepoint (if supported and required by the backend) inside the\n    current transaction. Return an identifier for the savepoint that will be\n    used for the subsequent rollback or commit.\n    \"\"\"\n    return get_connection(using).savepoint()\n\n\ndef savepoint_rollback(sid, using=None):\n    \"\"\"\n    Roll back the most recent savepoint (if one exists). Do nothing if\n    savepoints are not supported.\n    \"\"\"\n    get_connection(using).savepoint_rollback(sid)\n\n\ndef savepoint_commit(sid, using=None):\n    \"\"\"\n    Commit the most recent savepoint (if one exists). Do nothing if\n    savepoints are not supported.\n    \"\"\"\n    get_connection(using).savepoint_commit(sid)\n\n\ndef clean_savepoints(using=None):\n    \"\"\"\n    Reset the counter used to generate unique savepoint ids in this thread.\n    \"\"\"\n    get_connection(using).clean_savepoints()\n\n\ndef get_rollback(using=None):\n    \"\"\"Get the \"needs rollback\" flag -- for *advanced use* only.\"\"\"\n    return get_connection(using).get_rollback()\n\n\ndef set_rollback(rollback, using=None):\n    \"\"\"\n    Set or unset the \"needs rollback\" flag -- for *advanced use* only.\n\n    When `rollback` is `True`, trigger a rollback when exiting the innermost\n    enclosing atomic block that has `savepoint=True` (that's the default). Use\n    this to force a rollback without raising an exception.\n\n    When `rollback` is `False`, prevent such a rollback. Use this only after\n    rolling back to a known-good state! Otherwise, you break the atomic block\n    and data corruption may occur.\n    \"\"\"\n    return get_connection(using).set_rollback(rollback)",
+                        "filename": "django/db/transaction.py",
+                        "start_index": 0,
+                        "end_index": 2669,
+                        "start_line": 1,
+                        "end_line": 97,
+                        "max_line": 340,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the TransactionManagementError and functions related to transaction management, which may need to be modified to include more information about the cause of the error."
+                },
+                {
+                    "chunk": {
+                        "code": "if connection.closed_in_transaction:\n                # The database will perform a rollback by itself.\n                # Wait until we exit the outermost block.\n                pass\n\n            elif exc_type is None and not connection.needs_rollback:\n                if connection.in_atomic_block:\n                    # Release savepoint if there is one\n                    if sid is not None:\n                        try:\n                            connection.savepoint_commit(sid)\n                        except DatabaseError:\n                            try:\n                                connection.savepoint_rollback(sid)\n                                # The savepoint won't be reused. Release it to\n                                # minimize overhead for the database server.\n                                connection.savepoint_commit(sid)\n                            except Error:\n                                # If rolling back to a savepoint fails, mark for\n                                # rollback at a higher level and avoid shadowing\n                                # the original exception.\n                                connection.needs_rollback = True\n                            raise\n                else:\n                    # Commit transaction\n                    try:\n                        connection.commit()\n                    except DatabaseError:\n                        try:\n                            connection.rollback()\n                        except Error:\n                            # An error during rollback means that something\n                            # went wrong with the connection. Drop it.\n                            connection.close()\n                        raise",
+                        "filename": "django/db/transaction.py",
+                        "start_index": 7841,
+                        "end_index": 9568,
+                        "start_line": 237,
+                        "end_line": 271,
+                        "max_line": 340,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains logic for committing transactions and handling exceptions, which could be relevant for understanding how exceptions are handled in successful transactions."
+                },
+                {
+                    "chunk": {
+                        "code": "def __enter__(self):\n        connection = get_connection(self.using)\n\n        if (\n            self.durable\n            and connection.atomic_blocks\n            and not connection.atomic_blocks[-1]._from_testcase\n        ):\n            raise RuntimeError(\n                \"A durable atomic block cannot be nested within another \"\n                \"atomic block.\"\n            )\n        if not connection.in_atomic_block:\n            # Reset state when entering an outermost atomic block.\n            connection.commit_on_exit = True\n            connection.needs_rollback = False\n            if not connection.get_autocommit():\n                # Pretend we're already in an atomic block to bypass the code\n                # that disables autocommit to enter a transaction, and make a\n                # note to deal with this case in __exit__.\n                connection.in_atomic_block = True\n                connection.commit_on_exit = False\n\n        if connection.in_atomic_block:\n            # We're already in a transaction; create a savepoint, unless we\n            # were told not to or we're already waiting for a rollback. The\n            # second condition avoids creating useless savepoints and prevents\n            # overwriting needs_rollback until the rollback is performed.\n            if self.savepoint and not connection.needs_rollback:\n                sid = connection.savepoint()\n                connection.savepoint_ids.append(sid)\n            else:\n                connection.savepoint_ids.append(None)\n        else:\n            connection.set_autocommit(\n                False, force_begin_transaction_with_broken_autocommit=True\n            )\n            connection.in_atomic_block = True\n\n        if connection.in_atomic_block:\n            connection.atomic_blocks.append(self)",
+                        "filename": "django/db/transaction.py",
+                        "start_index": 5604,
+                        "end_index": 7401,
+                        "start_line": 182,
+                        "end_line": 222,
+                        "max_line": 340,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the logic for entering an atomic block and handling savepoints, which is relevant to the issue of tracking transaction states and errors."
+                }
+            ]
+        },
+        "solution_task": "- Ensure that the database operations within the Celery task are wrapped in an `atomic` block to manage transactions properly.\n- Check for any unhandled exceptions within the Celery task that might be causing the transaction to be marked for rollback (`needs_rollback = True`).\n- Use `try...except` blocks around database operations to catch exceptions and handle them appropriately, possibly using `transaction.rollback()` if needed.\n- If the task involves multiple database operations that must be committed together, ensure they are all within the same `atomic` block.\n- If the task is part of a chain or group of tasks in Celery, ensure that the database transaction is not being shared across tasks unintentionally, as this can lead to transaction management errors.\n- If the error occurs intermittently, consider adding logging around the transaction management to capture more context when the error occurs.\n- Review the task code for any manual setting of `connection.needs_rollback` to `True` without a subsequent rollback or commit, and correct the logic as needed.\n- If using savepoints, ensure that `savepoint_rollback` is called if an exception occurs after a savepoint has been created.\n- If the task is performing database operations that are not idempotent, consider using the `on_commit` hook to defer execution of those operations until after the transaction has been successfully committed.\n- Verify that the database connection is not being closed or marked as needing rollback due to an error in a different part of the code that is executed before the task runs.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a comprehensive list of actionable steps to troubleshoot and potentially resolve the TransactionManagementError in Django when using Celery. It addresses the need for proper transaction management within Celery tasks, handling exceptions, and ensuring that database operations are correctly grouped within atomic blocks. The RESPONSE also suggests adding logging to capture more context, which is directly relevant to the PROMPT's request for more helpful error information. Additionally, the RESPONSE includes references to specific code snippets in the Django repository that are related to transaction management and could be useful for understanding and resolving the issue. However, the RESPONSE does not directly address the enhancement of the error message to include the underlying reason for the 'needs_rollback' flag being set to True, which is a key part of the PROMPT's described issue. Therefore, while the RESPONSE is highly relevant and offers clear guidance, it does not fully address all aspects of the PROMPT.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711706792.169952,
+        "result": "- Ensure that the database operations within the Celery task are wrapped in an `atomic` block to manage transactions properly.\n- Check for any unhandled exceptions within the Celery task that might be causing the transaction to be marked for rollback (`needs_rollback = True`).\n- Use `try...except` blocks around database operations to catch exceptions and handle them appropriately, possibly using `transaction.rollback()` if needed.\n- If the task involves multiple database operations that must be committed together, ensure they are all within the same `atomic` block.\n- If the task is part of a chain or group of tasks in Celery, ensure that the database transaction is not being shared across tasks unintentionally, as this can lead to transaction management errors.\n- If the error occurs intermittently, consider adding logging around the transaction management to capture more context when the error occurs.\n- Review the task code for any manual setting of `connection.needs_rollback` to `True` without a subsequent rollback or commit, and correct the logic as needed.\n- If using savepoints, ensure that `savepoint_rollback` is called if an exception occurs after a savepoint has been created.\n- If the task is performing database operations that are not idempotent, consider using the `on_commit` hook to defer execution of those operations until after the transaction has been successfully committed.\n- Verify that the database connection is not being closed or marked as needing rollback due to an error in a different part of the code that is executed before the task runs.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db)- [Lines 100 - 139](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L100-L139)\n\n This snippet shows where the 'needs_rollback' flag is set and an exception is stored, which is directly related to the issue of tracking down the cause of a TransactionManagementError. \n\n\n   - [Lines 113 - 299](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L113-L299)\n\n This snippet includes logic for setting 'needs_rollback' to True and handling savepoints, which is relevant to understanding when and why transactions are marked for rollback. \n\n\n   - [Lines 1 - 97](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L1-L97)\n\n This snippet defines the TransactionManagementError and functions related to transaction management, which may need to be modified to include more information about the cause of the error. \n\n\n   - [Lines 237 - 271](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L237-L271)\n\n This snippet contains logic for committing transactions and handling exceptions, which could be relevant for understanding how exceptions are handled in successful transactions. \n\n\n   - [Lines 182 - 222](https://github.com/testbed/django__django__4.2/blob//django/db/transaction.py#L182-L222)\n\n This snippet shows the logic for entering an atomic block and handling savepoints, which is relevant to the issue of tracking transaction states and errors.",
+        "context_relevance": 0.33,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The response is relevant to the entire prompt and provides a comprehensive answer.\nSupporting Evidence: The response directly addresses the issue described in the prompt by offering practical steps to troubleshoot and resolve the TransactionManagementError in Django. It provides specific advice on how to manage transactions within a Celery task, which is the context given in the prompt. Additionally, the response includes code snippets with explanations that are directly related to the problem of tracking down the cause of the error, fulfilling the prompt's request for more helpful error tracking. The use of the template is not required as the response itself is complete and fully relevant to the prompt."
+        },
+        "qa_relevance": 1.0
+    }
+}

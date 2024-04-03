@@ -1,0 +1,255 @@
+{
+    "id": "django__django-14416",
+    "repo_name": "testbed/django__django__4.0",
+    "task_id": 3292556746117965295,
+    "title": "An incorrect language is sometimes displayed - redirects adding a language code to a path can be inappropriate cached by HTTP caches",
+    "body": "Description\n\t\nWe have a multi-lingual site using LocaleMiddleware. With a CDN and caching reverse proxy in use, the following sequence of events can happen:\nFetch \u200bhttps://example.com/some-page/ with Accept-Language header 'de-DE,de;q=0.9'. A redirect to \u200bhttps://example.com/de/some-page/ is returned.\nFetch it again with Accept-Language header 'fr-FR,fr;q=0.9'. The cached redirect is returned by HTTP caches and the German page is displayed instead of the French one.\nLocaleMiddleware is issuing a redirect based on the detected language from the Accept-Language header or from the cookie chosen by settings.LANGUAGE_COOKIE_NAME but is not telling caches that it has used these headers.\nAdding a Vary header fixes this.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.0.git",
+    "requested_commit": "",
+    "mayil_response": "- Ensure that `LocaleMiddleware` is correctly configured to add the `Vary` header based on the `Accept-Language` and `Cookie` headers to the response when language redirection occurs.\n- Modify the `process_response` method in `LocaleMiddleware` to call `patch_vary_headers` with both `Accept-Language` and `settings.LANGUAGE_COOKIE_NAME` to handle cases where the language is determined by a cookie.\n- If the `settings.LANGUAGE_COOKIE_NAME` is used to determine the language preference, include it in the `Vary` header by updating the `patch_vary_headers` call to:\n  ```python\n  patch_vary_headers(response, (\"Accept-Language\", settings.LANGUAGE_COOKIE_NAME))\n  ```\n- Ensure that the `Vary` header is correctly set in all responses that could be affected by the `Accept-Language` header or the language cookie, not just in the redirect cases.\n- Verify that the caching layer respects the `Vary` header when caching responses, so that different language versions of a page are cached separately.\n- If using `CacheMiddleware`, ensure that it is correctly configured to work with `LocaleMiddleware` by placing `UpdateCacheMiddleware` as the first piece of middleware and `FetchFromCacheMiddleware` as the last.\n- Review the `learn_cache_key` function in `django/utils/cache.py` to ensure that it correctly accounts for the `Vary` header when determining the cache key.\n- If necessary, adjust the `learn_cache_key` function to avoid redundancy when the `Accept-Language` header is used and `settings.USE_I18N` is `True`. This might involve skipping the `Accept-Language` header in the cache key generation if it is deemed redundant due to the locale being appended to the cache key.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [middleware](https://github.com/testbed/django__django__4.0/tree//django/middleware)- [Lines 38 - 80](https://github.com/testbed/django__django__4.0/blob//django/middleware/locale.py#L38-L80)\n\n This snippet contains the logic for redirecting to a language-specific URL and is where the Vary header should be patched to include 'Accept-Language' and 'Cookie'. \n\n\n   - [Lines 1 - 7](https://github.com/testbed/django__django__4.0/blob//django/middleware/locale.py#L1-L7)\n\n This snippet imports the patch_vary_headers function and is part of the LocaleMiddleware, indicating where the fix will be applied.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [utils](https://github.com/testbed/django__django__4.0/tree//django/utils)- [Lines 298 - 373](https://github.com/testbed/django__django__4.0/blob//django/utils/cache.py#L298-L373)\n\n This snippet defines the patch_vary_headers function, which is used to add headers to the Vary header of the response. It is directly relevant to the issue as it is the method that will be used to add the 'Accept-Language' header. \n\n\n   - [Lines 1 - 30](https://github.com/testbed/django__django__4.0/blob//django/utils/cache.py#L1-L30)\n\n This snippet provides context on the purpose of the Vary header and its importance in caching, which is central to the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [views](https://github.com/testbed/django__django__4.0/tree//django/views) \u2192 [decorators](https://github.com/testbed/django__django__4.0/tree//django/views/decorators)- [Lines 1 - 44](https://github.com/testbed/django__django__4.0/blob//django/views/decorators/vary.py#L1-L44)\n\n This snippet shows an example of how to use the vary_on_headers decorator to add headers to the Vary header, which is related to the solution of the issue.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0001825,
+        "snippet_processor": 0.04329,
+        "issue_star_creation": 0.02292,
+        "issue_star_solver": 0.06581000000000001,
+        "bouncer": 0.025120000000000003
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711722535.0002098,
+        "relevant_snippets": [
+            {
+                "code": "def process_response(self, request, response):\n        language = translation.get_language()\n        language_from_path = translation.get_language_from_path(request.path_info)\n        urlconf = getattr(request, \"urlconf\", settings.ROOT_URLCONF)\n        (\n            i18n_patterns_used,\n            prefixed_default_language,\n        ) = is_language_prefix_patterns_used(urlconf)\n\n        if (\n            response.status_code == 404\n            and not language_from_path\n            and i18n_patterns_used\n            and prefixed_default_language\n        ):\n            # Maybe the language code is missing in the URL? Try adding the\n            # language prefix and redirecting to that URL.\n            language_path = \"/%s%s\" % (language, request.path_info)\n            path_valid = is_valid_path(language_path, urlconf)\n            path_needs_slash = not path_valid and (\n                settings.APPEND_SLASH\n                and not language_path.endswith(\"/\")\n                and is_valid_path(\"%s/\" % language_path, urlconf)\n            )\n\n            if path_valid or path_needs_slash:\n                script_prefix = get_script_prefix()\n                # Insert language after the script prefix and before the\n                # rest of the URL\n                language_url = request.get_full_path(\n                    force_append_slash=path_needs_slash\n                ).replace(script_prefix, \"%s%s/\" % (script_prefix, language), 1)\n                # Redirect to the language-specific URL as detected by\n                # get_language_from_request(). HTTP caches may cache this\n                # redirect, so add the Vary header.\n                redirect = self.response_redirect_class(language_url)\n                patch_vary_headers(redirect, (\"Accept-Language\", \"Cookie\"))\n                return redirect\n\n        if not (i18n_patterns_used and language_from_path):\n            patch_vary_headers(response, (\"Accept-Language\",))\n        response.headers.setdefault(\"Content-Language\", language)\n        return response",
+                "filename": "django/middleware/locale.py",
+                "start_index": 1406,
+                "end_index": 3441,
+                "start_line": 38,
+                "end_line": 80,
+                "max_line": 80,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "\"\"\"\nThis module contains helper functions for controlling caching. It does so by\nmanaging the \"Vary\" header of responses. It includes functions to patch the\nheader of response objects directly and decorators that change functions to do\nthat header-patching themselves.\n\nFor information on the Vary header, see RFC 9110 Section 12.5.5.\n\nEssentially, the \"Vary\" HTTP header defines which headers a cache should take\ninto account when building its cache key. Requests with the same path but\ndifferent header content for headers named in \"Vary\" need to get different\ncache keys to prevent delivery of wrong content.\n\nAn example: i18n middleware would need to distinguish caches by the\n\"Accept-language\" header.\n\"\"\"\nimport time\nfrom collections import defaultdict\nfrom hashlib import md5\n\nfrom django.conf import settings\nfrom django.core.cache import caches\nfrom django.http import HttpResponse, HttpResponseNotModified\nfrom django.utils.http import http_date, parse_etags, parse_http_date_safe, quote_etag\nfrom django.utils.log import log_response\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.timezone import get_current_timezone_name\nfrom django.utils.translation import get_language\n\ncc_delim_re = _lazy_re_compile(r\"\\s*,\\s*\")",
+                "filename": "django/utils/cache.py",
+                "start_index": 0,
+                "end_index": 1253,
+                "start_line": 1,
+                "end_line": 30,
+                "max_line": 443,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.9
+            },
+            {
+                "code": "class LocaleMiddleware(MiddlewareMixin):",
+                "filename": "django/middleware/locale.py",
+                "start_index": 344,
+                "end_index": 384,
+                "start_line": 10,
+                "end_line": 10,
+                "max_line": 80,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "import json\nimport os\nimport re\nfrom pathlib import Path\n\nfrom django.apps import apps\nfrom django.conf import settings\nfrom django.http import HttpResponse, HttpResponseRedirect, JsonResponse\nfrom django.template import Context, Engine\nfrom django.urls import translate_url\nfrom django.utils.formats import get_format\nfrom django.utils.http import url_has_allowed_host_and_scheme\nfrom django.utils.translation import check_for_language, get_language\nfrom django.utils.translation.trans_real import DjangoTranslation\nfrom django.views.generic import View\n\nLANGUAGE_QUERY_PARAMETER = \"language\"\n\n\ndef builtin_template_path(name):\n    \"\"\"\n    Return a path to a builtin template.\n\n    Avoid calling this function at the module level or in a class-definition\n    because __file__ may not exist, e.g. in frozen environments.\n    \"\"\"\n    return Path(__file__).parent / \"templates\" / name\n\n\ndef set_language(request):\n    \"\"\"\n    Redirect to a given URL while setting the chosen language in the session\n    (if enabled) and in a cookie. The URL and the language code need to be\n    specified in the request parameters.\n\n    Since this view changes how the user will see the rest of the site, it must\n    only be accessed as a POST request. If called as a GET request, it will\n    redirect to the page in the request (the 'next' parameter) without changing\n    any state.\n    \"\"\"\n    next_url = request.POST.get(\"next\", request.GET.get(\"next\"))\n    if (\n        next_url or request.accepts(\"text/html\")\n    ) and not url_has_allowed_host_and_scheme(\n        url=next_url,\n        allowed_hosts={request.get_host()},\n        require_https=request.is_secure(),\n    ):\n        next_url = request.META.get(\"HTTP_REFERER\")\n        if not url_has_allowed_host_and_scheme(\n            url=next_url,\n            allowed_hosts={request.get_host()},\n            require_https=request.is_secure(),\n        ):\n            next_url = \"/\"\n    response = HttpResponseRedirect(next_url) if next_url else HttpResponse(status=204)\n    if request.method == \"POST\":\n        lang_code = request.POST.get(LANGUAGE_QUERY_PARAMETER)\n        if lang_code and check_for_language(lang_code):\n            if next_url:\n                next_trans = translate_url(next_url, lang_code)\n                if next_trans != next_url:\n                    response = HttpResponseRedirect(next_trans)\n            response.set_cookie(\n                settings.LANGUAGE_COOKIE_NAME,\n                lang_code,\n                max_age=settings.LANGUAGE_COOKIE_AGE,\n                path=settings.LANGUAGE_COOKIE_PATH,\n                domain=settings.LANGUAGE_COOKIE_DOMAIN,\n                secure=settings.LANGUAGE_COOKIE_SECURE,\n                httponly=settings.LANGUAGE_COOKIE_HTTPONLY,\n                samesite=settings.LANGUAGE_COOKIE_SAMESITE,\n            )\n    return response",
+                "filename": "django/views/i18n.py",
+                "start_index": 0,
+                "end_index": 2832,
+                "start_line": 1,
+                "end_line": 74,
+                "max_line": 251,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.8
+            },
+            {
+                "code": "from django.apps import apps\nfrom django.conf import settings\nfrom django.contrib.redirects.models import Redirect\nfrom django.contrib.sites.shortcuts import get_current_site\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.http import HttpResponseGone, HttpResponsePermanentRedirect\nfrom django.utils.deprecation import MiddlewareMixin\n\n\nclass RedirectFallbackMiddleware(MiddlewareMixin):\n    # Defined as class-level attributes to be subclassing-friendly.\n    response_gone_class = HttpResponseGone\n    response_redirect_class = HttpResponsePermanentRedirect\n\n    def __init__(self, get_response):\n        if not apps.is_installed(\"django.contrib.sites\"):\n            raise ImproperlyConfigured(\n                \"You cannot use RedirectFallbackMiddleware when \"\n                \"django.contrib.sites is not installed.\"\n            )\n        super().__init__(get_response)\n\n    def process_response(self, request, response):\n        # No need to check for a redirect for non-404 responses.\n        if response.status_code != 404:\n            return response\n\n        full_path = request.get_full_path()\n        current_site = get_current_site(request)\n\n        r = None\n        try:\n            r = Redirect.objects.get(site=current_site, old_path=full_path)\n        except Redirect.DoesNotExist:\n            pass\n        if r is None and settings.APPEND_SLASH and not request.path.endswith(\"/\"):\n            try:\n                r = Redirect.objects.get(\n                    site=current_site,\n                    old_path=request.get_full_path(force_append_slash=True),\n                )\n            except Redirect.DoesNotExist:\n                pass\n        if r is not None:\n            if r.new_path == \"\":\n                return self.response_gone_class()\n            return self.response_redirect_class(r.new_path)\n\n        # No redirect was found. Return the response.\n        return response",
+                "filename": "django/contrib/redirects/middleware.py",
+                "start_index": 0,
+                "end_index": 1920,
+                "start_line": 1,
+                "end_line": 50,
+                "max_line": 50,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from functools import wraps\n\nfrom asgiref.sync import iscoroutinefunction\n\nfrom django.utils.cache import patch_vary_headers\n\n\ndef vary_on_headers(*headers):\n    \"\"\"\n    A view decorator that adds the specified headers to the Vary header of the\n    response. Usage:\n\n       @vary_on_headers('Cookie', 'Accept-language')\n       def index(request):\n           ...\n\n    Note that the header names are not case-sensitive.\n    \"\"\"\n\n    def decorator(func):\n        if iscoroutinefunction(func):\n\n            async def _view_wrapper(request, *args, **kwargs):\n                response = await func(request, *args, **kwargs)\n                patch_vary_headers(response, headers)\n                return response\n\n        else:\n\n            def _view_wrapper(request, *args, **kwargs):\n                response = func(request, *args, **kwargs)\n                patch_vary_headers(response, headers)\n                return response\n\n        return wraps(func)(_view_wrapper)\n\n    return decorator\n\n\nvary_on_cookie = vary_on_headers(\"Cookie\")\nvary_on_cookie.__doc__ = (\n    'A view decorator that adds \"Cookie\" to the Vary header of a response. This '\n    \"indicates that a page's contents depends on cookies.\"\n)",
+                "filename": "django/views/decorators/vary.py",
+                "start_index": 0,
+                "end_index": 1200,
+                "start_line": 1,
+                "end_line": 44,
+                "max_line": 44,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "def learn_cache_key(request, response, cache_timeout=None, key_prefix=None, cache=None):\n    \"\"\"\n    Learn what headers to take into account for some request URL from the\n    response object. Store those headers in a global URL registry so that\n    later access to that URL will know what headers to take into account\n    without building the response object itself. The headers are named in the\n    Vary header of the response, but we want to prevent response generation.\n\n    The list of headers to use for cache key generation is stored in the same\n    cache as the pages themselves. If the cache ages some data out of the\n    cache, this just means that we have to build the response once to get at\n    the Vary header and so at the list of headers to use for the cache key.\n    \"\"\"\n    if key_prefix is None:\n        key_prefix = settings.CACHE_MIDDLEWARE_KEY_PREFIX\n    if cache_timeout is None:\n        cache_timeout = settings.CACHE_MIDDLEWARE_SECONDS\n    cache_key = _generate_cache_header_key(key_prefix, request)\n    if cache is None:\n        cache = caches[settings.CACHE_MIDDLEWARE_ALIAS]\n    if response.has_header(\"Vary\"):\n        is_accept_language_redundant = settings.USE_I18N\n        # If i18n is used, the generated cache key will be suffixed with the\n        # current locale. Adding the raw value of Accept-Language is redundant\n        # in that case and would result in storing the same content under\n        # multiple keys in the cache. See #18191 for details.\n        headerlist = []\n        for header in cc_delim_re.split(response.headers[\"Vary\"]):\n            header = header.upper().replace(\"-\", \"_\")\n            if header != \"ACCEPT_LANGUAGE\" or not is_accept_language_redundant:\n                headerlist.append(\"HTTP_\" + header)\n        headerlist.sort()\n        cache.set(cache_key, headerlist, cache_timeout)\n        return _generate_cache_key(request, request.method, headerlist, key_prefix)\n    else:\n        # if there is no Vary header, we still need a cache key\n        # for the request.build_absolute_uri()\n        cache.set(cache_key, [], cache_timeout)\n        return _generate_cache_key(request, request.method, [], key_prefix)\n\n\ndef _to_tuple(s):\n    t = s.split(\"=\", 1)\n    if len(t) == 2:\n        return t[0].lower(), t[1]\n    return t[0].lower(), True",
+                "filename": "django/utils/cache.py",
+                "start_index": 14279,
+                "end_index": 16581,
+                "start_line": 398,
+                "end_line": 443,
+                "max_line": 443,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.8
+            },
+            {
+                "code": "from django.conf import settings\nfrom django.conf.urls.i18n import is_language_prefix_patterns_used\nfrom django.http import HttpResponseRedirect\nfrom django.urls import get_script_prefix, is_valid_path\nfrom django.utils import translation\nfrom django.utils.cache import patch_vary_headers\nfrom django.utils.deprecation import MiddlewareMixin",
+                "filename": "django/middleware/locale.py",
+                "start_index": 0,
+                "end_index": 341,
+                "start_line": 1,
+                "end_line": 7,
+                "max_line": 80,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "def patch_vary_headers(response, newheaders):\n    \"\"\"\n    Add (or update) the \"Vary\" header in the given HttpResponse object.\n    newheaders is a list of header names that should be in \"Vary\". If headers\n    contains an asterisk, then \"Vary\" header will consist of a single asterisk\n    '*'. Otherwise, existing headers in \"Vary\" aren't removed.\n    \"\"\"\n    # Note that we need to keep the original order intact, because cache\n    # implementations may rely on the order of the Vary contents in, say,\n    # computing an MD5 hash.\n    if response.has_header(\"Vary\"):\n        vary_headers = cc_delim_re.split(response.headers[\"Vary\"])\n    else:\n        vary_headers = []\n    # Use .lower() here so we treat headers as case-insensitive.\n    existing_headers = {header.lower() for header in vary_headers}\n    additional_headers = [\n        newheader\n        for newheader in newheaders\n        if newheader.lower() not in existing_headers\n    ]\n    vary_headers += additional_headers\n    if \"*\" in vary_headers:\n        response.headers[\"Vary\"] = \"*\"\n    else:\n        response.headers[\"Vary\"] = \", \".join(vary_headers)\n\n\ndef has_vary_header(response, header_query):\n    \"\"\"\n    Check to see if the response has a given header name in its Vary header.\n    \"\"\"\n    if not response.has_header(\"Vary\"):\n        return False\n    vary_headers = cc_delim_re.split(response.headers[\"Vary\"])\n    existing_headers = {header.lower() for header in vary_headers}\n    return header_query.lower() in existing_headers\n\n\ndef _i18n_cache_key_suffix(request, cache_key):\n    \"\"\"If necessary, add the current locale or time zone to the cache key.\"\"\"\n    if settings.USE_I18N:\n        # first check if LocaleMiddleware or another middleware added\n        # LANGUAGE_CODE to request, then fall back to the active language\n        # which in turn can also fall back to settings.LANGUAGE_CODE\n        cache_key += \".%s\" % getattr(request, \"LANGUAGE_CODE\", get_language())\n    if settings.USE_TZ:\n        cache_key += \".%s\" % get_current_timezone_name()\n    return cache_key\n\n\ndef _generate_cache_key(request, method, headerlist, key_prefix):\n    \"\"\"Return a cache key from the headers given in the header list.\"\"\"\n    ctx = md5(usedforsecurity=False)\n    for header in headerlist:\n        value = request.META.get(header)\n        if value is not None:\n            ctx.update(value.encode())\n    url = md5(request.build_absolute_uri().encode(\"ascii\"), usedforsecurity=False)\n    cache_key = \"views.decorators.cache.cache_page.%s.%s.%s.%s\" % (\n        key_prefix,\n        method,\n        url.hexdigest(),\n        ctx.hexdigest(),\n    )\n    return _i18n_cache_key_suffix(request, cache_key)",
+                "filename": "django/utils/cache.py",
+                "start_index": 10415,
+                "end_index": 13075,
+                "start_line": 298,
+                "end_line": 373,
+                "max_line": 443,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "\"\"\"\nCache middleware. If enabled, each Django-powered page will be cached based on\nURL. The canonical way to enable cache middleware is to set\n``UpdateCacheMiddleware`` as your first piece of middleware, and\n``FetchFromCacheMiddleware`` as the last::\n\n    MIDDLEWARE = [\n        'django.middleware.cache.UpdateCacheMiddleware',\n        ...\n        'django.middleware.cache.FetchFromCacheMiddleware'\n    ]\n\nThis is counter-intuitive, but correct: ``UpdateCacheMiddleware`` needs to run\nlast during the response phase, which processes middleware bottom-up;\n``FetchFromCacheMiddleware`` needs to run last during the request phase, which\nprocesses middleware top-down.\n\nThe single-class ``CacheMiddleware`` can be used for some simple sites.\nHowever, if any other piece of middleware needs to affect the cache key, you'll\nneed to use the two-part ``UpdateCacheMiddleware`` and\n``FetchFromCacheMiddleware``. This'll most often happen when you're using\nDjango's ``LocaleMiddleware``.\n\nMore details about how the caching works:\n\n* Only GET or HEAD-requests with status code 200 are cached.\n\n* The number of seconds each page is stored for is set by the \"max-age\" section\n  of the response's \"Cache-Control\" header, falling back to the\n  CACHE_MIDDLEWARE_SECONDS setting if the section was not found.\n\n* This middleware expects that a HEAD request is answered with the same response\n  headers exactly like the corresponding GET request.\n\n* When a hit occurs, a shallow copy of the original response object is returned\n  from process_request.\n\n* Pages will be cached based on the contents of the request headers listed in\n  the response's \"Vary\" header.\n\n* This middleware also sets ETag, Last-Modified, Expires and Cache-Control\n  headers on the response object.\n\n\"\"\"\n\nfrom django.conf import settings\nfrom django.core.cache import DEFAULT_CACHE_ALIAS, caches\nfrom django.utils.cache import (\n    get_cache_key,\n    get_max_age,\n    has_vary_header,\n    learn_cache_key,\n    patch_response_headers,\n)\nfrom django.utils.deprecation import MiddlewareMixin",
+                "filename": "django/middleware/cache.py",
+                "start_index": 0,
+                "end_index": 2045,
+                "start_line": 1,
+                "end_line": 55,
+                "max_line": 211,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.8
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/middleware/locale.py": [
+                {
+                    "chunk": {
+                        "code": "def process_response(self, request, response):\n        language = translation.get_language()\n        language_from_path = translation.get_language_from_path(request.path_info)\n        urlconf = getattr(request, \"urlconf\", settings.ROOT_URLCONF)\n        (\n            i18n_patterns_used,\n            prefixed_default_language,\n        ) = is_language_prefix_patterns_used(urlconf)\n\n        if (\n            response.status_code == 404\n            and not language_from_path\n            and i18n_patterns_used\n            and prefixed_default_language\n        ):\n            # Maybe the language code is missing in the URL? Try adding the\n            # language prefix and redirecting to that URL.\n            language_path = \"/%s%s\" % (language, request.path_info)\n            path_valid = is_valid_path(language_path, urlconf)\n            path_needs_slash = not path_valid and (\n                settings.APPEND_SLASH\n                and not language_path.endswith(\"/\")\n                and is_valid_path(\"%s/\" % language_path, urlconf)\n            )\n\n            if path_valid or path_needs_slash:\n                script_prefix = get_script_prefix()\n                # Insert language after the script prefix and before the\n                # rest of the URL\n                language_url = request.get_full_path(\n                    force_append_slash=path_needs_slash\n                ).replace(script_prefix, \"%s%s/\" % (script_prefix, language), 1)\n                # Redirect to the language-specific URL as detected by\n                # get_language_from_request(). HTTP caches may cache this\n                # redirect, so add the Vary header.\n                redirect = self.response_redirect_class(language_url)\n                patch_vary_headers(redirect, (\"Accept-Language\", \"Cookie\"))\n                return redirect\n\n        if not (i18n_patterns_used and language_from_path):\n            patch_vary_headers(response, (\"Accept-Language\",))\n        response.headers.setdefault(\"Content-Language\", language)\n        return response",
+                        "filename": "django/middleware/locale.py",
+                        "start_index": 1406,
+                        "end_index": 3441,
+                        "start_line": 38,
+                        "end_line": 80,
+                        "max_line": 80,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the logic for redirecting to a language-specific URL and is where the Vary header should be patched to include 'Accept-Language' and 'Cookie'."
+                },
+                {
+                    "chunk": {
+                        "code": "from django.conf import settings\nfrom django.conf.urls.i18n import is_language_prefix_patterns_used\nfrom django.http import HttpResponseRedirect\nfrom django.urls import get_script_prefix, is_valid_path\nfrom django.utils import translation\nfrom django.utils.cache import patch_vary_headers\nfrom django.utils.deprecation import MiddlewareMixin",
+                        "filename": "django/middleware/locale.py",
+                        "start_index": 0,
+                        "end_index": 341,
+                        "start_line": 1,
+                        "end_line": 7,
+                        "max_line": 80,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet imports the patch_vary_headers function and is part of the LocaleMiddleware, indicating where the fix will be applied."
+                }
+            ],
+            "django/utils/cache.py": [
+                {
+                    "chunk": {
+                        "code": "def patch_vary_headers(response, newheaders):\n    \"\"\"\n    Add (or update) the \"Vary\" header in the given HttpResponse object.\n    newheaders is a list of header names that should be in \"Vary\". If headers\n    contains an asterisk, then \"Vary\" header will consist of a single asterisk\n    '*'. Otherwise, existing headers in \"Vary\" aren't removed.\n    \"\"\"\n    # Note that we need to keep the original order intact, because cache\n    # implementations may rely on the order of the Vary contents in, say,\n    # computing an MD5 hash.\n    if response.has_header(\"Vary\"):\n        vary_headers = cc_delim_re.split(response.headers[\"Vary\"])\n    else:\n        vary_headers = []\n    # Use .lower() here so we treat headers as case-insensitive.\n    existing_headers = {header.lower() for header in vary_headers}\n    additional_headers = [\n        newheader\n        for newheader in newheaders\n        if newheader.lower() not in existing_headers\n    ]\n    vary_headers += additional_headers\n    if \"*\" in vary_headers:\n        response.headers[\"Vary\"] = \"*\"\n    else:\n        response.headers[\"Vary\"] = \", \".join(vary_headers)\n\n\ndef has_vary_header(response, header_query):\n    \"\"\"\n    Check to see if the response has a given header name in its Vary header.\n    \"\"\"\n    if not response.has_header(\"Vary\"):\n        return False\n    vary_headers = cc_delim_re.split(response.headers[\"Vary\"])\n    existing_headers = {header.lower() for header in vary_headers}\n    return header_query.lower() in existing_headers\n\n\ndef _i18n_cache_key_suffix(request, cache_key):\n    \"\"\"If necessary, add the current locale or time zone to the cache key.\"\"\"\n    if settings.USE_I18N:\n        # first check if LocaleMiddleware or another middleware added\n        # LANGUAGE_CODE to request, then fall back to the active language\n        # which in turn can also fall back to settings.LANGUAGE_CODE\n        cache_key += \".%s\" % getattr(request, \"LANGUAGE_CODE\", get_language())\n    if settings.USE_TZ:\n        cache_key += \".%s\" % get_current_timezone_name()\n    return cache_key\n\n\ndef _generate_cache_key(request, method, headerlist, key_prefix):\n    \"\"\"Return a cache key from the headers given in the header list.\"\"\"\n    ctx = md5(usedforsecurity=False)\n    for header in headerlist:\n        value = request.META.get(header)\n        if value is not None:\n            ctx.update(value.encode())\n    url = md5(request.build_absolute_uri().encode(\"ascii\"), usedforsecurity=False)\n    cache_key = \"views.decorators.cache.cache_page.%s.%s.%s.%s\" % (\n        key_prefix,\n        method,\n        url.hexdigest(),\n        ctx.hexdigest(),\n    )\n    return _i18n_cache_key_suffix(request, cache_key)",
+                        "filename": "django/utils/cache.py",
+                        "start_index": 10415,
+                        "end_index": 13075,
+                        "start_line": 298,
+                        "end_line": 373,
+                        "max_line": 443,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the patch_vary_headers function, which is used to add headers to the Vary header of the response. It is directly relevant to the issue as it is the method that will be used to add the 'Accept-Language' header."
+                },
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nThis module contains helper functions for controlling caching. It does so by\nmanaging the \"Vary\" header of responses. It includes functions to patch the\nheader of response objects directly and decorators that change functions to do\nthat header-patching themselves.\n\nFor information on the Vary header, see RFC 9110 Section 12.5.5.\n\nEssentially, the \"Vary\" HTTP header defines which headers a cache should take\ninto account when building its cache key. Requests with the same path but\ndifferent header content for headers named in \"Vary\" need to get different\ncache keys to prevent delivery of wrong content.\n\nAn example: i18n middleware would need to distinguish caches by the\n\"Accept-language\" header.\n\"\"\"\nimport time\nfrom collections import defaultdict\nfrom hashlib import md5\n\nfrom django.conf import settings\nfrom django.core.cache import caches\nfrom django.http import HttpResponse, HttpResponseNotModified\nfrom django.utils.http import http_date, parse_etags, parse_http_date_safe, quote_etag\nfrom django.utils.log import log_response\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.timezone import get_current_timezone_name\nfrom django.utils.translation import get_language\n\ncc_delim_re = _lazy_re_compile(r\"\\s*,\\s*\")",
+                        "filename": "django/utils/cache.py",
+                        "start_index": 0,
+                        "end_index": 1253,
+                        "start_line": 1,
+                        "end_line": 30,
+                        "max_line": 443,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet provides context on the purpose of the Vary header and its importance in caching, which is central to the issue."
+                }
+            ],
+            "django/views/decorators/vary.py": [
+                {
+                    "chunk": {
+                        "code": "from functools import wraps\n\nfrom asgiref.sync import iscoroutinefunction\n\nfrom django.utils.cache import patch_vary_headers\n\n\ndef vary_on_headers(*headers):\n    \"\"\"\n    A view decorator that adds the specified headers to the Vary header of the\n    response. Usage:\n\n       @vary_on_headers('Cookie', 'Accept-language')\n       def index(request):\n           ...\n\n    Note that the header names are not case-sensitive.\n    \"\"\"\n\n    def decorator(func):\n        if iscoroutinefunction(func):\n\n            async def _view_wrapper(request, *args, **kwargs):\n                response = await func(request, *args, **kwargs)\n                patch_vary_headers(response, headers)\n                return response\n\n        else:\n\n            def _view_wrapper(request, *args, **kwargs):\n                response = func(request, *args, **kwargs)\n                patch_vary_headers(response, headers)\n                return response\n\n        return wraps(func)(_view_wrapper)\n\n    return decorator\n\n\nvary_on_cookie = vary_on_headers(\"Cookie\")\nvary_on_cookie.__doc__ = (\n    'A view decorator that adds \"Cookie\" to the Vary header of a response. This '\n    \"indicates that a page's contents depends on cookies.\"\n)",
+                        "filename": "django/views/decorators/vary.py",
+                        "start_index": 0,
+                        "end_index": 1200,
+                        "start_line": 1,
+                        "end_line": 44,
+                        "max_line": 44,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows an example of how to use the vary_on_headers decorator to add headers to the Vary header, which is related to the solution of the issue."
+                }
+            ]
+        },
+        "solution_task": "- Ensure that `LocaleMiddleware` is correctly configured to add the `Vary` header based on the `Accept-Language` and `Cookie` headers to the response when language redirection occurs.\n- Modify the `process_response` method in `LocaleMiddleware` to call `patch_vary_headers` with both `Accept-Language` and `settings.LANGUAGE_COOKIE_NAME` to handle cases where the language is determined by a cookie.\n- If the `settings.LANGUAGE_COOKIE_NAME` is used to determine the language preference, include it in the `Vary` header by updating the `patch_vary_headers` call to:\n  ```python\n  patch_vary_headers(response, (\"Accept-Language\", settings.LANGUAGE_COOKIE_NAME))\n  ```\n- Ensure that the `Vary` header is correctly set in all responses that could be affected by the `Accept-Language` header or the language cookie, not just in the redirect cases.\n- Verify that the caching layer respects the `Vary` header when caching responses, so that different language versions of a page are cached separately.\n- If using `CacheMiddleware`, ensure that it is correctly configured to work with `LocaleMiddleware` by placing `UpdateCacheMiddleware` as the first piece of middleware and `FetchFromCacheMiddleware` as the last.\n- Review the `learn_cache_key` function in `django/utils/cache.py` to ensure that it correctly accounts for the `Vary` header when determining the cache key.\n- If necessary, adjust the `learn_cache_key` function to avoid redundancy when the `Accept-Language` header is used and `settings.USE_I18N` is `True`. This might involve skipping the `Accept-Language` header in the cache key generation if it is deemed redundant due to the locale being appended to the cache key.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE must provide precise, actionable guidance and directly address all aspects of the described bug to facilitate its resolution.",
+            "supporting_evidence": "The RESPONSE provides a comprehensive and actionable set of instructions to address the issue of incorrect language display due to inappropriate caching. It correctly identifies the need to configure `LocaleMiddleware` to add the `Vary` header based on relevant headers, and it provides specific guidance on modifying the `process_response` method and the `patch_vary_headers` call. The RESPONSE also advises on ensuring that the caching layer respects the `Vary` header and suggests reviewing and potentially adjusting the `learn_cache_key` function. Additionally, it includes relevant code snippets to check, which is highly useful for implementing the suggested changes. The RESPONSE is thorough and addresses the issue from multiple angles, including middleware configuration and cache key generation.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711722736.7320929,
+        "result": "- Ensure that `LocaleMiddleware` is correctly configured to add the `Vary` header based on the `Accept-Language` and `Cookie` headers to the response when language redirection occurs.\n- Modify the `process_response` method in `LocaleMiddleware` to call `patch_vary_headers` with both `Accept-Language` and `settings.LANGUAGE_COOKIE_NAME` to handle cases where the language is determined by a cookie.\n- If the `settings.LANGUAGE_COOKIE_NAME` is used to determine the language preference, include it in the `Vary` header by updating the `patch_vary_headers` call to:\n  ```python\n  patch_vary_headers(response, (\"Accept-Language\", settings.LANGUAGE_COOKIE_NAME))\n  ```\n- Ensure that the `Vary` header is correctly set in all responses that could be affected by the `Accept-Language` header or the language cookie, not just in the redirect cases.\n- Verify that the caching layer respects the `Vary` header when caching responses, so that different language versions of a page are cached separately.\n- If using `CacheMiddleware`, ensure that it is correctly configured to work with `LocaleMiddleware` by placing `UpdateCacheMiddleware` as the first piece of middleware and `FetchFromCacheMiddleware` as the last.\n- Review the `learn_cache_key` function in `django/utils/cache.py` to ensure that it correctly accounts for the `Vary` header when determining the cache key.\n- If necessary, adjust the `learn_cache_key` function to avoid redundancy when the `Accept-Language` header is used and `settings.USE_I18N` is `True`. This might involve skipping the `Accept-Language` header in the cache key generation if it is deemed redundant due to the locale being appended to the cache key.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [middleware](https://github.com/testbed/django__django__4.0/tree//django/middleware)- [Lines 38 - 80](https://github.com/testbed/django__django__4.0/blob//django/middleware/locale.py#L38-L80)\n\n This snippet contains the logic for redirecting to a language-specific URL and is where the Vary header should be patched to include 'Accept-Language' and 'Cookie'. \n\n\n   - [Lines 1 - 7](https://github.com/testbed/django__django__4.0/blob//django/middleware/locale.py#L1-L7)\n\n This snippet imports the patch_vary_headers function and is part of the LocaleMiddleware, indicating where the fix will be applied.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [utils](https://github.com/testbed/django__django__4.0/tree//django/utils)- [Lines 298 - 373](https://github.com/testbed/django__django__4.0/blob//django/utils/cache.py#L298-L373)\n\n This snippet defines the patch_vary_headers function, which is used to add headers to the Vary header of the response. It is directly relevant to the issue as it is the method that will be used to add the 'Accept-Language' header. \n\n\n   - [Lines 1 - 30](https://github.com/testbed/django__django__4.0/blob//django/utils/cache.py#L1-L30)\n\n This snippet provides context on the purpose of the Vary header and its importance in caching, which is central to the issue.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [views](https://github.com/testbed/django__django__4.0/tree//django/views) \u2192 [decorators](https://github.com/testbed/django__django__4.0/tree//django/views/decorators)- [Lines 1 - 44](https://github.com/testbed/django__django__4.0/blob//django/views/decorators/vary.py#L1-L44)\n\n This snippet shows an example of how to use the vary_on_headers decorator to add headers to the Vary header, which is related to the solution of the issue.",
+        "context_relevance": 0.73,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant to the entire PROMPT and answers the PROMPT completely.\nSupporting Evidence: The RESPONSE provides a detailed and technical solution to the problem described in the PROMPT, addressing the issue of the incorrect language being displayed due to inappropriate caching by HTTP caches. It suggests configuring the `LocaleMiddleware` to add the `Vary` header based on specific headers, modifying the `process_response` method, ensuring the caching layer respects the `Vary` header, and reviewing the `learn_cache_key` function. Additionally, it references the relevant code snippets that need to be checked, which directly relates to the PROMPT's request for a solution to the caching issue on a multi-lingual site. The RESPONSE is comprehensive and directly addresses all parts of the PROMPT, thus earning the highest score."
+        },
+        "qa_relevance": 1.0
+    }
+}

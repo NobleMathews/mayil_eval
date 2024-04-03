@@ -1,0 +1,236 @@
+{
+    "id": "scikit-learn__scikit-learn-14704",
+    "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+    "task_id": 999276970485856569,
+    "title": "StratifiedKFold makes fold-sizes very unequal",
+    "body": "I found this when trying to write tests for #14560.\r\nRight now, ``StratifiedKFold`` might have the fold sizes unequal by ``n_classes``:\r\n\r\n```python\r\nimport numpy as np\r\nfrom sklearn.model_selection import StratifiedKFold\r\n\r\ny = np.array([1, 1, 5, 3, 4, 4, 3, 1, 4, 2, 4, 2, 4, 3, 4, 1, 5, 3, 3, 2, 2, 4,\r\n       2, 2, 1, 3, 1, 3, 2, 5, 3, 5, 2, 3, 1, 1, 5, 4, 3, 1, 3, 5, 2, 1,\r\n       1, 5, 2, 2, 5, 2, 2, 5, 2, 2, 3, 1, 1, 5, 5, 3, 4, 2, 3, 4, 4, 5,\r\n       4, 2, 4, 1, 1, 1, 3, 1, 5, 5, 4, 3, 3, 5, 1, 5, 4, 4, 2, 3, 3, 4,\r\n       4, 2, 3, 4, 5, 5, 2, 1, 1, 5, 5, 4])\r\n\r\n[len(x[1]) for x in StratifiedKFold(n_splits=7).split(y, y)]\r\n```\r\n> [15, 15, 15, 15, 15, 15, 10]\r\n\r\nWe could achieve something like\r\n> [15, 15, 14, 14, 14, 14, 14]\r\n\r\nbut our rounding doesn't let us :-/\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/scikit-learn__scikit-learn__0.22.git",
+    "requested_commit": "",
+    "mayil_response": "- The issue is likely due to the rounding strategy used in the allocation of samples to each fold in the `StratifiedKFold` implementation.\n- To ensure fold sizes are closer to equal, the rounding strategy needs to be adjusted.\n- The relevant code is in the `_make_test_folds` method of the `StratifiedKFold` class, specifically where the `allocation` array is calculated and used to distribute samples across folds.\n\nSolution:\n- Modify the allocation strategy in the `_make_test_folds` method to ensure a more even distribution of samples across folds.\n- One approach is to distribute the remainder samples (after dividing the total samples by `n_splits`) one by one to the folds until there are no remainder samples left.\n- Here is a suggested modification to the allocation code block:\n\n```python\n# Current allocation strategy\nallocation = np.asarray(\n    [\n        np.bincount(y_order[i :: self.n_splits], minlength=n_classes)\n        for i in range(self.n_splits)\n    ]\n)\n\n# Suggested modification for a more even distribution\nn_samples = len(y)\nbase_fold_size = n_samples // self.n_splits\nremainder = n_samples % self.n_splits\nallocation = np.full((self.n_splits, n_classes), base_fold_size)\n\n# Distribute remainder samples across folds\nfor i in range(remainder):\n    allocation[i % self.n_splits] += 1\n\n# Now proceed with the rest of the _make_test_folds method\n# ...\n```\n\n- Ensure that the modified allocation is used to assign samples to `test_folds` correctly.\n- Test the modified `StratifiedKFold` to confirm that the fold sizes are now closer to equal.\n\n### Code snippets to check\n\n-  \u2192 [sklearn](https://github.com/testbed/scikit-learn__scikit-learn__0.22/tree//sklearn) \u2192 [model_selection](https://github.com/testbed/scikit-learn__scikit-learn__0.22/tree//sklearn/model_selection)- [Lines 695 - 760](https://github.com/testbed/scikit-learn__scikit-learn__0.22/blob//sklearn/model_selection/_split.py#L695-L760)\n\n This snippet contains the '_make_test_folds' method which is responsible for creating test folds in 'StratifiedKFold'. The issue is related to unequal fold sizes, so this method is likely where the logic for fold size distribution needs to be reviewed or modified. \n\n\n   - [Lines 979 - 999](https://github.com/testbed/scikit-learn__scikit-learn__0.22/blob//sklearn/model_selection/_split.py#L979-L999)\n\n The '_find_best_fold' method is used to determine the best fold for assigning groups of samples. Since the issue is about the unequal sizes of folds, the logic within this method might be contributing to the problem and may need adjustments. \n\n\n   - [Lines 619 - 896](https://github.com/testbed/scikit-learn__scikit-learn__0.22/blob//sklearn/model_selection/_split.py#L619-L896)\n\n This snippet provides the class definition and documentation for 'StratifiedKFold', which includes the description of how folds are supposed to be generated. It is relevant for understanding the intended behavior and constraints of the fold generation process. \n\n\n   - [Lines 696 - 977](https://github.com/testbed/scikit-learn__scikit-learn__0.22/blob//sklearn/model_selection/_split.py#L696-L977)\n\n This snippet seems to be a continuation of the '_make_test_folds' method and includes additional logic for handling groups and folds. It may contain relevant code that affects how the folds are distributed.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0009725,
+        "snippet_processor": 0.08512000000000002,
+        "issue_star_creation": 0.049199999999999994,
+        "issue_star_solver": 0.054560000000000004,
+        "bouncer": 0.02766
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711739000.982048,
+        "relevant_snippets": [
+            {
+                "code": "def _make_test_folds(self, X, y=None):\n        rng = check_random_state(self.random_state)\n        y = np.asarray(y)\n        type_of_target_y = type_of_target(y)\n        allowed_target_types = (\"binary\", \"multiclass\")\n        if type_of_target_y not in allowed_target_types:\n            raise ValueError(\n                \"Supported target types are: {}. Got {!r} instead.\".format(\n                    allowed_target_types, type_of_target_y\n                )\n            )\n\n        y = column_or_1d(y)\n\n        _, y_idx, y_inv = np.unique(y, return_index=True, return_inverse=True)\n        # y_inv encodes y according to lexicographic order. We invert y_idx to\n        # map the classes so that they are encoded by order of appearance:\n        # 0 represents the first label appearing in y, 1 the second, etc.\n        _, class_perm = np.unique(y_idx, return_inverse=True)\n        y_encoded = class_perm[y_inv]\n\n        n_classes = len(y_idx)\n        y_counts = np.bincount(y_encoded)\n        min_groups = np.min(y_counts)\n        if np.all(self.n_splits > y_counts):\n            raise ValueError(\n                \"n_splits=%d cannot be greater than the\"\n                \" number of members in each class.\" % (self.n_splits)\n            )\n        if self.n_splits > min_groups:\n            warnings.warn(\n                \"The least populated class in y has only %d\"\n                \" members, which is less than n_splits=%d.\"\n                % (min_groups, self.n_splits),\n                UserWarning,\n            )\n\n        # Determine the optimal number of samples from each class in each fold,\n        # using round robin over the sorted y. (This can be done direct from\n        # counts, but that code is unreadable.)\n        y_order = np.sort(y_encoded)\n        allocation = np.asarray(\n            [\n                np.bincount(y_order[i :: self.n_splits], minlength=n_classes)\n                for i in range(self.n_splits)\n            ]\n        )\n\n        # To maintain the data order dependencies as best as possible within\n        # the stratification constraint, we assign samples from each class in\n        # blocks (and then mess that up when shuffle=True).\n        test_folds = np.empty(len(y), dtype=\"i\")\n        for k in range(n_classes):\n            # since the kth column of allocation stores the number of samples\n            # of class k in each test set, this generates blocks of fold\n            # indices corresponding to the allocation for class k.\n            folds_for_class = np.arange(self.n_splits).repeat(allocation[:, k])\n            if self.shuffle:\n                rng.shuffle(folds_for_class)\n            test_folds[y_encoded == k] = folds_for_class\n        return test_folds\n\n    def _iter_test_masks(self, X, y=None, groups=None):\n        test_folds = self._make_test_folds(X, y)\n        for i in range(self.n_splits):\n            yield test_folds == i",
+                "filename": "sklearn/model_selection/_split.py",
+                "start_index": 23440,
+                "end_index": 26325,
+                "start_line": 695,
+                "end_line": 760,
+                "max_line": 2751,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "class StratifiedKFold(_BaseKFold):",
+                "filename": "sklearn/model_selection/_split.py",
+                "start_index": 20604,
+                "end_index": 20638,
+                "start_line": 618,
+                "end_line": 618,
+                "max_line": 2751,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "rng = check_random_state(self.random_state)\n        y = np.asarray(y)\n        type_of_target_y = type_of_target(y)\n        allowed_target_types = (\"binary\", \"multiclass\")\n        if type_of_target_y not in allowed_target_types:\n            raise ValueError(\n                \"Supported target types are: {}. Got {!r} instead.\".format(\n                    allowed_target_types, type_of_target_y\n                )\n            )\n\n        y = column_or_1d(y)\n        _, y_inv, y_cnt = np.unique(y, return_inverse=True, return_counts=True)\n        if np.all(self.n_splits > y_cnt):\n            raise ValueError(\n                \"n_splits=%d cannot be greater than the\"\n                \" number of members in each class.\" % (self.n_splits)\n            )\n        n_smallest_class = np.min(y_cnt)\n        if self.n_splits > n_smallest_class:\n            warnings.warn(\n                \"The least populated class in y has only %d\"\n                \" members, which is less than n_splits=%d.\"\n                % (n_smallest_class, self.n_splits),\n                UserWarning,\n            )\n        n_classes = len(y_cnt)\n\n        _, groups_inv, groups_cnt = np.unique(\n            groups, return_inverse=True, return_counts=True\n        )\n        y_counts_per_group = np.zeros((len(groups_cnt), n_classes))\n        for class_idx, group_idx in zip(y_inv, groups_inv):\n            y_counts_per_group[group_idx, class_idx] += 1\n\n        y_counts_per_fold = np.zeros((self.n_splits, n_classes))\n        groups_per_fold = defaultdict(set)\n\n        if self.shuffle:\n            rng.shuffle(y_counts_per_group)\n\n        # Stable sort to keep shuffled order for groups with the same\n        # class distribution variance\n        sorted_groups_idx = np.argsort(\n            -np.std(y_counts_per_group, axis=1), kind=\"mergesort\"\n        )\n\n        for group_idx in sorted_groups_idx:\n            group_y_counts = y_counts_per_group[group_idx]\n            best_fold = self._find_best_fold(\n                y_counts_per_fold=y_counts_per_fold,\n                y_cnt=y_cnt,\n                group_y_counts=group_y_counts,\n            )\n            y_counts_per_fold[best_fold] += group_y_counts\n            groups_per_fold[best_fold].add(group_idx)\n\n        for i in range(self.n_splits):\n            test_indices = [\n                idx\n                for idx, group_idx in enumerate(groups_inv)\n                if group_idx in groups_per_fold[i]\n            ]\n            yield test_indices",
+                "filename": "sklearn/model_selection/_split.py",
+                "start_index": 32955,
+                "end_index": 35421,
+                "start_line": 696,
+                "end_line": 977,
+                "max_line": 2751,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "def _find_best_fold(self, y_counts_per_fold, y_cnt, group_y_counts):\n        best_fold = None\n        min_eval = np.inf\n        min_samples_in_fold = np.inf\n        for i in range(self.n_splits):\n            y_counts_per_fold[i] += group_y_counts\n            # Summarise the distribution over classes in each proposed fold\n            std_per_class = np.std(y_counts_per_fold / y_cnt.reshape(1, -1), axis=0)\n            y_counts_per_fold[i] -= group_y_counts\n            fold_eval = np.mean(std_per_class)\n            samples_in_fold = np.sum(y_counts_per_fold[i])\n            is_current_fold_better = (\n                fold_eval < min_eval\n                or np.isclose(fold_eval, min_eval)\n                and samples_in_fold < min_samples_in_fold\n            )\n            if is_current_fold_better:\n                min_eval = fold_eval\n                min_samples_in_fold = samples_in_fold\n                best_fold = i\n        return best_fold",
+                "filename": "sklearn/model_selection/_split.py",
+                "start_index": 35427,
+                "end_index": 36375,
+                "start_line": 979,
+                "end_line": 999,
+                "max_line": 2751,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _iter_test_indices(self, X, y, groups):\n        # Implementation is based on this kaggle kernel:\n        # https://www.kaggle.com/jakubwasikowski/stratified-group-k-fold-cross-validation\n        # and is a subject to Apache 2.0 License. You may obtain a copy of the\n        # License at http://www.apache.org/licenses/LICENSE-2.0\n        # Changelist:\n        # - Refactored function to a class following scikit-learn KFold\n        #   interface.\n        # - Added heuristic for assigning group to the least populated fold in\n        #   cases when all other criteria are equal\n        # - Swtch from using python ``Counter`` to ``np.unique`` to get class\n        #   distribution\n        # - Added scikit-learn checks for input: checking that target is binary\n        #   or multiclass, checking passed random state, checking that number\n        #   of splits is less than number of members in each class, checking\n        #   that least populated class has more members than there are splits.",
+                "filename": "sklearn/model_selection/_split.py",
+                "start_index": 31948,
+                "end_index": 32946,
+                "start_line": 553,
+                "end_line": 913,
+                "max_line": 2751,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"Base class for KFold, GroupKFold, and StratifiedKFold\"\"\"\n\n    @abstractmethod\n    def __init__(self, n_splits, *, shuffle, random_state):\n        if not isinstance(n_splits, numbers.Integral):\n            raise ValueError(\n                \"The number of folds must be of Integral type. \"\n                \"%s of type %s was passed.\" % (n_splits, type(n_splits))\n            )\n        n_splits = int(n_splits)\n\n        if n_splits <= 1:\n            raise ValueError(\n                \"k-fold cross-validation requires at least one\"\n                \" train/test split by setting n_splits=2 or more,\"\n                \" got n_splits={0}.\".format(n_splits)\n            )\n\n        if not isinstance(shuffle, bool):\n            raise TypeError(\"shuffle must be True or False; got {0}\".format(shuffle))\n\n        if not shuffle and random_state is not None:  # None is the default\n            raise ValueError(\n                (\n                    \"Setting a random_state has no effect since shuffle is \"\n                    \"False. You should leave \"\n                    \"random_state to its default (None), or set shuffle=True.\"\n                ),\n            )\n\n        self.n_splits = n_splits\n        self.shuffle = shuffle\n        self.random_state = random_state\n\n    def split(self, X, y=None, groups=None):\n        \"\"\"Generate indices to split data into training and test set.\n\n        Parameters\n        ----------\n        X : array-like of shape (n_samples, n_features)\n            Training data, where `n_samples` is the number of samples\n            and `n_features` is the number of features.\n\n        y : array-like of shape (n_samples,), default=None\n            The target variable for supervised learning problems.\n\n        groups : array-like of shape (n_samples,), default=None\n            Group labels for the samples used while splitting the dataset into\n            train/test set.\n\n        Yields\n        ------\n        train : ndarray\n            The training set indices for that split.\n\n        test : ndarray\n            The testing set indices for that split.\n        \"\"\"\n        X, y, groups = indexable(X, y, groups)\n        n_samples = _num_samples(X)\n        if self.n_splits > n_samples:\n            raise ValueError(\n                (\n                    \"Cannot have number of splits n_splits={0} greater\"\n                    \" than the number of samples: n_samples={1}.\"\n                ).format(self.n_splits, n_samples)\n            )\n\n        for train, test in super().split(X, y, groups):\n            yield train, test",
+                "filename": "sklearn/model_selection/_split.py",
+                "start_index": 9845,
+                "end_index": 12397,
+                "start_line": 309,
+                "end_line": 2438,
+                "max_line": 2751,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@ignore_warnings(category=FutureWarning)\ndef check_class_weight_balanced_linear_classifier(name, Classifier):\n    \"\"\"Test class weights with non-contiguous class labels.\"\"\"\n    # this is run on classes, not instances, though this should be changed\n    X = np.array([[-1.0, -1.0], [-1.0, 0], [-0.8, -1.0], [1.0, 1.0], [1.0, 0.0]])\n    y = np.array([1, 1, 1, -1, -1])\n\n    classifier = Classifier()\n\n    if hasattr(classifier, \"n_iter\"):\n        # This is a very small dataset, default n_iter are likely to prevent\n        # convergence\n        classifier.set_params(n_iter=1000)\n    if hasattr(classifier, \"max_iter\"):\n        classifier.set_params(max_iter=1000)\n    if hasattr(classifier, \"cv\"):\n        classifier.set_params(cv=3)\n    set_random_state(classifier)\n\n    # Let the model compute the class frequencies\n    classifier.set_params(class_weight=\"balanced\")\n    coef_balanced = classifier.fit(X, y).coef_.copy()\n\n    # Count each label occurrence to reweight manually\n    n_samples = len(y)\n    n_classes = float(len(np.unique(y)))\n\n    class_weight = {\n        1: n_samples / (np.sum(y == 1) * n_classes),\n        -1: n_samples / (np.sum(y == -1) * n_classes),\n    }\n    classifier.set_params(class_weight=class_weight)\n    coef_manual = classifier.fit(X, y).coef_.copy()\n\n    assert_allclose(\n        coef_balanced,\n        coef_manual,\n        err_msg=\"Classifier %s is not computing class_weight=balanced properly.\" % name,\n    )\n\n\n@ignore_warnings(category=FutureWarning)\ndef check_estimators_overwrite_params(name, estimator_orig):\n    X, y = make_blobs(random_state=0, n_samples=21)\n    X = _enforce_estimator_tags_X(estimator_orig, X, kernel=rbf_kernel)\n    estimator = clone(estimator_orig)\n    y = _enforce_estimator_tags_y(estimator, y)\n\n    set_random_state(estimator)\n\n    # Make a physical copy of the original estimator parameters before fitting.\n    params = estimator.get_params()\n    original_params = deepcopy(params)\n\n    # Fit the model\n    estimator.fit(X, y)\n\n    # Compare the state of the model parameters with the original parameters\n    new_params = estimator.get_params()\n    for param_name, original_value in original_params.items():\n        new_value = new_params[param_name]\n\n        # We should never change or mutate the internal state of input\n        # parameters by default. To check this we use the joblib.hash function\n        # that introspects recursively any subobjects to compute a checksum.\n        # The only exception to this rule of immutable constructor parameters\n        # is possible RandomState instance but in this check we explicitly\n        # fixed the random_state params recursively to be integer seeds.\n        assert joblib.hash(new_value) == joblib.hash(original_value), (\n            \"Estimator %s should not change or mutate \"\n            \" the parameter %s from %s to %s during fit.\"\n            % (name, param_name, original_value, new_value)\n        )",
+                "filename": "sklearn/utils/estimator_checks.py",
+                "start_index": 112710,
+                "end_index": 115635,
+                "start_line": 181,
+                "end_line": 4639,
+                "max_line": 4639,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "# the results of different clustering algorithms that output a different number\n# of clusters.",
+                "filename": "examples/cluster/plot_adjusted_for_chance_measures.py",
+                "start_index": 8650,
+                "end_index": 8744,
+                "start_line": 229,
+                "end_line": 230,
+                "max_line": 230,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _iter_test_indices(self, X, y=None, groups=None):\n        n_samples = _num_samples(X)\n        indices = np.arange(n_samples)\n        if self.shuffle:\n            check_random_state(self.random_state).shuffle(indices)\n\n        n_splits = self.n_splits\n        fold_sizes = np.full(n_splits, n_samples // n_splits, dtype=int)\n        fold_sizes[: n_samples % n_splits] += 1\n        current = 0\n        for fold_size in fold_sizes:\n            start, stop = current, current + fold_size\n            yield indices[start:stop]\n            current = stop",
+                "filename": "sklearn/model_selection/_split.py",
+                "start_index": 15613,
+                "end_index": 16165,
+                "start_line": 183,
+                "end_line": 491,
+                "max_line": 2751,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "\"\"\"Stratified K-Folds cross-validator.\n\n    Provides train/test indices to split data in train/test sets.\n\n    This cross-validation object is a variation of KFold that returns\n    stratified folds. The folds are made by preserving the percentage of\n    samples for each class.\n\n    Read more in the :ref:`User Guide <stratified_k_fold>`.\n\n    Parameters\n    ----------\n    n_splits : int, default=5\n        Number of folds. Must be at least 2.\n\n        .. versionchanged:: 0.22\n            ``n_splits`` default value changed from 3 to 5.\n\n    shuffle : bool, default=False\n        Whether to shuffle each class's samples before splitting into batches.\n        Note that the samples within each split will not be shuffled.\n\n    random_state : int, RandomState instance or None, default=None\n        When `shuffle` is True, `random_state` affects the ordering of the\n        indices, which controls the randomness of each fold for each class.\n        Otherwise, leave `random_state` as `None`.\n        Pass an int for reproducible output across multiple function calls.\n        See :term:`Glossary <random_state>`.\n\n    Examples\n    --------\n    >>> import numpy as np\n    >>> from sklearn.model_selection import StratifiedKFold\n    >>> X = np.array([[1, 2], [3, 4], [1, 2], [3, 4]])\n    >>> y = np.array([0, 0, 1, 1])\n    >>> skf = StratifiedKFold(n_splits=2)\n    >>> skf.get_n_splits(X, y)\n    2\n    >>> print(skf)\n    StratifiedKFold(n_splits=2, random_state=None, shuffle=False)\n    >>> for i, (train_index, test_index) in enumerate(skf.split(X, y)):\n    ...     print(f\"Fold {i}:\")\n    ...     print(f\"  Train: index={train_index}\")\n    ...     print(f\"  Test:  index={test_index}\")\n    Fold 0:\n      Train: index=[1 3]\n      Test:  index=[0 2]\n    Fold 1:\n      Train: index=[0 2]\n      Test:  index=[1 3]\n\n    Notes\n    -----\n    The implementation is designed to:\n\n    * Generate test sets such that all contain the same distribution of\n      classes, or as close as possible.\n    * Be invariant to class label: relabelling ``y = [\"Happy\", \"Sad\"]`` to\n      ``y = [1, 0]`` should not change the indices generated.\n    * Preserve order dependencies in the dataset ordering, when\n      ``shuffle=False``: all samples from class k in some test set were\n      contiguous in y, or separated in y by samples from classes other than k.\n    * Generate test sets where the smallest and largest differ by at most one\n      sample.\n\n    .. versionchanged:: 0.22\n        The previous implementation did not follow the last constraint.\n\n    See Also\n    --------\n    RepeatedStratifiedKFold : Repeats Stratified K-Fold n times.\n    \"\"\"\n\n    def __init__(self, n_splits=5, *, shuffle=False, random_state=None):\n        super().__init__(n_splits=n_splits, shuffle=shuffle, random_state=random_state)",
+                "filename": "sklearn/model_selection/_split.py",
+                "start_index": 20643,
+                "end_index": 23434,
+                "start_line": 619,
+                "end_line": 896,
+                "max_line": 2751,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                "sha": "",
+                "context_relevance": 0.7
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "sklearn/model_selection/_split.py": [
+                {
+                    "chunk": {
+                        "code": "def _make_test_folds(self, X, y=None):\n        rng = check_random_state(self.random_state)\n        y = np.asarray(y)\n        type_of_target_y = type_of_target(y)\n        allowed_target_types = (\"binary\", \"multiclass\")\n        if type_of_target_y not in allowed_target_types:\n            raise ValueError(\n                \"Supported target types are: {}. Got {!r} instead.\".format(\n                    allowed_target_types, type_of_target_y\n                )\n            )\n\n        y = column_or_1d(y)\n\n        _, y_idx, y_inv = np.unique(y, return_index=True, return_inverse=True)\n        # y_inv encodes y according to lexicographic order. We invert y_idx to\n        # map the classes so that they are encoded by order of appearance:\n        # 0 represents the first label appearing in y, 1 the second, etc.\n        _, class_perm = np.unique(y_idx, return_inverse=True)\n        y_encoded = class_perm[y_inv]\n\n        n_classes = len(y_idx)\n        y_counts = np.bincount(y_encoded)\n        min_groups = np.min(y_counts)\n        if np.all(self.n_splits > y_counts):\n            raise ValueError(\n                \"n_splits=%d cannot be greater than the\"\n                \" number of members in each class.\" % (self.n_splits)\n            )\n        if self.n_splits > min_groups:\n            warnings.warn(\n                \"The least populated class in y has only %d\"\n                \" members, which is less than n_splits=%d.\"\n                % (min_groups, self.n_splits),\n                UserWarning,\n            )\n\n        # Determine the optimal number of samples from each class in each fold,\n        # using round robin over the sorted y. (This can be done direct from\n        # counts, but that code is unreadable.)\n        y_order = np.sort(y_encoded)\n        allocation = np.asarray(\n            [\n                np.bincount(y_order[i :: self.n_splits], minlength=n_classes)\n                for i in range(self.n_splits)\n            ]\n        )\n\n        # To maintain the data order dependencies as best as possible within\n        # the stratification constraint, we assign samples from each class in\n        # blocks (and then mess that up when shuffle=True).\n        test_folds = np.empty(len(y), dtype=\"i\")\n        for k in range(n_classes):\n            # since the kth column of allocation stores the number of samples\n            # of class k in each test set, this generates blocks of fold\n            # indices corresponding to the allocation for class k.\n            folds_for_class = np.arange(self.n_splits).repeat(allocation[:, k])\n            if self.shuffle:\n                rng.shuffle(folds_for_class)\n            test_folds[y_encoded == k] = folds_for_class\n        return test_folds\n\n    def _iter_test_masks(self, X, y=None, groups=None):\n        test_folds = self._make_test_folds(X, y)\n        for i in range(self.n_splits):\n            yield test_folds == i",
+                        "filename": "sklearn/model_selection/_split.py",
+                        "start_index": 23440,
+                        "end_index": 26325,
+                        "start_line": 695,
+                        "end_line": 760,
+                        "max_line": 2751,
+                        "git_instance": "github",
+                        "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the '_make_test_folds' method which is responsible for creating test folds in 'StratifiedKFold'. The issue is related to unequal fold sizes, so this method is likely where the logic for fold size distribution needs to be reviewed or modified."
+                },
+                {
+                    "chunk": {
+                        "code": "def _find_best_fold(self, y_counts_per_fold, y_cnt, group_y_counts):\n        best_fold = None\n        min_eval = np.inf\n        min_samples_in_fold = np.inf\n        for i in range(self.n_splits):\n            y_counts_per_fold[i] += group_y_counts\n            # Summarise the distribution over classes in each proposed fold\n            std_per_class = np.std(y_counts_per_fold / y_cnt.reshape(1, -1), axis=0)\n            y_counts_per_fold[i] -= group_y_counts\n            fold_eval = np.mean(std_per_class)\n            samples_in_fold = np.sum(y_counts_per_fold[i])\n            is_current_fold_better = (\n                fold_eval < min_eval\n                or np.isclose(fold_eval, min_eval)\n                and samples_in_fold < min_samples_in_fold\n            )\n            if is_current_fold_better:\n                min_eval = fold_eval\n                min_samples_in_fold = samples_in_fold\n                best_fold = i\n        return best_fold",
+                        "filename": "sklearn/model_selection/_split.py",
+                        "start_index": 35427,
+                        "end_index": 36375,
+                        "start_line": 979,
+                        "end_line": 999,
+                        "max_line": 2751,
+                        "git_instance": "github",
+                        "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "The '_find_best_fold' method is used to determine the best fold for assigning groups of samples. Since the issue is about the unequal sizes of folds, the logic within this method might be contributing to the problem and may need adjustments."
+                },
+                {
+                    "chunk": {
+                        "code": "\"\"\"Stratified K-Folds cross-validator.\n\n    Provides train/test indices to split data in train/test sets.\n\n    This cross-validation object is a variation of KFold that returns\n    stratified folds. The folds are made by preserving the percentage of\n    samples for each class.\n\n    Read more in the :ref:`User Guide <stratified_k_fold>`.\n\n    Parameters\n    ----------\n    n_splits : int, default=5\n        Number of folds. Must be at least 2.\n\n        .. versionchanged:: 0.22\n            ``n_splits`` default value changed from 3 to 5.\n\n    shuffle : bool, default=False\n        Whether to shuffle each class's samples before splitting into batches.\n        Note that the samples within each split will not be shuffled.\n\n    random_state : int, RandomState instance or None, default=None\n        When `shuffle` is True, `random_state` affects the ordering of the\n        indices, which controls the randomness of each fold for each class.\n        Otherwise, leave `random_state` as `None`.\n        Pass an int for reproducible output across multiple function calls.\n        See :term:`Glossary <random_state>`.\n\n    Examples\n    --------\n    >>> import numpy as np\n    >>> from sklearn.model_selection import StratifiedKFold\n    >>> X = np.array([[1, 2], [3, 4], [1, 2], [3, 4]])\n    >>> y = np.array([0, 0, 1, 1])\n    >>> skf = StratifiedKFold(n_splits=2)\n    >>> skf.get_n_splits(X, y)\n    2\n    >>> print(skf)\n    StratifiedKFold(n_splits=2, random_state=None, shuffle=False)\n    >>> for i, (train_index, test_index) in enumerate(skf.split(X, y)):\n    ...     print(f\"Fold {i}:\")\n    ...     print(f\"  Train: index={train_index}\")\n    ...     print(f\"  Test:  index={test_index}\")\n    Fold 0:\n      Train: index=[1 3]\n      Test:  index=[0 2]\n    Fold 1:\n      Train: index=[0 2]\n      Test:  index=[1 3]\n\n    Notes\n    -----\n    The implementation is designed to:\n\n    * Generate test sets such that all contain the same distribution of\n      classes, or as close as possible.\n    * Be invariant to class label: relabelling ``y = [\"Happy\", \"Sad\"]`` to\n      ``y = [1, 0]`` should not change the indices generated.\n    * Preserve order dependencies in the dataset ordering, when\n      ``shuffle=False``: all samples from class k in some test set were\n      contiguous in y, or separated in y by samples from classes other than k.\n    * Generate test sets where the smallest and largest differ by at most one\n      sample.\n\n    .. versionchanged:: 0.22\n        The previous implementation did not follow the last constraint.\n\n    See Also\n    --------\n    RepeatedStratifiedKFold : Repeats Stratified K-Fold n times.\n    \"\"\"\n\n    def __init__(self, n_splits=5, *, shuffle=False, random_state=None):\n        super().__init__(n_splits=n_splits, shuffle=shuffle, random_state=random_state)",
+                        "filename": "sklearn/model_selection/_split.py",
+                        "start_index": 20643,
+                        "end_index": 23434,
+                        "start_line": 619,
+                        "end_line": 896,
+                        "max_line": 2751,
+                        "git_instance": "github",
+                        "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet provides the class definition and documentation for 'StratifiedKFold', which includes the description of how folds are supposed to be generated. It is relevant for understanding the intended behavior and constraints of the fold generation process."
+                },
+                {
+                    "chunk": {
+                        "code": "rng = check_random_state(self.random_state)\n        y = np.asarray(y)\n        type_of_target_y = type_of_target(y)\n        allowed_target_types = (\"binary\", \"multiclass\")\n        if type_of_target_y not in allowed_target_types:\n            raise ValueError(\n                \"Supported target types are: {}. Got {!r} instead.\".format(\n                    allowed_target_types, type_of_target_y\n                )\n            )\n\n        y = column_or_1d(y)\n        _, y_inv, y_cnt = np.unique(y, return_inverse=True, return_counts=True)\n        if np.all(self.n_splits > y_cnt):\n            raise ValueError(\n                \"n_splits=%d cannot be greater than the\"\n                \" number of members in each class.\" % (self.n_splits)\n            )\n        n_smallest_class = np.min(y_cnt)\n        if self.n_splits > n_smallest_class:\n            warnings.warn(\n                \"The least populated class in y has only %d\"\n                \" members, which is less than n_splits=%d.\"\n                % (n_smallest_class, self.n_splits),\n                UserWarning,\n            )\n        n_classes = len(y_cnt)\n\n        _, groups_inv, groups_cnt = np.unique(\n            groups, return_inverse=True, return_counts=True\n        )\n        y_counts_per_group = np.zeros((len(groups_cnt), n_classes))\n        for class_idx, group_idx in zip(y_inv, groups_inv):\n            y_counts_per_group[group_idx, class_idx] += 1\n\n        y_counts_per_fold = np.zeros((self.n_splits, n_classes))\n        groups_per_fold = defaultdict(set)\n\n        if self.shuffle:\n            rng.shuffle(y_counts_per_group)\n\n        # Stable sort to keep shuffled order for groups with the same\n        # class distribution variance\n        sorted_groups_idx = np.argsort(\n            -np.std(y_counts_per_group, axis=1), kind=\"mergesort\"\n        )\n\n        for group_idx in sorted_groups_idx:\n            group_y_counts = y_counts_per_group[group_idx]\n            best_fold = self._find_best_fold(\n                y_counts_per_fold=y_counts_per_fold,\n                y_cnt=y_cnt,\n                group_y_counts=group_y_counts,\n            )\n            y_counts_per_fold[best_fold] += group_y_counts\n            groups_per_fold[best_fold].add(group_idx)\n\n        for i in range(self.n_splits):\n            test_indices = [\n                idx\n                for idx, group_idx in enumerate(groups_inv)\n                if group_idx in groups_per_fold[i]\n            ]\n            yield test_indices",
+                        "filename": "sklearn/model_selection/_split.py",
+                        "start_index": 32955,
+                        "end_index": 35421,
+                        "start_line": 696,
+                        "end_line": 977,
+                        "max_line": 2751,
+                        "git_instance": "github",
+                        "repo_name": "testbed/scikit-learn__scikit-learn__0.22",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet seems to be a continuation of the '_make_test_folds' method and includes additional logic for handling groups and folds. It may contain relevant code that affects how the folds are distributed."
+                }
+            ]
+        },
+        "solution_task": "- The issue is likely due to the rounding strategy used in the allocation of samples to each fold in the `StratifiedKFold` implementation.\n- To ensure fold sizes are closer to equal, the rounding strategy needs to be adjusted.\n- The relevant code is in the `_make_test_folds` method of the `StratifiedKFold` class, specifically where the `allocation` array is calculated and used to distribute samples across folds.\n\nSolution:\n- Modify the allocation strategy in the `_make_test_folds` method to ensure a more even distribution of samples across folds.\n- One approach is to distribute the remainder samples (after dividing the total samples by `n_splits`) one by one to the folds until there are no remainder samples left.\n- Here is a suggested modification to the allocation code block:\n\n```python\n# Current allocation strategy\nallocation = np.asarray(\n    [\n        np.bincount(y_order[i :: self.n_splits], minlength=n_classes)\n        for i in range(self.n_splits)\n    ]\n)\n\n# Suggested modification for a more even distribution\nn_samples = len(y)\nbase_fold_size = n_samples // self.n_splits\nremainder = n_samples % self.n_splits\nallocation = np.full((self.n_splits, n_classes), base_fold_size)\n\n# Distribute remainder samples across folds\nfor i in range(remainder):\n    allocation[i % self.n_splits] += 1\n\n# Now proceed with the rest of the _make_test_folds method\n# ...\n```\n\n- Ensure that the modified allocation is used to assign samples to `test_folds` correctly.\n- Test the modified `StratifiedKFold` to confirm that the fold sizes are now closer to equal.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE accurately identifies the issue with the `StratifiedKFold` implementation in scikit-learn, which is causing unequal fold sizes. It provides a clear and actionable solution by suggesting a modification to the allocation strategy in the `_make_test_folds` method. The RESPONSE includes a code snippet that demonstrates how to adjust the allocation of samples to each fold to achieve a more even distribution. Additionally, the RESPONSE provides links to relevant sections of the scikit-learn codebase where the issue may be present and where the proposed changes can be applied. This guidance is directly relevant to the problem described in the PROMPT and offers a comprehensive approach to resolving it.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711739193.982785,
+        "result": "- The issue is likely due to the rounding strategy used in the allocation of samples to each fold in the `StratifiedKFold` implementation.\n- To ensure fold sizes are closer to equal, the rounding strategy needs to be adjusted.\n- The relevant code is in the `_make_test_folds` method of the `StratifiedKFold` class, specifically where the `allocation` array is calculated and used to distribute samples across folds.\n\nSolution:\n- Modify the allocation strategy in the `_make_test_folds` method to ensure a more even distribution of samples across folds.\n- One approach is to distribute the remainder samples (after dividing the total samples by `n_splits`) one by one to the folds until there are no remainder samples left.\n- Here is a suggested modification to the allocation code block:\n\n```python\n# Current allocation strategy\nallocation = np.asarray(\n    [\n        np.bincount(y_order[i :: self.n_splits], minlength=n_classes)\n        for i in range(self.n_splits)\n    ]\n)\n\n# Suggested modification for a more even distribution\nn_samples = len(y)\nbase_fold_size = n_samples // self.n_splits\nremainder = n_samples % self.n_splits\nallocation = np.full((self.n_splits, n_classes), base_fold_size)\n\n# Distribute remainder samples across folds\nfor i in range(remainder):\n    allocation[i % self.n_splits] += 1\n\n# Now proceed with the rest of the _make_test_folds method\n# ...\n```\n\n- Ensure that the modified allocation is used to assign samples to `test_folds` correctly.\n- Test the modified `StratifiedKFold` to confirm that the fold sizes are now closer to equal.\n\n### Code snippets to check\n\n-  \u2192 [sklearn](https://github.com/testbed/scikit-learn__scikit-learn__0.22/tree//sklearn) \u2192 [model_selection](https://github.com/testbed/scikit-learn__scikit-learn__0.22/tree//sklearn/model_selection)- [Lines 695 - 760](https://github.com/testbed/scikit-learn__scikit-learn__0.22/blob//sklearn/model_selection/_split.py#L695-L760)\n\n This snippet contains the '_make_test_folds' method which is responsible for creating test folds in 'StratifiedKFold'. The issue is related to unequal fold sizes, so this method is likely where the logic for fold size distribution needs to be reviewed or modified. \n\n\n   - [Lines 979 - 999](https://github.com/testbed/scikit-learn__scikit-learn__0.22/blob//sklearn/model_selection/_split.py#L979-L999)\n\n The '_find_best_fold' method is used to determine the best fold for assigning groups of samples. Since the issue is about the unequal sizes of folds, the logic within this method might be contributing to the problem and may need adjustments. \n\n\n   - [Lines 619 - 896](https://github.com/testbed/scikit-learn__scikit-learn__0.22/blob//sklearn/model_selection/_split.py#L619-L896)\n\n This snippet provides the class definition and documentation for 'StratifiedKFold', which includes the description of how folds are supposed to be generated. It is relevant for understanding the intended behavior and constraints of the fold generation process. \n\n\n   - [Lines 696 - 977](https://github.com/testbed/scikit-learn__scikit-learn__0.22/blob//sklearn/model_selection/_split.py#L696-L977)\n\n This snippet seems to be a continuation of the '_make_test_folds' method and includes additional logic for handling groups and folds. It may contain relevant code that affects how the folds are distributed.",
+        "context_relevance": 0.43999999999999995,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer it completely to get a score of 10.\nSupporting Evidence: The RESPONSE directly addresses the issue raised in the PROMPT regarding the unequal fold sizes produced by `StratifiedKFold`. It provides a detailed explanation of the likely cause, a potential solution, and a step-by-step guide to implement the solution, including a code snippet. The RESPONSE also includes references to specific lines of code in the `StratifiedKFold` implementation that may need to be reviewed or modified, which is highly relevant to the PROMPT's request for assistance with a technical issue in a specific Python library. The RESPONSE is comprehensive and offers a complete answer to the problem described in the PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

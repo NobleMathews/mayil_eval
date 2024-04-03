@@ -1,0 +1,242 @@
+{
+    "id": "django__django-12431",
+    "repo_name": "testbed/django__django__3.1",
+    "task_id": 5241001461019381874,
+    "title": "FileResponse with temporary file closing connection.",
+    "body": "Description\n\t \n\t\t(last modified by Oskar Persson)\n\t \nI think I might've found a regression in #30565. When I run the following tests (in their defined order) against Postgres I get the error below.\nimport tempfile\nfrom django.contrib.auth import get_user_model\nfrom django.http import FileResponse\nfrom django.test import TestCase\nUser = get_user_model()\nclass MyTests(TestCase):\n\tdef setUp(self):\n\t\tself.user = User.objects.create(username='user')\n\tdef test_first(self):\n\t\twith tempfile.TemporaryFile() as f:\n\t\t\treturn FileResponse(f)\n\tdef test_second(self):\n\t\tpass\nRunning tests...\n----------------------------------------------------------------------\n.E\n======================================================================\nERROR [0.003s]: test_second (responses.test_fileresponse.MyTests)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n File \"/tests/django/django/db/backends/base/base.py\", line 238, in _cursor\n\treturn self._prepare_cursor(self.create_cursor(name))\n File \"/tests/django/django/utils/asyncio.py\", line 26, in inner\n\treturn func(*args, **kwargs)\n File \"/tests/django/django/db/backends/postgresql/base.py\", line 231, in create_cursor\n\tcursor = self.connection.cursor()\npsycopg2.InterfaceError: connection already closed\nThe above exception was the direct cause of the following exception:\nTraceback (most recent call last):\n File \"/tests/django/tests/responses/test_fileresponse.py\", line 19, in setUp\n\tself.user = User.objects.create(username='user')\n File \"/tests/django/django/db/models/manager.py\", line 82, in manager_method\n\treturn getattr(self.get_queryset(), name)(*args, **kwargs)\n File \"/tests/django/django/db/models/query.py\", line 433, in create\n\tobj.save(force_insert=True, using=self.db)\n File \"/tests/django/django/contrib/auth/base_user.py\", line 66, in save\n\tsuper().save(*args, **kwargs)\n File \"/tests/django/django/db/models/base.py\", line 746, in save\n\tforce_update=force_update, update_fields=update_fields)\n File \"/tests/django/django/db/models/base.py\", line 784, in save_base\n\tforce_update, using, update_fields,\n File \"/tests/django/django/db/models/base.py\", line 887, in _save_table\n\tresults = self._do_insert(cls._base_manager, using, fields, returning_fields, raw)\n File \"/tests/django/django/db/models/base.py\", line 926, in _do_insert\n\tusing=using, raw=raw,\n File \"/tests/django/django/db/models/manager.py\", line 82, in manager_method\n\treturn getattr(self.get_queryset(), name)(*args, **kwargs)\n File \"/tests/django/django/db/models/query.py\", line 1204, in _insert\n\treturn query.get_compiler(using=using).execute_sql(returning_fields)\n File \"/tests/django/django/db/models/sql/compiler.py\", line 1382, in execute_sql\n\twith self.connection.cursor() as cursor:\n File \"/tests/django/django/utils/asyncio.py\", line 26, in inner\n\treturn func(*args, **kwargs)\n File \"/tests/django/django/db/backends/base/base.py\", line 260, in cursor\n\treturn self._cursor()\n File \"/tests/django/django/db/backends/base/base.py\", line 238, in _cursor\n\treturn self._prepare_cursor(self.create_cursor(name))\n File \"/tests/django/django/db/utils.py\", line 90, in __exit__\n\traise dj_exc_value.with_traceback(traceback) from exc_value\n File \"/tests/django/django/db/backends/base/base.py\", line 238, in _cursor\n\treturn self._prepare_cursor(self.create_cursor(name))\n File \"/tests/django/django/utils/asyncio.py\", line 26, in inner\n\treturn func(*args, **kwargs)\n File \"/tests/django/django/db/backends/postgresql/base.py\", line 231, in create_cursor\n\tcursor = self.connection.cursor()\ndjango.db.utils.InterfaceError: connection already closed\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.1.git",
+    "requested_commit": "",
+    "mayil_response": "- The issue is likely related to the database connection being closed unexpectedly, possibly due to the use of `TemporaryFile` in `test_first` which may be closing the file (and its associated resources) prematurely.\n- The `FileResponse` object expects a file-like object that remains open for the duration of the response, but the `TemporaryFile` is being closed as soon as the `with` block is exited, which is not correct in the context of a Django response.\n\nTo resolve the issue:\n\n- Modify the `test_first` method to ensure that the file is not closed before the `FileResponse` has finished using it. This can be done by avoiding the use of the `with` statement, which automatically closes the file, and instead manually managing the file's lifecycle.\n- Ensure that the `TemporaryFile` is closed after the response has been fully read or sent.\n\nHere is a revised version of the `test_first` method:\n\n```python\ndef test_first(self):\n    f = tempfile.TemporaryFile()\n    response = FileResponse(f)\n    self.addCleanup(f.close)  # Ensure the file is closed after the test\n    return response\n```\n\n- By using `self.addCleanup(f.close)`, we ensure that the file is closed after the test finishes, which is the correct time to clean up resources in a `TestCase`.\n- This change should prevent the `InterfaceError` by ensuring that the file remains open for the duration of the response and is only closed after the response has been handled.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [http](https://github.com/testbed/django__django__3.1/tree//django/http)- [Lines 531 - 531](https://github.com/testbed/django__django__3.1/blob//django/http/response.py#L531-L531)\n\n The FileResponse class is directly mentioned in the error traceback, indicating that the issue may be related to how FileResponse handles temporary files.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.1/tree//django/core) \u2192 [files](https://github.com/testbed/django__django__3.1/tree//django/core/files)- [Lines 1 - 93](https://github.com/testbed/django__django__3.1/blob//django/core/files/uploadedfile.py#L1-L93)\n\n This snippet defines the TemporaryUploadedFile class, which may be relevant to the issue if the FileResponse is not handling temporary files correctly.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.1/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__3.1/tree//django/db/backends) \u2192 [base](https://github.com/testbed/django__django__3.1/tree//django/db/backends/base)- [Lines 524 - 605](https://github.com/testbed/django__django__3.1/blob//django/db/backends/base/base.py#L524-L605)\n\n This snippet includes methods related to database connection health checks and could be relevant to the 'connection already closed' error.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.1/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__3.1/tree//django/db/backends) \u2192 [postgresql](https://github.com/testbed/django__django__3.1/tree//django/db/backends/postgresql)- [Lines 57 - 86](https://github.com/testbed/django__django__3.1/blob//django/db/backends/postgresql/creation.py#L57-L86)\n\n This snippet involves closing and cloning the test database, which could be related to the connection issues experienced during testing.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0009895,
+        "snippet_processor": 0.046430000000000006,
+        "issue_star_creation": 0.04236,
+        "issue_star_solver": 0.05262,
+        "bouncer": 0.024470000000000002
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711731397.98102,
+        "relevant_snippets": [
+            {
+                "code": "class FileResponse(StreamingHttpResponse):",
+                "filename": "django/http/response.py",
+                "start_index": 18387,
+                "end_index": 18429,
+                "start_line": 531,
+                "end_line": 531,
+                "max_line": 734,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import os\nfrom io import BytesIO, StringIO, UnsupportedOperation\n\nfrom django.core.files.utils import FileProxyMixin\nfrom django.utils.functional import cached_property",
+                "filename": "django/core/files/base.py",
+                "start_index": 0,
+                "end_index": 168,
+                "start_line": 1,
+                "end_line": 5,
+                "max_line": 161,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@contextmanager\n    def constraint_checks_disabled(self):\n        \"\"\"\n        Disable foreign key constraint checking.\n        \"\"\"\n        disabled = self.disable_constraint_checking()\n        try:\n            yield\n        finally:\n            if disabled:\n                self.enable_constraint_checking()\n\n    def disable_constraint_checking(self):\n        \"\"\"\n        Backends can implement as needed to temporarily disable foreign key\n        constraint checking. Should return True if the constraints were\n        disabled and will need to be reenabled.\n        \"\"\"\n        return False\n\n    def enable_constraint_checking(self):\n        \"\"\"\n        Backends can implement as needed to re-enable foreign key constraint\n        checking.\n        \"\"\"\n        pass\n\n    def check_constraints(self, table_names=None):\n        \"\"\"\n        Backends can override this method if they can apply constraint\n        checking (e.g. via \"SET CONSTRAINTS ALL IMMEDIATE\"). Should raise an\n        IntegrityError if any invalid foreign key references are encountered.\n        \"\"\"\n        pass\n\n    # ##### Connection termination handling #####\n\n    def is_usable(self):\n        \"\"\"\n        Test if the database connection is usable.\n\n        This method may assume that self.connection is not None.\n\n        Actual implementations should take care not to raise exceptions\n        as that may prevent Django from recycling unusable connections.\n        \"\"\"\n        raise NotImplementedError(\n            \"subclasses of BaseDatabaseWrapper may require an is_usable() method\"\n        )\n\n    def close_if_health_check_failed(self):\n        \"\"\"Close existing connection if it fails a health check.\"\"\"\n        if (\n            self.connection is None\n            or not self.health_check_enabled\n            or self.health_check_done\n        ):\n            return\n\n        if not self.is_usable():\n            self.close()\n        self.health_check_done = True",
+                "filename": "django/db/backends/base/base.py",
+                "start_index": 19043,
+                "end_index": 20987,
+                "start_line": 524,
+                "end_line": 605,
+                "max_line": 788,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "except StopUpload as e:\n            self._close_files()\n            if not e.connection_reset:\n                exhaust(self._input_data)\n        else:\n            if not uploaded_file:\n                for handler in handlers:\n                    handler.upload_interrupted()\n            # Make sure that the request data is all fed\n            exhaust(self._input_data)",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 14464,
+                "end_index": 14833,
+                "start_line": 348,
+                "end_line": 357,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@cached_property\n    def django_test_expected_failures(self):\n        expected_failures = set()\n        if self.uses_server_side_binding:\n            expected_failures.update(\n                {\n                    # Parameters passed to expressions in SELECT and GROUP BY\n                    # clauses are not recognized as the same values when using\n                    # server-side binding cursors (#34255).\n                    \"aggregation.tests.AggregateTestCase.\"\n                    \"test_group_by_nested_expression_with_params\",\n                }\n            )\n        return expected_failures\n\n    @cached_property\n    def uses_server_side_binding(self):\n        options = self.connection.settings_dict[\"OPTIONS\"]\n        return is_psycopg3 and options.get(\"server_side_binding\") is True\n\n    @cached_property\n    def prohibits_null_characters_in_text_exception(self):\n        if is_psycopg3:\n            return DataError, \"PostgreSQL text fields cannot contain NUL (0x00) bytes\"\n        else:\n            return ValueError, \"A string literal cannot contain NUL (0x00) characters.\"\n\n    @cached_property\n    def introspected_field_types(self):\n        return {\n            **super().introspected_field_types,\n            \"PositiveBigIntegerField\": \"BigIntegerField\",\n            \"PositiveIntegerField\": \"IntegerField\",\n            \"PositiveSmallIntegerField\": \"SmallIntegerField\",\n        }\n\n    @cached_property\n    def is_postgresql_13(self):\n        return self.connection.pg_version >= 130000\n\n    @cached_property\n    def is_postgresql_14(self):\n        return self.connection.pg_version >= 140000\n\n    @cached_property\n    def is_postgresql_15(self):\n        return self.connection.pg_version >= 150000\n\n    has_bit_xor = property(operator.attrgetter(\"is_postgresql_14\"))\n    supports_covering_spgist_indexes = property(operator.attrgetter(\"is_postgresql_14\"))\n    supports_unlimited_charfield = True\n    supports_nulls_distinct_unique_constraints = property(\n        operator.attrgetter(\"is_postgresql_15\")\n    )",
+                "filename": "django/db/backends/postgresql/features.py",
+                "start_index": 3212,
+                "end_index": 5240,
+                "start_line": 91,
+                "end_line": 144,
+                "max_line": 144,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nClasses representing uploaded files.\n\"\"\"\n\nimport os\nfrom io import BytesIO\n\nfrom django.conf import settings\nfrom django.core.files import temp as tempfile\nfrom django.core.files.base import File\nfrom django.core.files.utils import validate_file_name\n\n__all__ = (\n    \"UploadedFile\",\n    \"TemporaryUploadedFile\",\n    \"InMemoryUploadedFile\",\n    \"SimpleUploadedFile\",\n)\n\n\nclass UploadedFile(File):\n    \"\"\"\n    An abstract uploaded file (``TemporaryUploadedFile`` and\n    ``InMemoryUploadedFile`` are the built-in concrete subclasses).\n\n    An ``UploadedFile`` object behaves somewhat like a file object and\n    represents some file data that the user submitted with a form.\n    \"\"\"\n\n    def __init__(\n        self,\n        file=None,\n        name=None,\n        content_type=None,\n        size=None,\n        charset=None,\n        content_type_extra=None,\n    ):\n        super().__init__(file, name)\n        self.size = size\n        self.content_type = content_type\n        self.charset = charset\n        self.content_type_extra = content_type_extra\n\n    def __repr__(self):\n        return \"<%s: %s (%s)>\" % (self.__class__.__name__, self.name, self.content_type)\n\n    def _get_name(self):\n        return self._name\n\n    def _set_name(self, name):\n        # Sanitize the file name so that it can't be dangerous.\n        if name is not None:\n            # Just use the basename of the file -- anything else is dangerous.\n            name = os.path.basename(name)\n\n            # File names longer than 255 characters can cause problems on older OSes.\n            if len(name) > 255:\n                name, ext = os.path.splitext(name)\n                ext = ext[:255]\n                name = name[: 255 - len(ext)] + ext\n\n            name = validate_file_name(name)\n\n        self._name = name\n\n    name = property(_get_name, _set_name)\n\n\nclass TemporaryUploadedFile(UploadedFile):\n    \"\"\"\n    A file uploaded to a temporary location (i.e. stream-to-disk).\n    \"\"\"\n\n    def __init__(self, name, content_type, size, charset, content_type_extra=None):\n        _, ext = os.path.splitext(name)\n        file = tempfile.NamedTemporaryFile(\n            suffix=\".upload\" + ext, dir=settings.FILE_UPLOAD_TEMP_DIR\n        )\n        super().__init__(file, name, content_type, size, charset, content_type_extra)\n\n    def temporary_file_path(self):\n        \"\"\"Return the full path of this file.\"\"\"\n        return self.file.name\n\n    def close(self):\n        try:\n            return self.file.close()\n        except FileNotFoundError:\n            # The file was moved or deleted before the tempfile could unlink\n            # it. Still sets self.file.close_called and calls\n            # self.file.file.close() before the exception.\n            pass",
+                "filename": "django/core/files/uploadedfile.py",
+                "start_index": 0,
+                "end_index": 2730,
+                "start_line": 1,
+                "end_line": 93,
+                "max_line": 150,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import asyncio\nimport logging\nimport sys\nimport tempfile\nimport traceback\nfrom contextlib import aclosing\n\nfrom asgiref.sync import ThreadSensitiveContext, sync_to_async\n\nfrom django.conf import settings\nfrom django.core import signals\nfrom django.core.exceptions import RequestAborted, RequestDataTooBig\nfrom django.core.handlers import base\nfrom django.http import (\n    FileResponse,\n    HttpRequest,\n    HttpResponse,\n    HttpResponseBadRequest,\n    HttpResponseServerError,\n    QueryDict,\n    parse_cookie,\n)\nfrom django.urls import set_script_prefix\nfrom django.utils.functional import cached_property\n\nlogger = logging.getLogger(\"django.request\")\n\n\ndef get_script_prefix(scope):\n    \"\"\"\n    Return the script prefix to use from either the scope or a setting.\n    \"\"\"\n    if settings.FORCE_SCRIPT_NAME:\n        return settings.FORCE_SCRIPT_NAME\n    return scope.get(\"root_path\", \"\") or \"\"",
+                "filename": "django/core/handlers/asgi.py",
+                "start_index": 0,
+                "end_index": 894,
+                "start_line": 1,
+                "end_line": 35,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nBase file upload handler classes, and the built-in concrete subclasses\n\"\"\"\nimport os\nfrom io import BytesIO\n\nfrom django.conf import settings\nfrom django.core.files.uploadedfile import InMemoryUploadedFile, TemporaryUploadedFile\nfrom django.utils.module_loading import import_string\n\n__all__ = [\n    \"UploadFileException\",\n    \"StopUpload\",\n    \"SkipFile\",\n    \"FileUploadHandler\",\n    \"TemporaryFileUploadHandler\",\n    \"MemoryFileUploadHandler\",\n    \"load_handler\",\n    \"StopFutureHandlers\",\n]\n\n\nclass UploadFileException(Exception):\n    \"\"\"\n    Any error having to do with uploading files.\n    \"\"\"\n\n    pass\n\n\nclass StopUpload(UploadFileException):\n    \"\"\"\n    This exception is raised when an upload must abort.\n    \"\"\"\n\n    def __init__(self, connection_reset=False):\n        \"\"\"\n        If ``connection_reset`` is ``True``, Django knows will halt the upload\n        without consuming the rest of the upload. This will cause the browser to\n        show a \"connection reset\" error.\n        \"\"\"\n        self.connection_reset = connection_reset\n\n    def __str__(self):\n        if self.connection_reset:\n            return \"StopUpload: Halt current upload.\"\n        else:\n            return \"StopUpload: Consume request data, then halt.\"\n\n\nclass SkipFile(UploadFileException):\n    \"\"\"\n    This exception is raised by an upload handler that wants to skip a given file.\n    \"\"\"\n\n    pass\n\n\nclass StopFutureHandlers(UploadFileException):\n    \"\"\"\n    Upload handlers that have handled a file and do not want future handlers to\n    run should raise this exception instead of returning None.\n    \"\"\"\n\n    pass",
+                "filename": "django/core/files/uploadhandler.py",
+                "start_index": 0,
+                "end_index": 1607,
+                "start_line": 1,
+                "end_line": 189,
+                "max_line": 251,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _handle_objects_preventing_db_destruction(\n        self, cursor, parameters, verbosity, autoclobber\n    ):\n        # There are objects in the test tablespace which prevent dropping it\n        # The easy fix is to drop the test user -- but are we allowed to do so?\n        self.log(\n            \"There are objects in the old test database which prevent its destruction.\"\n            \"\\nIf they belong to the test user, deleting the user will allow the test \"\n            \"database to be recreated.\\n\"\n            \"Otherwise, you will need to find and remove each of these objects, \"\n            \"or use a different tablespace.\\n\"\n        )\n        if self._test_user_create():\n            if not autoclobber:\n                confirm = input(\"Type 'yes' to delete user %s: \" % parameters[\"user\"])\n            if autoclobber or confirm == \"yes\":\n                try:\n                    if verbosity >= 1:\n                        self.log(\"Destroying old test user...\")\n                    self._destroy_test_user(cursor, parameters, verbosity)\n                except Exception as e:\n                    self.log(\"Got an error destroying the test user: %s\" % e)\n                    sys.exit(2)\n                try:\n                    if verbosity >= 1:\n                        self.log(\n                            \"Destroying old test database for alias '%s'...\"\n                            % self.connection.alias\n                        )\n                    self._execute_test_db_destruction(cursor, parameters, verbosity)\n                except Exception as e:\n                    self.log(\"Got an error destroying the test database: %s\" % e)\n                    sys.exit(2)\n            else:\n                self.log(\"Tests cancelled -- test database cannot be recreated.\")\n                sys.exit(1)\n        else:\n            self.log(\n                \"Django is configured to use pre-existing test user '%s',\"\n                \" and will not attempt to delete it.\" % parameters[\"user\"]\n            )\n            self.log(\"Tests cancelled -- test database cannot be recreated.\")\n            sys.exit(1)",
+                "filename": "django/db/backends/oracle/creation.py",
+                "start_index": 7599,
+                "end_index": 9710,
+                "start_line": 159,
+                "end_line": 201,
+                "max_line": 464,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "def _clone_test_db(self, suffix, verbosity, keepdb=False):\n        # CREATE DATABASE ... WITH TEMPLATE ... requires closing connections\n        # to the template database.\n        self.connection.close()\n\n        source_database_name = self.connection.settings_dict[\"NAME\"]\n        target_database_name = self.get_test_db_clone_settings(suffix)[\"NAME\"]\n        test_db_params = {\n            \"dbname\": self._quote_name(target_database_name),\n            \"suffix\": self._get_database_create_suffix(template=source_database_name),\n        }\n        with self._nodb_cursor() as cursor:\n            try:\n                self._execute_create_test_db(cursor, test_db_params, keepdb)\n            except Exception:\n                try:\n                    if verbosity >= 1:\n                        self.log(\n                            \"Destroying old test database for alias %s...\"\n                            % (\n                                self._get_database_display_str(\n                                    verbosity, target_database_name\n                                ),\n                            )\n                        )\n                    cursor.execute(\"DROP DATABASE %(dbname)s\" % test_db_params)\n                    self._execute_create_test_db(cursor, test_db_params, keepdb)\n                except Exception as e:\n                    self.log(\"Got an error cloning the test database: %s\" % e)\n                    sys.exit(2)",
+                "filename": "django/db/backends/postgresql/creation.py",
+                "start_index": 2235,
+                "end_index": 3676,
+                "start_line": 57,
+                "end_line": 86,
+                "max_line": 86,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.1",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/http/response.py": [
+                {
+                    "chunk": {
+                        "code": "class FileResponse(StreamingHttpResponse):",
+                        "filename": "django/http/response.py",
+                        "start_index": 18387,
+                        "end_index": 18429,
+                        "start_line": 531,
+                        "end_line": 531,
+                        "max_line": 734,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "The FileResponse class is directly mentioned in the error traceback, indicating that the issue may be related to how FileResponse handles temporary files."
+                }
+            ],
+            "django/core/files/uploadedfile.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nClasses representing uploaded files.\n\"\"\"\n\nimport os\nfrom io import BytesIO\n\nfrom django.conf import settings\nfrom django.core.files import temp as tempfile\nfrom django.core.files.base import File\nfrom django.core.files.utils import validate_file_name\n\n__all__ = (\n    \"UploadedFile\",\n    \"TemporaryUploadedFile\",\n    \"InMemoryUploadedFile\",\n    \"SimpleUploadedFile\",\n)\n\n\nclass UploadedFile(File):\n    \"\"\"\n    An abstract uploaded file (``TemporaryUploadedFile`` and\n    ``InMemoryUploadedFile`` are the built-in concrete subclasses).\n\n    An ``UploadedFile`` object behaves somewhat like a file object and\n    represents some file data that the user submitted with a form.\n    \"\"\"\n\n    def __init__(\n        self,\n        file=None,\n        name=None,\n        content_type=None,\n        size=None,\n        charset=None,\n        content_type_extra=None,\n    ):\n        super().__init__(file, name)\n        self.size = size\n        self.content_type = content_type\n        self.charset = charset\n        self.content_type_extra = content_type_extra\n\n    def __repr__(self):\n        return \"<%s: %s (%s)>\" % (self.__class__.__name__, self.name, self.content_type)\n\n    def _get_name(self):\n        return self._name\n\n    def _set_name(self, name):\n        # Sanitize the file name so that it can't be dangerous.\n        if name is not None:\n            # Just use the basename of the file -- anything else is dangerous.\n            name = os.path.basename(name)\n\n            # File names longer than 255 characters can cause problems on older OSes.\n            if len(name) > 255:\n                name, ext = os.path.splitext(name)\n                ext = ext[:255]\n                name = name[: 255 - len(ext)] + ext\n\n            name = validate_file_name(name)\n\n        self._name = name\n\n    name = property(_get_name, _set_name)\n\n\nclass TemporaryUploadedFile(UploadedFile):\n    \"\"\"\n    A file uploaded to a temporary location (i.e. stream-to-disk).\n    \"\"\"\n\n    def __init__(self, name, content_type, size, charset, content_type_extra=None):\n        _, ext = os.path.splitext(name)\n        file = tempfile.NamedTemporaryFile(\n            suffix=\".upload\" + ext, dir=settings.FILE_UPLOAD_TEMP_DIR\n        )\n        super().__init__(file, name, content_type, size, charset, content_type_extra)\n\n    def temporary_file_path(self):\n        \"\"\"Return the full path of this file.\"\"\"\n        return self.file.name\n\n    def close(self):\n        try:\n            return self.file.close()\n        except FileNotFoundError:\n            # The file was moved or deleted before the tempfile could unlink\n            # it. Still sets self.file.close_called and calls\n            # self.file.file.close() before the exception.\n            pass",
+                        "filename": "django/core/files/uploadedfile.py",
+                        "start_index": 0,
+                        "end_index": 2730,
+                        "start_line": 1,
+                        "end_line": 93,
+                        "max_line": 150,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the TemporaryUploadedFile class, which may be relevant to the issue if the FileResponse is not handling temporary files correctly."
+                }
+            ],
+            "django/db/backends/base/base.py": [
+                {
+                    "chunk": {
+                        "code": "@contextmanager\n    def constraint_checks_disabled(self):\n        \"\"\"\n        Disable foreign key constraint checking.\n        \"\"\"\n        disabled = self.disable_constraint_checking()\n        try:\n            yield\n        finally:\n            if disabled:\n                self.enable_constraint_checking()\n\n    def disable_constraint_checking(self):\n        \"\"\"\n        Backends can implement as needed to temporarily disable foreign key\n        constraint checking. Should return True if the constraints were\n        disabled and will need to be reenabled.\n        \"\"\"\n        return False\n\n    def enable_constraint_checking(self):\n        \"\"\"\n        Backends can implement as needed to re-enable foreign key constraint\n        checking.\n        \"\"\"\n        pass\n\n    def check_constraints(self, table_names=None):\n        \"\"\"\n        Backends can override this method if they can apply constraint\n        checking (e.g. via \"SET CONSTRAINTS ALL IMMEDIATE\"). Should raise an\n        IntegrityError if any invalid foreign key references are encountered.\n        \"\"\"\n        pass\n\n    # ##### Connection termination handling #####\n\n    def is_usable(self):\n        \"\"\"\n        Test if the database connection is usable.\n\n        This method may assume that self.connection is not None.\n\n        Actual implementations should take care not to raise exceptions\n        as that may prevent Django from recycling unusable connections.\n        \"\"\"\n        raise NotImplementedError(\n            \"subclasses of BaseDatabaseWrapper may require an is_usable() method\"\n        )\n\n    def close_if_health_check_failed(self):\n        \"\"\"Close existing connection if it fails a health check.\"\"\"\n        if (\n            self.connection is None\n            or not self.health_check_enabled\n            or self.health_check_done\n        ):\n            return\n\n        if not self.is_usable():\n            self.close()\n        self.health_check_done = True",
+                        "filename": "django/db/backends/base/base.py",
+                        "start_index": 19043,
+                        "end_index": 20987,
+                        "start_line": 524,
+                        "end_line": 605,
+                        "max_line": 788,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes methods related to database connection health checks and could be relevant to the 'connection already closed' error."
+                }
+            ],
+            "django/db/backends/postgresql/creation.py": [
+                {
+                    "chunk": {
+                        "code": "def _clone_test_db(self, suffix, verbosity, keepdb=False):\n        # CREATE DATABASE ... WITH TEMPLATE ... requires closing connections\n        # to the template database.\n        self.connection.close()\n\n        source_database_name = self.connection.settings_dict[\"NAME\"]\n        target_database_name = self.get_test_db_clone_settings(suffix)[\"NAME\"]\n        test_db_params = {\n            \"dbname\": self._quote_name(target_database_name),\n            \"suffix\": self._get_database_create_suffix(template=source_database_name),\n        }\n        with self._nodb_cursor() as cursor:\n            try:\n                self._execute_create_test_db(cursor, test_db_params, keepdb)\n            except Exception:\n                try:\n                    if verbosity >= 1:\n                        self.log(\n                            \"Destroying old test database for alias %s...\"\n                            % (\n                                self._get_database_display_str(\n                                    verbosity, target_database_name\n                                ),\n                            )\n                        )\n                    cursor.execute(\"DROP DATABASE %(dbname)s\" % test_db_params)\n                    self._execute_create_test_db(cursor, test_db_params, keepdb)\n                except Exception as e:\n                    self.log(\"Got an error cloning the test database: %s\" % e)\n                    sys.exit(2)",
+                        "filename": "django/db/backends/postgresql/creation.py",
+                        "start_index": 2235,
+                        "end_index": 3676,
+                        "start_line": 57,
+                        "end_line": 86,
+                        "max_line": 86,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet involves closing and cloning the test database, which could be related to the connection issues experienced during testing."
+                }
+            ]
+        },
+        "solution_task": "- The issue is likely related to the database connection being closed unexpectedly, possibly due to the use of `TemporaryFile` in `test_first` which may be closing the file (and its associated resources) prematurely.\n- The `FileResponse` object expects a file-like object that remains open for the duration of the response, but the `TemporaryFile` is being closed as soon as the `with` block is exited, which is not correct in the context of a Django response.\n\nTo resolve the issue:\n\n- Modify the `test_first` method to ensure that the file is not closed before the `FileResponse` has finished using it. This can be done by avoiding the use of the `with` statement, which automatically closes the file, and instead manually managing the file's lifecycle.\n- Ensure that the `TemporaryFile` is closed after the response has been fully read or sent.\n\nHere is a revised version of the `test_first` method:\n\n```python\ndef test_first(self):\n    f = tempfile.TemporaryFile()\n    response = FileResponse(f)\n    self.addCleanup(f.close)  # Ensure the file is closed after the test\n    return response\n```\n\n- By using `self.addCleanup(f.close)`, we ensure that the file is closed after the test finishes, which is the correct time to clean up resources in a `TestCase`.\n- This change should prevent the `InterfaceError` by ensuring that the file remains open for the duration of the response and is only closed after the response has been handled.",
+        "bouncer_response": {
+            "score": 8,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE accurately identifies the potential cause of the error as the premature closing of the `TemporaryFile` used in the `test_first` method. It provides a clear and actionable solution by suggesting a modification to the test method to ensure the file remains open for the duration of the response. The RESPONSE also includes a revised version of the `test_first` method that uses `self.addCleanup(f.close)` to ensure proper resource cleanup after the test, which is a correct and relevant approach in the context of Django's `TestCase`. Additionally, the RESPONSE provides links to relevant code snippets that could be checked for further investigation, which adds value to the debugging process. However, the RESPONSE does not address the fact that the error occurs in the `setUp` method during the creation of a user object, which is unrelated to the `FileResponse` or the `TemporaryFile`. This oversight prevents the RESPONSE from scoring a 10.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711731577.1664152,
+        "result": "- The issue is likely related to the database connection being closed unexpectedly, possibly due to the use of `TemporaryFile` in `test_first` which may be closing the file (and its associated resources) prematurely.\n- The `FileResponse` object expects a file-like object that remains open for the duration of the response, but the `TemporaryFile` is being closed as soon as the `with` block is exited, which is not correct in the context of a Django response.\n\nTo resolve the issue:\n\n- Modify the `test_first` method to ensure that the file is not closed before the `FileResponse` has finished using it. This can be done by avoiding the use of the `with` statement, which automatically closes the file, and instead manually managing the file's lifecycle.\n- Ensure that the `TemporaryFile` is closed after the response has been fully read or sent.\n\nHere is a revised version of the `test_first` method:\n\n```python\ndef test_first(self):\n    f = tempfile.TemporaryFile()\n    response = FileResponse(f)\n    self.addCleanup(f.close)  # Ensure the file is closed after the test\n    return response\n```\n\n- By using `self.addCleanup(f.close)`, we ensure that the file is closed after the test finishes, which is the correct time to clean up resources in a `TestCase`.\n- This change should prevent the `InterfaceError` by ensuring that the file remains open for the duration of the response and is only closed after the response has been handled.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [http](https://github.com/testbed/django__django__3.1/tree//django/http)- [Lines 531 - 531](https://github.com/testbed/django__django__3.1/blob//django/http/response.py#L531-L531)\n\n The FileResponse class is directly mentioned in the error traceback, indicating that the issue may be related to how FileResponse handles temporary files.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.1/tree//django/core) \u2192 [files](https://github.com/testbed/django__django__3.1/tree//django/core/files)- [Lines 1 - 93](https://github.com/testbed/django__django__3.1/blob//django/core/files/uploadedfile.py#L1-L93)\n\n This snippet defines the TemporaryUploadedFile class, which may be relevant to the issue if the FileResponse is not handling temporary files correctly.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.1/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__3.1/tree//django/db/backends) \u2192 [base](https://github.com/testbed/django__django__3.1/tree//django/db/backends/base)- [Lines 524 - 605](https://github.com/testbed/django__django__3.1/blob//django/db/backends/base/base.py#L524-L605)\n\n This snippet includes methods related to database connection health checks and could be relevant to the 'connection already closed' error.\n-  \u2192 [django](https://github.com/testbed/django__django__3.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.1/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__3.1/tree//django/db/backends) \u2192 [postgresql](https://github.com/testbed/django__django__3.1/tree//django/db/backends/postgresql)- [Lines 57 - 86](https://github.com/testbed/django__django__3.1/blob//django/db/backends/postgresql/creation.py#L57-L86)\n\n This snippet involves closing and cloning the test database, which could be related to the connection issues experienced during testing.",
+        "context_relevance": 0.18,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The response must be relevant to the entire prompt and answer the prompt completely to get a score of 10.\nSupporting Evidence: The RESPONSE provides a detailed analysis of the problem described in the PROMPT, including the potential cause of the database connection error and a proposed solution with a revised version of the `test_first` method. It also includes references to specific code snippets that could be relevant to the issue, showing a thorough understanding of the context and the technical aspects involved. The RESPONSE is directly related to the entire PROMPT and answers it completely, thus meeting the criteria for a score of 10."
+        },
+        "qa_relevance": 1.0
+    }
+}

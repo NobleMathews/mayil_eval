@@ -1,0 +1,208 @@
+{
+    "id": "pydata__xarray-4911",
+    "repo_name": "testbed/pydata__xarray__0.12",
+    "task_id": 9118934122100996564,
+    "title": "Sum and prod with min_count forces evaluation",
+    "body": "If I use the `sum` method on a lazy array with `min_count != None` then evaluation is forced. If there is some limitation of the implementation which means it cannot be added to the computation graph for lazy evaluation then this should be mentioned in the docs.\r\n\r\n**Minimal Complete Verifiable Example**:\r\n\r\n```python\r\nimport numpy as np\r\nimport xarray as xr\r\n\r\n\r\ndef worker(da):\r\n    if da.shape == (0, 0):\r\n        return da\r\n\r\n    raise RuntimeError(\"I was evaluated\")\r\n\r\n\r\nda = xr.DataArray(\r\n    np.random.normal(size=(20, 500)),\r\n    dims=(\"x\", \"y\"),\r\n    coords=(np.arange(20), np.arange(500)),\r\n)\r\n\r\nda = da.chunk(dict(x=5))\r\nlazy = da.map_blocks(worker)\r\nresult1 = lazy.sum(\"x\", skipna=True)\r\nresult2 = lazy.sum(\"x\", skipna=True, min_count=5)\r\n\r\n```\r\n\r\n**What happened**: ``RuntimeError: I was evaluated``\r\n\r\n**What you expected to happen**: No output or exceptions, as the result1 and result2 arrays are not printed or saved.\r\n\r\n**Environment**:\r\n\r\n<details><summary>Output of <tt>xr.show_versions()</tt></summary>\r\n\r\nINSTALLED VERSIONS\r\n------------------\r\ncommit: None\r\npython: 3.9.1 (default, Feb  6 2021, 06:49:13) \r\n[GCC 10.2.0]\r\npython-bits: 64\r\nOS: Linux\r\nOS-release: 5.10.15-arch1-1\r\nmachine: x86_64\r\nprocessor: \r\nbyteorder: little\r\nLC_ALL: None\r\nLANG: en_NZ.UTF-8\r\nLOCALE: en_NZ.UTF-8\r\nlibhdf5: 1.12.0\r\nlibnetcdf: 4.7.4\r\n\r\nxarray: 0.16.2\r\npandas: 1.2.1\r\nnumpy: 1.20.0\r\nscipy: 1.6.0\r\nnetCDF4: 1.5.5.1\r\npydap: None\r\nh5netcdf: 0.9.0\r\nh5py: 3.1.0\r\nNio: None\r\nzarr: None\r\ncftime: 1.4.1\r\nnc_time_axis: None\r\nPseudoNetCDF: None\r\nrasterio: 1.2.0\r\ncfgrib: None\r\niris: None\r\nbottleneck: 1.3.2\r\ndask: 2020.12.0\r\ndistributed: 2020.12.0\r\nmatplotlib: 3.3.4\r\ncartopy: 0.18.0\r\nseaborn: None\r\nnumbagg: None\r\npint: None\r\nsetuptools: 53.0.0\r\npip: 20.3.1\r\nconda: None\r\npytest: 6.2.1\r\nIPython: 7.19.0\r\nsphinx: 3.4.3\r\n\r\n</details>\r\n\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/pydata__xarray__0.12.git",
+    "requested_commit": "",
+    "mayil_response": "- In `xarray/core/duck_array_ops.py`, the `_create_nan_agg_method` function is popping the `min_count` argument for `sum` and `prod` methods, which is likely causing the issue when `min_count` is not `None`. This behavior should be modified to handle `min_count` properly for lazy arrays.\n- Modify the `_create_nan_agg_method` function to not pop the `min_count` argument for `sum` and `prod` when the array is lazy (i.e., a dask array). Instead, pass `min_count` to the underlying computation function.\n- Ensure that the `min_count` argument is handled correctly in the `nansum` function in `xarray/core/nanops.py`, which is called by the `sum` method when `skipna` is `True`.\n- Update the `nansum` function to correctly handle `min_count` by using the `_maybe_null_out` function only when `min_count` is not `None`, and ensure that the result is correctly masked when the valid count is less than `min_count`.\n- Test the changes with a lazy array to ensure that the `sum` method with `min_count` set does not force evaluation and does not raise a `RuntimeError`.\n\n### Code snippets to check\n\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__0.12/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__0.12/tree//xarray/core)- [Lines 350 - 422](https://github.com/testbed/pydata__xarray__0.12/blob//xarray/core/duck_array_ops.py#L350-L422)\n\n This snippet defines the aggregation methods including 'sum' and 'prod' which are relevant to the issue as it deals with the behavior of these methods when 'min_count' is not None.\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__0.12/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__0.12/tree//xarray/core)- [Lines 93 - 173](https://github.com/testbed/pydata__xarray__0.12/blob//xarray/core/nanops.py#L93-L173)\n\n This snippet contains the implementation of 'nansum' which is directly related to the issue as it handles the 'min_count' parameter and may be where the evaluation is forced.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0005495,
+        "snippet_processor": 0.06112,
+        "issue_star_creation": 0.025959999999999997,
+        "issue_star_solver": 0.08023,
+        "bouncer": 0.027180000000000003
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711759330.8034298,
+        "relevant_snippets": [
+            {
+                "code": "def _create_nan_agg_method(name, coerce_strings=False, invariant_0d=False):\n    from xarray.core import nanops\n\n    def f(values, axis=None, skipna=None, **kwargs):\n        if kwargs.pop(\"out\", None) is not None:\n            raise TypeError(f\"`out` is not valid for {name}\")\n\n        # The data is invariant in the case of 0d data, so do not\n        # change the data (and dtype)\n        # See https://github.com/pydata/xarray/issues/4885\n        if invariant_0d and axis == ():\n            return values\n\n        values = asarray(values)\n\n        if coerce_strings and values.dtype.kind in \"SU\":\n            values = values.astype(object)\n\n        func = None\n        if skipna or (skipna is None and values.dtype.kind in \"cfO\"):\n            nanname = \"nan\" + name\n            func = getattr(nanops, nanname)\n        else:\n            if name in [\"sum\", \"prod\"]:\n                kwargs.pop(\"min_count\", None)\n\n            xp = get_array_namespace(values)\n            func = getattr(xp, name)\n\n        try:\n            with warnings.catch_warnings():\n                warnings.filterwarnings(\"ignore\", \"All-NaN slice encountered\")\n                return func(values, axis=axis, **kwargs)\n        except AttributeError:\n            if not is_duck_dask_array(values):\n                raise\n            try:  # dask/dask#3133 dask sometimes needs dtype argument\n                # if func does not accept dtype, then raises TypeError\n                return func(values, axis=axis, dtype=values.dtype, **kwargs)\n            except (AttributeError, TypeError):\n                raise NotImplementedError(\n                    f\"{name} is not yet implemented on dask arrays\"\n                )\n\n    f.__name__ = name\n    return f\n\n\n# Attributes `numeric_only`, `available_min_count` is used for docs.\n# See ops.inject_reduce_methods\nargmax = _create_nan_agg_method(\"argmax\", coerce_strings=True)\nargmin = _create_nan_agg_method(\"argmin\", coerce_strings=True)\nmax = _create_nan_agg_method(\"max\", coerce_strings=True, invariant_0d=True)\nmin = _create_nan_agg_method(\"min\", coerce_strings=True, invariant_0d=True)\nsum = _create_nan_agg_method(\"sum\", invariant_0d=True)\nsum.numeric_only = True\nsum.available_min_count = True\nstd = _create_nan_agg_method(\"std\")\nstd.numeric_only = True\nvar = _create_nan_agg_method(\"var\")\nvar.numeric_only = True\nmedian = _create_nan_agg_method(\"median\", invariant_0d=True)\nmedian.numeric_only = True\nprod = _create_nan_agg_method(\"prod\", invariant_0d=True)\nprod.numeric_only = True\nprod.available_min_count = True\ncumprod_1d = _create_nan_agg_method(\"cumprod\", invariant_0d=True)\ncumprod_1d.numeric_only = True\ncumsum_1d = _create_nan_agg_method(\"cumsum\", invariant_0d=True)\ncumsum_1d.numeric_only = True\n\n\n_mean = _create_nan_agg_method(\"mean\", invariant_0d=True)",
+                "filename": "xarray/core/duck_array_ops.py",
+                "start_index": 11037,
+                "end_index": 13819,
+                "start_line": 350,
+                "end_line": 422,
+                "max_line": 709,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "from __future__ import annotations\n\nimport warnings\n\nimport numpy as np\n\nfrom xarray.core import dtypes, nputils, utils\nfrom xarray.core.duck_array_ops import (\n    astype,\n    count,\n    fillna,\n    isnull,\n    sum_where,\n    where,\n    where_method,\n)\n\n\ndef _maybe_null_out(result, axis, mask, min_count=1):\n    \"\"\"\n    xarray version of pandas.core.nanops._maybe_null_out\n    \"\"\"\n    if axis is not None and getattr(result, \"ndim\", False):\n        null_mask = (np.take(mask.shape, axis).prod() - mask.sum(axis) - min_count) < 0\n        dtype, fill_value = dtypes.maybe_promote(result.dtype)\n        result = where(null_mask, fill_value, astype(result, dtype))\n\n    elif getattr(result, \"dtype\", None) not in dtypes.NAT_TYPES:\n        null_mask = mask.size - mask.sum()\n        result = where(null_mask < min_count, np.nan, result)\n\n    return result\n\n\ndef _nan_argminmax_object(func, fill_value, value, axis=None, **kwargs):\n    \"\"\"In house nanargmin, nanargmax for object arrays. Always return integer\n    type\n    \"\"\"\n    valid_count = count(value, axis=axis)\n    value = fillna(value, fill_value)\n    data = getattr(np, func)(value, axis=axis, **kwargs)\n\n    # TODO This will evaluate dask arrays and might be costly.\n    if (valid_count == 0).any():\n        raise ValueError(\"All-NaN slice encountered\")\n\n    return data\n\n\ndef _nan_minmax_object(func, fill_value, value, axis=None, **kwargs):\n    \"\"\"In house nanmin and nanmax for object array\"\"\"\n    valid_count = count(value, axis=axis)\n    filled_value = fillna(value, fill_value)\n    data = getattr(np, func)(filled_value, axis=axis, **kwargs)\n    if not hasattr(data, \"dtype\"):  # scalar case\n        data = fill_value if valid_count == 0 else data\n        # we've computed a single min, max value of type object.\n        # don't let np.array turn a tuple back into an array\n        return utils.to_0d_object_array(data)\n    return where_method(data, valid_count != 0)\n\n\ndef nanmin(a, axis=None, out=None):\n    if a.dtype.kind == \"O\":\n        return _nan_minmax_object(\"min\", dtypes.get_pos_infinity(a.dtype), a, axis)\n\n    return nputils.nanmin(a, axis=axis)\n\n\ndef nanmax(a, axis=None, out=None):\n    if a.dtype.kind == \"O\":\n        return _nan_minmax_object(\"max\", dtypes.get_neg_infinity(a.dtype), a, axis)\n\n    return nputils.nanmax(a, axis=axis)\n\n\ndef nanargmin(a, axis=None):\n    if a.dtype.kind == \"O\":\n        fill_value = dtypes.get_pos_infinity(a.dtype)\n        return _nan_argminmax_object(\"argmin\", fill_value, a, axis=axis)\n\n    return nputils.nanargmin(a, axis=axis)\n\n\ndef nanargmax(a, axis=None):\n    if a.dtype.kind == \"O\":\n        fill_value = dtypes.get_neg_infinity(a.dtype)\n        return _nan_argminmax_object(\"argmax\", fill_value, a, axis=axis)\n\n    return nputils.nanargmax(a, axis=axis)",
+                "filename": "xarray/core/nanops.py",
+                "start_index": 0,
+                "end_index": 2772,
+                "start_line": 1,
+                "end_line": 90,
+                "max_line": 173,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "return self.reduce(\n            duck_array_ops.prod,\n            dim=dim,\n            skipna=skipna,\n            min_count=min_count,\n            numeric_only=True,\n            keep_attrs=keep_attrs,\n            **kwargs,\n        )",
+                "filename": "xarray/core/_aggregations.py",
+                "start_index": 20754,
+                "end_index": 20985,
+                "start_line": 100,
+                "end_line": 8152,
+                "max_line": 8152,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "flox_available\n            and OPTIONS[\"use_flox\"]\n            and contains_only_chunked_or_numpy(self._obj)\n        ):\n            return self._flox_reduce(\n                func=\"prod\",\n                dim=dim,\n                skipna=skipna,\n                min_count=min_count,\n                numeric_only=True,\n                # fill_value=fill_value,\n                keep_attrs=keep_attrs,\n                **kwargs,\n            )\n        else:\n            return self.reduce(\n                duck_array_ops.prod,\n                dim=dim,\n                skipna=skipna,\n                min_count=min_count,\n                numeric_only=True,\n                keep_attrs=keep_attrs,\n                **kwargs,\n            )\n\n    def sum(",
+                "filename": "xarray/core/_aggregations.py",
+                "start_index": 107367,
+                "end_index": 108105,
+                "start_line": 18,
+                "end_line": 7493,
+                "max_line": 8152,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "vailable\n            and OPTIONS[\"use_flox\"]\n            and contains_only_chunked_or_numpy(self._obj)\n        ):\n            return self._flox_reduce(\n                func=\"prod\",\n                dim=dim,\n                skipna=skipna,\n                min_count=min_count,\n                # fill_value=fill_value,\n                keep_attrs=keep_attrs,\n                **kwargs,\n            )\n        else:\n            return self.reduce(\n                duck_array_ops.prod,\n                dim=dim,\n                skipna=skipna,\n                min_count=min_count,\n                keep_attrs=keep_attrs,\n                **kwargs,\n            )\n\n    def sum(\n        self,",
+                "filename": "xarray/core/_aggregations.py",
+                "start_index": 215910,
+                "end_index": 216586,
+                "start_line": 12,
+                "end_line": 8058,
+                "max_line": 8152,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "flox_available\n            and OPTIONS[\"use_flox\"]\n            and contains_only_chunked_or_numpy(self._obj)\n        ):\n            return self._flox_reduce(\n                func=\"prod\",\n                dim=dim,\n                skipna=skipna,\n                min_count=min_count,\n                numeric_only=True,\n                # fill_value=fill_value,\n                keep_attrs=keep_attrs,\n                **kwargs,\n            )\n        else:\n            return self.reduce(\n                duck_array_ops.prod,\n                dim=dim,\n                skipna=skipna,\n                min_count=min_count,\n                numeric_only=True,\n                keep_attrs=keep_attrs,\n                **kwargs,\n            )\n\n    def sum(\n        s",
+                "filename": "xarray/core/_aggregations.py",
+                "start_index": 107367,
+                "end_index": 108115,
+                "start_line": 18,
+                "end_line": 8149,
+                "max_line": 8152,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from __future__ import annotations\n\nfrom collections.abc import Hashable, Iterable, Sequence\nfrom typing import TYPE_CHECKING, Generic, Literal, cast\n\nimport numpy as np\nfrom numpy.typing import ArrayLike\n\nfrom xarray.core import duck_array_ops, utils\nfrom xarray.core.alignment import align, broadcast\nfrom xarray.core.computation import apply_ufunc, dot\nfrom xarray.core.pycompat import is_duck_dask_array\nfrom xarray.core.types import Dims, T_Xarray\n\n# Weighted quantile methods are a subset of the numpy supported quantile methods.\nQUANTILE_METHODS = Literal[\n    \"linear\",\n    \"interpolated_inverted_cdf\",\n    \"hazen\",\n    \"weibull\",\n    \"median_unbiased\",\n    \"normal_unbiased\",\n]\n\n_WEIGHTED_REDUCE_DOCSTRING_TEMPLATE = \"\"\"\n    Reduce this {cls}'s data by a weighted ``{fcn}`` along some dimension(s).\n\n    Parameters\n    ----------\n    dim : Hashable or Iterable of Hashable, optional\n        Dimension(s) over which to apply the weighted ``{fcn}``.\n    skipna : bool or None, optional\n        If True, skip missing values (as marked by NaN). By default, only\n        skips missing values for float dtypes; other dtypes either do not\n        have a sentinel missing value (int) or skipna=True has not been\n        implemented (object, datetime64 or timedelta64).\n    keep_attrs : bool or None, optional\n        If True, the attributes (``attrs``) will be copied from the original\n        object to the new one.  If False (default), the new object will be\n        returned without attributes.\n\n    Returns\n    -------\n    reduced : {cls}\n        New {cls} object with weighted ``{fcn}`` applied to its data and\n        the indicated dimension(s) removed.\n\n    Notes\n    -----\n        Returns {on_zero} if the ``weights`` sum to 0.0 along the reduced\n        dimension(s).\n    \"\"\"\n\n_SUM_OF_WEIGHTS_DOCSTRING = \"\"\"\n    Calculate the sum of weights, accounting for missing values in the data.\n\n    Parameters\n    ----------\n    dim : str or sequence of str, optional\n        Dimension(s) over which to sum the weights.\n    keep_attrs : bool, optional\n        If True, the attributes (``attrs``) will be copied from the original\n        object to the new one.  If False (default), the new object will be\n        returned without attributes.\n\n    Returns\n    -------\n    reduced : {cls}\n        New {cls} object with the sum of the weights over the given dimension.\n    \"\"\"",
+                "filename": "xarray/core/weighted.py",
+                "start_index": 0,
+                "end_index": 2374,
+                "start_line": 1,
+                "end_line": 523,
+                "max_line": 573,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def nansum(a, axis=None, dtype=None, out=None, min_count=None):\n    mask = isnull(a)\n    result = sum_where(a, axis=axis, dtype=dtype, where=mask)\n    if min_count is not None:\n        return _maybe_null_out(result, axis, mask, min_count)\n    else:\n        return result\n\n\ndef _nanmean_ddof_object(ddof, value, axis=None, dtype=None, **kwargs):\n    \"\"\"In house nanmean. ddof argument will be used in _nanvar method\"\"\"\n    from xarray.core.duck_array_ops import count, fillna, where_method\n\n    valid_count = count(value, axis=axis)\n    value = fillna(value, 0)\n    # As dtype inference is impossible for object dtype, we assume float\n    # https://github.com/dask/dask/issues/3162\n    if dtype is None and value.dtype.kind == \"O\":\n        dtype = value.dtype if value.dtype.kind in [\"cf\"] else float\n\n    data = np.sum(value, axis=axis, dtype=dtype, **kwargs)\n    data = data / (valid_count - ddof)\n    return where_method(data, valid_count != 0)\n\n\ndef nanmean(a, axis=None, dtype=None, out=None):\n    if a.dtype.kind == \"O\":\n        return _nanmean_ddof_object(0, a, axis=axis, dtype=dtype)\n\n    with warnings.catch_warnings():\n        warnings.filterwarnings(\n            \"ignore\", r\"Mean of empty slice\", category=RuntimeWarning\n        )\n\n        return np.nanmean(a, axis=axis, dtype=dtype)\n\n\ndef nanmedian(a, axis=None, out=None):\n    # The dask algorithm works by rechunking to one chunk along axis\n    # Make sure we trigger the dask error when passing all dimensions\n    # so that we don't rechunk the entire array to one chunk and\n    # possibly blow memory\n    if axis is not None and len(np.atleast_1d(axis)) == a.ndim:\n        axis = None\n    return nputils.nanmedian(a, axis=axis)\n\n\ndef _nanvar_object(value, axis=None, ddof=0, keepdims=False, **kwargs):\n    value_mean = _nanmean_ddof_object(\n        ddof=0, value=value, axis=axis, keepdims=True, **kwargs\n    )\n    squared = (astype(value, value_mean.dtype) - value_mean) ** 2\n    return _nanmean_ddof_object(ddof, squared, axis=axis, keepdims=keepdims, **kwargs)\n\n\ndef nanvar(a, axis=None, dtype=None, out=None, ddof=0):\n    if a.dtype.kind == \"O\":\n        return _nanvar_object(a, axis=axis, dtype=dtype, ddof=ddof)\n\n    return nputils.nanvar(a, axis=axis, dtype=dtype, ddof=ddof)\n\n\ndef nanstd(a, axis=None, dtype=None, out=None, ddof=0):\n    return nputils.nanstd(a, axis=axis, dtype=dtype, ddof=ddof)\n\n\ndef nanprod(a, axis=None, dtype=None, out=None, min_count=None):\n    mask = isnull(a)\n    result = nputils.nanprod(a, axis=axis, dtype=dtype, out=out)\n    if min_count is not None:\n        return _maybe_null_out(result, axis, mask, min_count)\n    else:\n        return result\n\n\ndef nancumsum(a, axis=None, dtype=None, out=None):\n    return nputils.nancumsum(a, axis=axis, dtype=dtype)\n\n\ndef nancumprod(a, axis=None, dtype=None, out=None):\n    return nputils.nancumprod(a, axis=axis, dtype=dtype)",
+                "filename": "xarray/core/nanops.py",
+                "start_index": 2775,
+                "end_index": 5643,
+                "start_line": 93,
+                "end_line": 173,
+                "max_line": 173,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "return self.reduce(\n            duck_array_ops.prod,\n            dim=dim,\n            skipna=skipna,\n            min_count=min_count,\n            keep_attrs=keep_attrs,\n            **kwargs,\n        )\n\n    de",
+                "filename": "xarray/core/_aggregations.py",
+                "start_index": 60032,
+                "end_index": 60240,
+                "start_line": 100,
+                "end_line": 8057,
+                "max_line": 8152,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from __future__ import annotations\n\nimport warnings\nfrom collections.abc import Hashable, Iterable, Iterator, Mapping\nfrom contextlib import suppress\nfrom html import escape\nfrom textwrap import dedent\nfrom typing import TYPE_CHECKING, Any, Callable, TypeVar, Union, overload\n\nimport numpy as np\nimport pandas as pd\n\nfrom xarray.core import dtypes, duck_array_ops, formatting, formatting_html, ops\nfrom xarray.core.indexing import BasicIndexer, ExplicitlyIndexed\nfrom xarray.core.options import OPTIONS, _get_keep_attrs\nfrom xarray.core.parallelcompat import get_chunked_array_type, guess_chunkmanager\nfrom xarray.core.pycompat import is_chunked_array\nfrom xarray.core.utils import (\n    Frozen,\n    either_dict_or_kwargs,\n    emit_user_level_warning,\n    is_scalar,\n)\n\ntry:\n    import cftime\nexcept ImportError:\n    cftime = None\n\n# Used as a sentinel value to indicate a all dimensions\nALL_DIMS = ...\n\n\nif TYPE_CHECKING:\n    import datetime\n\n    from numpy.typing import DTypeLike\n\n    from xarray.core.dataarray import DataArray\n    from xarray.core.dataset import Dataset\n    from xarray.core.indexes import Index\n    from xarray.core.resample import Resample\n    from xarray.core.rolling_exp import RollingExp\n    from xarray.core.types import (\n        DatetimeLike,\n        DTypeLikeSave,\n        ScalarOrArray,\n        SideOptions,\n        T_Chunks,\n        T_DataWithCoords,\n        T_Variable,\n    )\n    from xarray.core.variable import Variable\n\n    DTypeMaybeMapping = Union[DTypeLikeSave, Mapping[Any, DTypeLikeSave]]\n\n\nT_Resample = TypeVar(\"T_Resample\", bound=\"Resample\")\nC = TypeVar(\"C\")\nT = TypeVar(\"T\")\n\n\nclass ImplementsArrayReduce:\n    __slots__ = ()\n\n    @classmethod\n    def _reduce_method(cls, func: Callable, include_skipna: bool, numeric_only: bool):\n        if include_skipna:\n\n            def wrapped_func(self, dim=None, axis=None, skipna=None, **kwargs):\n                return self.reduce(\n                    func=func, dim=dim, axis=axis, skipna=skipna, **kwargs\n                )\n\n        else:\n\n            def wrapped_func(self, dim=None, axis=None, **kwargs):  # type: ignore[misc]\n                return self.reduce(func=func, dim=dim, axis=axis, **kwargs)\n\n        return wrapped_func\n\n    _reduce_extra_args_docstring = dedent(\n        \"\"\"\\\n        dim : str or sequence of str, optional\n            Dimension(s) over which to apply `{name}`.\n        axis : int or sequence of int, optional\n            Axis(es) over which to apply `{name}`. Only one of the 'dim'\n            and 'axis' arguments can be supplied. If neither are supplied, then\n            `{name}` is calculated over axes.\"\"\"\n    )\n\n    _cum_extra_args_docstring = dedent(\n        \"\"\"\\\n        dim : str or sequence of str, optional\n            Dimension over which to apply `{name}`.\n        axis : int or sequence of int, optional\n            Axis over which to apply `{name}`. Only one of the 'dim'\n            and 'axis' arguments can be supplied.\"\"\"\n    )",
+                "filename": "xarray/core/common.py",
+                "start_index": 0,
+                "end_index": 2965,
+                "start_line": 1,
+                "end_line": 2015,
+                "max_line": 2054,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__0.12",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "xarray/core/duck_array_ops.py": [
+                {
+                    "chunk": {
+                        "code": "def _create_nan_agg_method(name, coerce_strings=False, invariant_0d=False):\n    from xarray.core import nanops\n\n    def f(values, axis=None, skipna=None, **kwargs):\n        if kwargs.pop(\"out\", None) is not None:\n            raise TypeError(f\"`out` is not valid for {name}\")\n\n        # The data is invariant in the case of 0d data, so do not\n        # change the data (and dtype)\n        # See https://github.com/pydata/xarray/issues/4885\n        if invariant_0d and axis == ():\n            return values\n\n        values = asarray(values)\n\n        if coerce_strings and values.dtype.kind in \"SU\":\n            values = values.astype(object)\n\n        func = None\n        if skipna or (skipna is None and values.dtype.kind in \"cfO\"):\n            nanname = \"nan\" + name\n            func = getattr(nanops, nanname)\n        else:\n            if name in [\"sum\", \"prod\"]:\n                kwargs.pop(\"min_count\", None)\n\n            xp = get_array_namespace(values)\n            func = getattr(xp, name)\n\n        try:\n            with warnings.catch_warnings():\n                warnings.filterwarnings(\"ignore\", \"All-NaN slice encountered\")\n                return func(values, axis=axis, **kwargs)\n        except AttributeError:\n            if not is_duck_dask_array(values):\n                raise\n            try:  # dask/dask#3133 dask sometimes needs dtype argument\n                # if func does not accept dtype, then raises TypeError\n                return func(values, axis=axis, dtype=values.dtype, **kwargs)\n            except (AttributeError, TypeError):\n                raise NotImplementedError(\n                    f\"{name} is not yet implemented on dask arrays\"\n                )\n\n    f.__name__ = name\n    return f\n\n\n# Attributes `numeric_only`, `available_min_count` is used for docs.\n# See ops.inject_reduce_methods\nargmax = _create_nan_agg_method(\"argmax\", coerce_strings=True)\nargmin = _create_nan_agg_method(\"argmin\", coerce_strings=True)\nmax = _create_nan_agg_method(\"max\", coerce_strings=True, invariant_0d=True)\nmin = _create_nan_agg_method(\"min\", coerce_strings=True, invariant_0d=True)\nsum = _create_nan_agg_method(\"sum\", invariant_0d=True)\nsum.numeric_only = True\nsum.available_min_count = True\nstd = _create_nan_agg_method(\"std\")\nstd.numeric_only = True\nvar = _create_nan_agg_method(\"var\")\nvar.numeric_only = True\nmedian = _create_nan_agg_method(\"median\", invariant_0d=True)\nmedian.numeric_only = True\nprod = _create_nan_agg_method(\"prod\", invariant_0d=True)\nprod.numeric_only = True\nprod.available_min_count = True\ncumprod_1d = _create_nan_agg_method(\"cumprod\", invariant_0d=True)\ncumprod_1d.numeric_only = True\ncumsum_1d = _create_nan_agg_method(\"cumsum\", invariant_0d=True)\ncumsum_1d.numeric_only = True\n\n\n_mean = _create_nan_agg_method(\"mean\", invariant_0d=True)",
+                        "filename": "xarray/core/duck_array_ops.py",
+                        "start_index": 11037,
+                        "end_index": 13819,
+                        "start_line": 350,
+                        "end_line": 422,
+                        "max_line": 709,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pydata__xarray__0.12",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the aggregation methods including 'sum' and 'prod' which are relevant to the issue as it deals with the behavior of these methods when 'min_count' is not None."
+                }
+            ],
+            "xarray/core/nanops.py": [
+                {
+                    "chunk": {
+                        "code": "def nansum(a, axis=None, dtype=None, out=None, min_count=None):\n    mask = isnull(a)\n    result = sum_where(a, axis=axis, dtype=dtype, where=mask)\n    if min_count is not None:\n        return _maybe_null_out(result, axis, mask, min_count)\n    else:\n        return result\n\n\ndef _nanmean_ddof_object(ddof, value, axis=None, dtype=None, **kwargs):\n    \"\"\"In house nanmean. ddof argument will be used in _nanvar method\"\"\"\n    from xarray.core.duck_array_ops import count, fillna, where_method\n\n    valid_count = count(value, axis=axis)\n    value = fillna(value, 0)\n    # As dtype inference is impossible for object dtype, we assume float\n    # https://github.com/dask/dask/issues/3162\n    if dtype is None and value.dtype.kind == \"O\":\n        dtype = value.dtype if value.dtype.kind in [\"cf\"] else float\n\n    data = np.sum(value, axis=axis, dtype=dtype, **kwargs)\n    data = data / (valid_count - ddof)\n    return where_method(data, valid_count != 0)\n\n\ndef nanmean(a, axis=None, dtype=None, out=None):\n    if a.dtype.kind == \"O\":\n        return _nanmean_ddof_object(0, a, axis=axis, dtype=dtype)\n\n    with warnings.catch_warnings():\n        warnings.filterwarnings(\n            \"ignore\", r\"Mean of empty slice\", category=RuntimeWarning\n        )\n\n        return np.nanmean(a, axis=axis, dtype=dtype)\n\n\ndef nanmedian(a, axis=None, out=None):\n    # The dask algorithm works by rechunking to one chunk along axis\n    # Make sure we trigger the dask error when passing all dimensions\n    # so that we don't rechunk the entire array to one chunk and\n    # possibly blow memory\n    if axis is not None and len(np.atleast_1d(axis)) == a.ndim:\n        axis = None\n    return nputils.nanmedian(a, axis=axis)\n\n\ndef _nanvar_object(value, axis=None, ddof=0, keepdims=False, **kwargs):\n    value_mean = _nanmean_ddof_object(\n        ddof=0, value=value, axis=axis, keepdims=True, **kwargs\n    )\n    squared = (astype(value, value_mean.dtype) - value_mean) ** 2\n    return _nanmean_ddof_object(ddof, squared, axis=axis, keepdims=keepdims, **kwargs)\n\n\ndef nanvar(a, axis=None, dtype=None, out=None, ddof=0):\n    if a.dtype.kind == \"O\":\n        return _nanvar_object(a, axis=axis, dtype=dtype, ddof=ddof)\n\n    return nputils.nanvar(a, axis=axis, dtype=dtype, ddof=ddof)\n\n\ndef nanstd(a, axis=None, dtype=None, out=None, ddof=0):\n    return nputils.nanstd(a, axis=axis, dtype=dtype, ddof=ddof)\n\n\ndef nanprod(a, axis=None, dtype=None, out=None, min_count=None):\n    mask = isnull(a)\n    result = nputils.nanprod(a, axis=axis, dtype=dtype, out=out)\n    if min_count is not None:\n        return _maybe_null_out(result, axis, mask, min_count)\n    else:\n        return result\n\n\ndef nancumsum(a, axis=None, dtype=None, out=None):\n    return nputils.nancumsum(a, axis=axis, dtype=dtype)\n\n\ndef nancumprod(a, axis=None, dtype=None, out=None):\n    return nputils.nancumprod(a, axis=axis, dtype=dtype)",
+                        "filename": "xarray/core/nanops.py",
+                        "start_index": 2775,
+                        "end_index": 5643,
+                        "start_line": 93,
+                        "end_line": 173,
+                        "max_line": 173,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pydata__xarray__0.12",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the implementation of 'nansum' which is directly related to the issue as it handles the 'min_count' parameter and may be where the evaluation is forced."
+                }
+            ]
+        },
+        "solution_task": "- In `xarray/core/duck_array_ops.py`, the `_create_nan_agg_method` function is popping the `min_count` argument for `sum` and `prod` methods, which is likely causing the issue when `min_count` is not `None`. This behavior should be modified to handle `min_count` properly for lazy arrays.\n- Modify the `_create_nan_agg_method` function to not pop the `min_count` argument for `sum` and `prod` when the array is lazy (i.e., a dask array). Instead, pass `min_count` to the underlying computation function.\n- Ensure that the `min_count` argument is handled correctly in the `nansum` function in `xarray/core/nanops.py`, which is called by the `sum` method when `skipna` is `True`.\n- Update the `nansum` function to correctly handle `min_count` by using the `_maybe_null_out` function only when `min_count` is not `None`, and ensure that the result is correctly masked when the valid count is less than `min_count`.\n- Test the changes with a lazy array to ensure that the `sum` method with `min_count` set does not force evaluation and does not raise a `RuntimeError`.",
+        "bouncer_response": {
+            "score": 8,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable approach to addressing the issue with the `sum` method on a lazy array when `min_count` is not `None`. It identifies the specific function `_create_nan_agg_method` in `xarray/core/duck_array_ops.py` where the issue may originate and suggests a modification to handle `min_count` properly for lazy arrays. The RESPONSE also advises checking the `nansum` function in `xarray/core/nanops.py` for correct handling of `min_count`. Additionally, it provides links to the relevant code snippets, which is helpful for developers to locate the potential source of the bug. The RESPONSE does not address the documentation aspect mentioned in the PROMPT, which is why it does not score a 10.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711759523.865013,
+        "result": "- In `xarray/core/duck_array_ops.py`, the `_create_nan_agg_method` function is popping the `min_count` argument for `sum` and `prod` methods, which is likely causing the issue when `min_count` is not `None`. This behavior should be modified to handle `min_count` properly for lazy arrays.\n- Modify the `_create_nan_agg_method` function to not pop the `min_count` argument for `sum` and `prod` when the array is lazy (i.e., a dask array). Instead, pass `min_count` to the underlying computation function.\n- Ensure that the `min_count` argument is handled correctly in the `nansum` function in `xarray/core/nanops.py`, which is called by the `sum` method when `skipna` is `True`.\n- Update the `nansum` function to correctly handle `min_count` by using the `_maybe_null_out` function only when `min_count` is not `None`, and ensure that the result is correctly masked when the valid count is less than `min_count`.\n- Test the changes with a lazy array to ensure that the `sum` method with `min_count` set does not force evaluation and does not raise a `RuntimeError`.\n\n### Code snippets to check\n\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__0.12/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__0.12/tree//xarray/core)- [Lines 350 - 422](https://github.com/testbed/pydata__xarray__0.12/blob//xarray/core/duck_array_ops.py#L350-L422)\n\n This snippet defines the aggregation methods including 'sum' and 'prod' which are relevant to the issue as it deals with the behavior of these methods when 'min_count' is not None.\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__0.12/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__0.12/tree//xarray/core)- [Lines 93 - 173](https://github.com/testbed/pydata__xarray__0.12/blob//xarray/core/nanops.py#L93-L173)\n\n This snippet contains the implementation of 'nansum' which is directly related to the issue as it handles the 'min_count' parameter and may be where the evaluation is forced.",
+        "context_relevance": 0.29000000000000004,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT to get a score of 10.\nSupporting Evidence: The RESPONSE addresses the issue described in the PROMPT by providing a detailed explanation of the potential cause and steps to resolve the forced evaluation when using the `sum` method with `min_count != None` on a lazy array. It specifically mentions the `_create_nan_agg_method` function and the `nansum` function, which are relevant to the problem. The RESPONSE also includes a plan to test the changes, ensuring that the solution is effective. This RESPONSE is fully relevant as it provides a comprehensive answer to the technical issue raised in the PROMPT, including the expected behavior, the actual behavior, and the environment in which the issue occurs."
+        },
+        "qa_relevance": 1.0
+    }
+}

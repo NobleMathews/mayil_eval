@@ -1,0 +1,206 @@
+{
+    "id": "django__django-11417",
+    "repo_name": "testbed/django__django__3.0",
+    "task_id": 4312179429483480848,
+    "title": "Update mail backend to use modern standard library parsing approach.",
+    "body": "Description\n\t\n django.core.mail.message.sanitize_address uses email.utils.parseaddr from the standard lib. On Python 3, email.headerregistry.parser.get_mailbox() does the same, and is less error-prone.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.0.git",
+    "requested_commit": "",
+    "mayil_response": "To update the mail backend to use the modern standard library parsing approach, you can follow these steps:\n\n- Replace the usage of `email.utils.parseaddr` with `email.headerregistry.parser.get_mailbox()` in the `sanitize_address` function within `django/core/mail/message.py`.\n- Ensure that the new parsing function is used to extract the display name and email address correctly.\n- Handle any exceptions that may arise from the new parsing method to maintain the robustness of the email address sanitization.\n\nHere's a revised version of the `sanitize_address` function using `email.headerregistry.parser.get_mailbox()`:\n\n```python\nfrom email.headerregistry import parser\n\ndef sanitize_address(addr, encoding):\n    \"\"\"\n    Format a pair of (name, address) or an email address string using modern standard library parsing.\n    \"\"\"\n    if not isinstance(addr, tuple):\n        addr = force_str(addr)\n        try:\n            token, rest = parser.get_mailbox(addr)\n        except (HeaderParseError, ValueError, IndexError):\n            raise ValueError('Invalid address \"%s\"' % addr)\n        else:\n            if rest:\n                raise ValueError(\n                    'Invalid address; only %s could be parsed from \"%s\"' % (token, addr)\n                )\n            nm = token.display_name or \"\"\n            localpart = token.local_part\n            domain = token.domain or \"\"\n    else:\n        nm, address = addr\n        if \"@\" not in address:\n            raise ValueError(f'Invalid address \"{address}\"')\n        localpart, domain = address.rsplit(\"@\", 1)\n\n    # ... rest of the function remains unchanged ...\n```\n\nMake sure to test the updated function thoroughly to ensure it behaves as expected with various email address formats. Additionally, check for any other parts of the code that may be using the old parsing method and update them accordingly.\n\nRemember to update the unit tests to cover the new parsing logic and ensure that the changes do not introduce any regressions.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.0/tree//django/core) \u2192 [mail](https://github.com/testbed/django__django__3.0/tree//django/core/mail)- [Lines 1 - 75](https://github.com/testbed/django__django__3.0/blob//django/core/mail/message.py#L1-L75)\n\n This snippet imports and uses various email-related modules from the standard library, which may need to be updated to use the modern parsing approach as described in the issue. \n\n\n   - [Lines 78 - 156](https://github.com/testbed/django__django__3.0/blob//django/core/mail/message.py#L78-L156)\n\n This snippet contains the 'sanitize_address' function that uses 'parser.get_mailbox()', which is relevant to the issue as it may need to be updated or replaced with a more modern and less error-prone method.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0004595,
+        "snippet_processor": 0.04646,
+        "issue_star_creation": 0.024209999999999995,
+        "issue_star_solver": 0.05283,
+        "bouncer": 0.03115
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711728609.508356,
+        "relevant_snippets": [
+            {
+                "code": "# Mail backends shipped with Django.",
+                "filename": "django/core/mail/backends/__init__.py",
+                "start_index": 0,
+                "end_index": 36,
+                "start_line": 1,
+                "end_line": 1,
+                "max_line": 1,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "import mimetypes\nfrom email import charset as Charset\nfrom email import encoders as Encoders\nfrom email import generator, message_from_string\nfrom email.errors import HeaderParseError\nfrom email.header import Header\nfrom email.headerregistry import Address, parser\nfrom email.message import Message\nfrom email.mime.base import MIMEBase\nfrom email.mime.message import MIMEMessage\nfrom email.mime.multipart import MIMEMultipart\nfrom email.mime.text import MIMEText\nfrom email.utils import formataddr, formatdate, getaddresses, make_msgid\nfrom io import BytesIO, StringIO\nfrom pathlib import Path\n\nfrom django.conf import settings\nfrom django.core.mail.utils import DNS_NAME\nfrom django.utils.encoding import force_str, punycode\n\n# Don't BASE64-encode UTF-8 messages so that we avoid unwanted attention from\n# some spam filters.\nutf8_charset = Charset.Charset(\"utf-8\")\nutf8_charset.body_encoding = None  # Python defaults to BASE64\nutf8_charset_qp = Charset.Charset(\"utf-8\")\nutf8_charset_qp.body_encoding = Charset.QP\n\n# Default MIME type to use on attachments (if it is not explicitly given\n# and cannot be guessed).\nDEFAULT_ATTACHMENT_MIME_TYPE = \"application/octet-stream\"\n\nRFC5322_EMAIL_LINE_LENGTH_LIMIT = 998\n\n\nclass BadHeaderError(ValueError):\n    pass\n\n\n# Header names that contain structured address data (RFC 5322).\nADDRESS_HEADERS = {\n    \"from\",\n    \"sender\",\n    \"reply-to\",\n    \"to\",\n    \"cc\",\n    \"bcc\",\n    \"resent-from\",\n    \"resent-sender\",\n    \"resent-to\",\n    \"resent-cc\",\n    \"resent-bcc\",\n}\n\n\ndef forbid_multi_line_headers(name, val, encoding):\n    \"\"\"Forbid multi-line headers to prevent header injection.\"\"\"\n    encoding = encoding or settings.DEFAULT_CHARSET\n    val = str(val)  # val may be lazy\n    if \"\\n\" in val or \"\\r\" in val:\n        raise BadHeaderError(\n            \"Header values can't contain newlines (got %r for header %r)\" % (val, name)\n        )\n    try:\n        val.encode(\"ascii\")\n    except UnicodeEncodeError:\n        if name.lower() in ADDRESS_HEADERS:\n            val = \", \".join(\n                sanitize_address(addr, encoding) for addr in getaddresses((val,))\n            )\n        else:\n            val = Header(val, encoding).encode()\n    else:\n        if name.lower() == \"subject\":\n            val = Header(val).encode()\n    return name, val",
+                "filename": "django/core/mail/message.py",
+                "start_index": 0,
+                "end_index": 2289,
+                "start_line": 1,
+                "end_line": 75,
+                "max_line": 495,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.8
+            },
+            {
+                "code": "\"\"\"\nTools for sending email.\n\"\"\"\nfrom django.conf import settings\n\n# Imported for backwards compatibility and for the sake\n# of a cleaner namespace. These symbols used to be in\n# django/core/mail.py before the introduction of email\n# backends and the subsequent reorganization (See #10355)\nfrom django.core.mail.message import (\n    DEFAULT_ATTACHMENT_MIME_TYPE,\n    BadHeaderError,\n    EmailMessage,\n    EmailMultiAlternatives,\n    SafeMIMEMultipart,\n    SafeMIMEText,\n    forbid_multi_line_headers,\n    make_msgid,\n)\nfrom django.core.mail.utils import DNS_NAME, CachedDnsName\nfrom django.utils.module_loading import import_string\n\n__all__ = [\n    \"CachedDnsName\",\n    \"DNS_NAME\",\n    \"EmailMessage\",\n    \"EmailMultiAlternatives\",\n    \"SafeMIMEText\",\n    \"SafeMIMEMultipart\",\n    \"DEFAULT_ATTACHMENT_MIME_TYPE\",\n    \"make_msgid\",\n    \"BadHeaderError\",\n    \"forbid_multi_line_headers\",\n    \"get_connection\",\n    \"send_mail\",\n    \"send_mass_mail\",\n    \"mail_admins\",\n    \"mail_managers\",\n]\n\n\ndef get_connection(backend=None, fail_silently=False, **kwds):\n    \"\"\"Load an email backend and return an instance of it.\n\n    If backend is None (default), use settings.EMAIL_BACKEND.\n\n    Both fail_silently and other keyword arguments are used in the\n    constructor of the backend.\n    \"\"\"\n    klass = import_string(backend or settings.EMAIL_BACKEND)\n    return klass(fail_silently=fail_silently, **kwds)\n\n\ndef send_mail(\n    subject,\n    message,\n    from_email,\n    recipient_list,\n    fail_silently=False,\n    auth_user=None,\n    auth_password=None,\n    connection=None,\n    html_message=None,\n):\n    \"\"\"\n    Easy wrapper for sending a single message to a recipient list. All members\n    of the recipient list will see the other recipients in the 'To' field.\n\n    If from_email is None, use the DEFAULT_FROM_EMAIL setting.\n    If auth_user is None, use the EMAIL_HOST_USER setting.\n    If auth_password is None, use the EMAIL_HOST_PASSWORD setting.\n\n    Note: The API for this method is frozen. New code wanting to extend the\n    functionality should use the EmailMessage class directly.\n    \"\"\"\n    connection = connection or get_connection(\n        username=auth_user,\n        password=auth_password,\n        fail_silently=fail_silently,\n    )\n    mail = EmailMultiAlternatives(\n        subject, message, from_email, recipient_list, connection=connection\n    )\n    if html_message:\n        mail.attach_alternative(html_message, \"text/html\")\n\n    return mail.send()",
+                "filename": "django/core/mail/__init__.py",
+                "start_index": 0,
+                "end_index": 2463,
+                "start_line": 1,
+                "end_line": 87,
+                "max_line": 154,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def sanitize_address(addr, encoding):\n    \"\"\"\n    Format a pair of (name, address) or an email address string.\n    \"\"\"\n    address = None\n    if not isinstance(addr, tuple):\n        addr = force_str(addr)\n        try:\n            token, rest = parser.get_mailbox(addr)\n        except (HeaderParseError, ValueError, IndexError):\n            raise ValueError('Invalid address \"%s\"' % addr)\n        else:\n            if rest:\n                # The entire email address must be parsed.\n                raise ValueError(\n                    'Invalid address; only %s could be parsed from \"%s\"' % (token, addr)\n                )\n            nm = token.display_name or \"\"\n            localpart = token.local_part\n            domain = token.domain or \"\"\n    else:\n        nm, address = addr\n        if \"@\" not in address:\n            raise ValueError(f'Invalid address \"{address}\"')\n        localpart, domain = address.rsplit(\"@\", 1)\n\n    address_parts = nm + localpart + domain\n    if \"\\n\" in address_parts or \"\\r\" in address_parts:\n        raise ValueError(\"Invalid address; address parts cannot contain newlines.\")\n\n    # Avoid UTF-8 encode, if it's possible.\n    try:\n        nm.encode(\"ascii\")\n        nm = Header(nm).encode()\n    except UnicodeEncodeError:\n        nm = Header(nm, encoding).encode()\n    try:\n        localpart.encode(\"ascii\")\n    except UnicodeEncodeError:\n        localpart = Header(localpart, encoding).encode()\n    domain = punycode(domain)\n\n    parsed_address = Address(username=localpart, domain=domain)\n    return formataddr((nm, parsed_address.addr_spec))\n\n\nclass MIMEMixin:\n    def as_string(self, unixfrom=False, linesep=\"\\n\"):\n        \"\"\"Return the entire formatted message as a string.\n        Optional `unixfrom' when True, means include the Unix From_ envelope\n        header.\n\n        This overrides the default as_string() implementation to not mangle\n        lines that begin with 'From '. See bug #13433 for details.\n        \"\"\"\n        fp = StringIO()\n        g = generator.Generator(fp, mangle_from_=False)\n        g.flatten(self, unixfrom=unixfrom, linesep=linesep)\n        return fp.getvalue()\n\n    def as_bytes(self, unixfrom=False, linesep=\"\\n\"):\n        \"\"\"Return the entire formatted message as bytes.\n        Optional `unixfrom' when True, means include the Unix From_ envelope\n        header.\n\n        This overrides the default as_bytes() implementation to not mangle\n        lines that begin with 'From '. See bug #13433 for details.\n        \"\"\"\n        fp = BytesIO()\n        g = generator.BytesGenerator(fp, mangle_from_=False)\n        g.flatten(self, unixfrom=unixfrom, linesep=linesep)\n        return fp.getvalue()\n\n\nclass SafeMIMEMessage(MIMEMixin, MIMEMessage):\n    def __setitem__(self, name, val):\n        # message/rfc822 attachments must be ASCII\n        name, val = forbid_multi_line_headers(name, val, \"ascii\")\n        MIMEMessage.__setitem__(self, name, val)",
+                "filename": "django/core/mail/message.py",
+                "start_index": 2292,
+                "end_index": 5207,
+                "start_line": 78,
+                "end_line": 156,
+                "max_line": 495,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "class EmailBackend(BaseEmailBackend):",
+                "filename": "django/core/mail/backends/smtp.py",
+                "start_index": 321,
+                "end_index": 358,
+                "start_line": 13,
+                "end_line": 13,
+                "max_line": 161,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "\"\"\"SMTP email backend class.\"\"\"\nimport smtplib\nimport ssl\nimport threading\n\nfrom django.conf import settings\nfrom django.core.mail.backends.base import BaseEmailBackend\nfrom django.core.mail.message import sanitize_address\nfrom django.core.mail.utils import DNS_NAME\nfrom django.utils.functional import cached_property",
+                "filename": "django/core/mail/backends/smtp.py",
+                "start_index": 0,
+                "end_index": 318,
+                "start_line": 1,
+                "end_line": 10,
+                "max_line": 161,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.5
+            },
+            {
+                "code": "\"\"\"\nEmail message and email sending related helper functions.\n\"\"\"\n\nimport socket\n\nfrom django.utils.encoding import punycode\n\n\n# Cache the hostname, but do it lazily: socket.getfqdn() can take a couple of\n# seconds, which slows down the restart of the server.\nclass CachedDnsName:\n    def __str__(self):\n        return self.get_fqdn()\n\n    def get_fqdn(self):\n        if not hasattr(self, \"_fqdn\"):\n            self._fqdn = punycode(socket.getfqdn())\n        return self._fqdn\n\n\nDNS_NAME = CachedDnsName()",
+                "filename": "django/core/mail/utils.py",
+                "start_index": 0,
+                "end_index": 505,
+                "start_line": 1,
+                "end_line": 22,
+                "max_line": 22,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@functools.lru_cache\ndef sanitize_strftime_format(fmt):\n    \"\"\"\n    Ensure that certain specifiers are correctly padded with leading zeros.\n\n    For years < 1000 specifiers %C, %F, %G, and %Y don't work as expected for\n    strftime provided by glibc on Linux as they don't pad the year or century\n    with leading zeros. Support for specifying the padding explicitly is\n    available, however, which can be used to fix this issue.\n\n    FreeBSD, macOS, and Windows do not support explicitly specifying the\n    padding, but return four digit years (with leading zeros) as expected.\n\n    This function checks whether the %Y produces a correctly padded string and,\n    if not, makes the following substitutions:\n\n    - %C \u2192 %02C\n    - %F \u2192 %010F\n    - %G \u2192 %04G\n    - %Y \u2192 %04Y\n\n    See https://bugs.python.org/issue13305 for more details.\n    \"\"\"\n    if datetime.date(1, 1, 1).strftime(\"%Y\") == \"0001\":\n        return fmt\n    mapping = {\"C\": 2, \"F\": 10, \"G\": 4, \"Y\": 4}\n    return re.sub(\n        r\"((?:^|[^%])(?:%%)*)%([CFGY])\",\n        lambda m: r\"%s%%0%s%s\" % (m[1], mapping[m[2]], m[2]),\n        fmt,\n    )\n\n\ndef sanitize_separators(value):\n    \"\"\"\n    Sanitize a value according to the current decimal and\n    thousand separator setting. Used with form field input.\n    \"\"\"\n    if isinstance(value, str):\n        parts = []\n        decimal_separator = get_format(\"DECIMAL_SEPARATOR\")\n        if decimal_separator in value:\n            value, decimals = value.split(decimal_separator, 1)\n            parts.append(decimals)\n        if settings.USE_THOUSAND_SEPARATOR:\n            thousand_sep = get_format(\"THOUSAND_SEPARATOR\")\n            if (\n                thousand_sep == \".\"\n                and value.count(\".\") == 1\n                and len(value.split(\".\")[-1]) != 3\n            ):\n                # Special case where we suspect a dot meant decimal separator\n                # (see #22171).\n                pass\n            else:\n                for replacement in {\n                    thousand_sep,\n                    unicodedata.normalize(\"NFKD\", thousand_sep),\n                }:\n                    value = value.replace(replacement, \"\")\n        parts.append(value)\n        value = \".\".join(reversed(parts))\n    return value",
+                "filename": "django/utils/formats.py",
+                "start_index": 8008,
+                "end_index": 10246,
+                "start_line": 243,
+                "end_line": 305,
+                "max_line": 305,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nDummy email backend that does nothing.\n\"\"\"\n\nfrom django.core.mail.backends.base import BaseEmailBackend\n\n\nclass EmailBackend(BaseEmailBackend):\n    def send_messages(self, email_messages):\n        return len(list(email_messages))",
+                "filename": "django/core/mail/backends/dummy.py",
+                "start_index": 0,
+                "end_index": 233,
+                "start_line": 1,
+                "end_line": 10,
+                "max_line": 10,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "class EmailMessage:",
+                "filename": "django/core/mail/message.py",
+                "start_index": 6569,
+                "end_index": 6588,
+                "start_line": 192,
+                "end_line": 192,
+                "max_line": 495,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.1
+            }
+        ],
+        "classification": "feature request",
+        "snippet_processor_task": {
+            "django/core/mail/message.py": [
+                {
+                    "chunk": {
+                        "code": "import mimetypes\nfrom email import charset as Charset\nfrom email import encoders as Encoders\nfrom email import generator, message_from_string\nfrom email.errors import HeaderParseError\nfrom email.header import Header\nfrom email.headerregistry import Address, parser\nfrom email.message import Message\nfrom email.mime.base import MIMEBase\nfrom email.mime.message import MIMEMessage\nfrom email.mime.multipart import MIMEMultipart\nfrom email.mime.text import MIMEText\nfrom email.utils import formataddr, formatdate, getaddresses, make_msgid\nfrom io import BytesIO, StringIO\nfrom pathlib import Path\n\nfrom django.conf import settings\nfrom django.core.mail.utils import DNS_NAME\nfrom django.utils.encoding import force_str, punycode\n\n# Don't BASE64-encode UTF-8 messages so that we avoid unwanted attention from\n# some spam filters.\nutf8_charset = Charset.Charset(\"utf-8\")\nutf8_charset.body_encoding = None  # Python defaults to BASE64\nutf8_charset_qp = Charset.Charset(\"utf-8\")\nutf8_charset_qp.body_encoding = Charset.QP\n\n# Default MIME type to use on attachments (if it is not explicitly given\n# and cannot be guessed).\nDEFAULT_ATTACHMENT_MIME_TYPE = \"application/octet-stream\"\n\nRFC5322_EMAIL_LINE_LENGTH_LIMIT = 998\n\n\nclass BadHeaderError(ValueError):\n    pass\n\n\n# Header names that contain structured address data (RFC 5322).\nADDRESS_HEADERS = {\n    \"from\",\n    \"sender\",\n    \"reply-to\",\n    \"to\",\n    \"cc\",\n    \"bcc\",\n    \"resent-from\",\n    \"resent-sender\",\n    \"resent-to\",\n    \"resent-cc\",\n    \"resent-bcc\",\n}\n\n\ndef forbid_multi_line_headers(name, val, encoding):\n    \"\"\"Forbid multi-line headers to prevent header injection.\"\"\"\n    encoding = encoding or settings.DEFAULT_CHARSET\n    val = str(val)  # val may be lazy\n    if \"\\n\" in val or \"\\r\" in val:\n        raise BadHeaderError(\n            \"Header values can't contain newlines (got %r for header %r)\" % (val, name)\n        )\n    try:\n        val.encode(\"ascii\")\n    except UnicodeEncodeError:\n        if name.lower() in ADDRESS_HEADERS:\n            val = \", \".join(\n                sanitize_address(addr, encoding) for addr in getaddresses((val,))\n            )\n        else:\n            val = Header(val, encoding).encode()\n    else:\n        if name.lower() == \"subject\":\n            val = Header(val).encode()\n    return name, val",
+                        "filename": "django/core/mail/message.py",
+                        "start_index": 0,
+                        "end_index": 2289,
+                        "start_line": 1,
+                        "end_line": 75,
+                        "max_line": 495,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet imports and uses various email-related modules from the standard library, which may need to be updated to use the modern parsing approach as described in the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "def sanitize_address(addr, encoding):\n    \"\"\"\n    Format a pair of (name, address) or an email address string.\n    \"\"\"\n    address = None\n    if not isinstance(addr, tuple):\n        addr = force_str(addr)\n        try:\n            token, rest = parser.get_mailbox(addr)\n        except (HeaderParseError, ValueError, IndexError):\n            raise ValueError('Invalid address \"%s\"' % addr)\n        else:\n            if rest:\n                # The entire email address must be parsed.\n                raise ValueError(\n                    'Invalid address; only %s could be parsed from \"%s\"' % (token, addr)\n                )\n            nm = token.display_name or \"\"\n            localpart = token.local_part\n            domain = token.domain or \"\"\n    else:\n        nm, address = addr\n        if \"@\" not in address:\n            raise ValueError(f'Invalid address \"{address}\"')\n        localpart, domain = address.rsplit(\"@\", 1)\n\n    address_parts = nm + localpart + domain\n    if \"\\n\" in address_parts or \"\\r\" in address_parts:\n        raise ValueError(\"Invalid address; address parts cannot contain newlines.\")\n\n    # Avoid UTF-8 encode, if it's possible.\n    try:\n        nm.encode(\"ascii\")\n        nm = Header(nm).encode()\n    except UnicodeEncodeError:\n        nm = Header(nm, encoding).encode()\n    try:\n        localpart.encode(\"ascii\")\n    except UnicodeEncodeError:\n        localpart = Header(localpart, encoding).encode()\n    domain = punycode(domain)\n\n    parsed_address = Address(username=localpart, domain=domain)\n    return formataddr((nm, parsed_address.addr_spec))\n\n\nclass MIMEMixin:\n    def as_string(self, unixfrom=False, linesep=\"\\n\"):\n        \"\"\"Return the entire formatted message as a string.\n        Optional `unixfrom' when True, means include the Unix From_ envelope\n        header.\n\n        This overrides the default as_string() implementation to not mangle\n        lines that begin with 'From '. See bug #13433 for details.\n        \"\"\"\n        fp = StringIO()\n        g = generator.Generator(fp, mangle_from_=False)\n        g.flatten(self, unixfrom=unixfrom, linesep=linesep)\n        return fp.getvalue()\n\n    def as_bytes(self, unixfrom=False, linesep=\"\\n\"):\n        \"\"\"Return the entire formatted message as bytes.\n        Optional `unixfrom' when True, means include the Unix From_ envelope\n        header.\n\n        This overrides the default as_bytes() implementation to not mangle\n        lines that begin with 'From '. See bug #13433 for details.\n        \"\"\"\n        fp = BytesIO()\n        g = generator.BytesGenerator(fp, mangle_from_=False)\n        g.flatten(self, unixfrom=unixfrom, linesep=linesep)\n        return fp.getvalue()\n\n\nclass SafeMIMEMessage(MIMEMixin, MIMEMessage):\n    def __setitem__(self, name, val):\n        # message/rfc822 attachments must be ASCII\n        name, val = forbid_multi_line_headers(name, val, \"ascii\")\n        MIMEMessage.__setitem__(self, name, val)",
+                        "filename": "django/core/mail/message.py",
+                        "start_index": 2292,
+                        "end_index": 5207,
+                        "start_line": 78,
+                        "end_line": 156,
+                        "max_line": 495,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'sanitize_address' function that uses 'parser.get_mailbox()', which is relevant to the issue as it may need to be updated or replaced with a more modern and less error-prone method."
+                }
+            ]
+        },
+        "solution_task": "To update the mail backend to use the modern standard library parsing approach, you can follow these steps:\n\n- Replace the usage of `email.utils.parseaddr` with `email.headerregistry.parser.get_mailbox()` in the `sanitize_address` function within `django/core/mail/message.py`.\n- Ensure that the new parsing function is used to extract the display name and email address correctly.\n- Handle any exceptions that may arise from the new parsing method to maintain the robustness of the email address sanitization.\n\nHere's a revised version of the `sanitize_address` function using `email.headerregistry.parser.get_mailbox()`:\n\n```python\nfrom email.headerregistry import parser\n\ndef sanitize_address(addr, encoding):\n    \"\"\"\n    Format a pair of (name, address) or an email address string using modern standard library parsing.\n    \"\"\"\n    if not isinstance(addr, tuple):\n        addr = force_str(addr)\n        try:\n            token, rest = parser.get_mailbox(addr)\n        except (HeaderParseError, ValueError, IndexError):\n            raise ValueError('Invalid address \"%s\"' % addr)\n        else:\n            if rest:\n                raise ValueError(\n                    'Invalid address; only %s could be parsed from \"%s\"' % (token, addr)\n                )\n            nm = token.display_name or \"\"\n            localpart = token.local_part\n            domain = token.domain or \"\"\n    else:\n        nm, address = addr\n        if \"@\" not in address:\n            raise ValueError(f'Invalid address \"{address}\"')\n        localpart, domain = address.rsplit(\"@\", 1)\n\n    # ... rest of the function remains unchanged ...\n```\n\nMake sure to test the updated function thoroughly to ensure it behaves as expected with various email address formats. Additionally, check for any other parts of the code that may be using the old parsing method and update them accordingly.\n\nRemember to update the unit tests to cover the new parsing logic and ensure that the changes do not introduce any regressions.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant suggestions that can directly lead to the successful implementation or improvement of the requested feature.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable step-by-step guide on how to replace the usage of `email.utils.parseaddr` with `email.headerregistry.parser.get_mailbox()` in the Django mail backend. It includes a revised version of the `sanitize_address` function, which is directly relevant to the feature request. The RESPONSE also advises on handling exceptions and testing the updated function, which is crucial for maintaining the robustness of the email address sanitization. Furthermore, it suggests checking for other parts of the code that may use the old parsing method and updating unit tests, which are important considerations for a comprehensive update. The inclusion of code snippets to check adds value by pointing to specific areas of the codebase that may require attention.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711728818.3016808,
+        "result": "To update the mail backend to use the modern standard library parsing approach, you can follow these steps:\n\n- Replace the usage of `email.utils.parseaddr` with `email.headerregistry.parser.get_mailbox()` in the `sanitize_address` function within `django/core/mail/message.py`.\n- Ensure that the new parsing function is used to extract the display name and email address correctly.\n- Handle any exceptions that may arise from the new parsing method to maintain the robustness of the email address sanitization.\n\nHere's a revised version of the `sanitize_address` function using `email.headerregistry.parser.get_mailbox()`:\n\n```python\nfrom email.headerregistry import parser\n\ndef sanitize_address(addr, encoding):\n    \"\"\"\n    Format a pair of (name, address) or an email address string using modern standard library parsing.\n    \"\"\"\n    if not isinstance(addr, tuple):\n        addr = force_str(addr)\n        try:\n            token, rest = parser.get_mailbox(addr)\n        except (HeaderParseError, ValueError, IndexError):\n            raise ValueError('Invalid address \"%s\"' % addr)\n        else:\n            if rest:\n                raise ValueError(\n                    'Invalid address; only %s could be parsed from \"%s\"' % (token, addr)\n                )\n            nm = token.display_name or \"\"\n            localpart = token.local_part\n            domain = token.domain or \"\"\n    else:\n        nm, address = addr\n        if \"@\" not in address:\n            raise ValueError(f'Invalid address \"{address}\"')\n        localpart, domain = address.rsplit(\"@\", 1)\n\n    # ... rest of the function remains unchanged ...\n```\n\nMake sure to test the updated function thoroughly to ensure it behaves as expected with various email address formats. Additionally, check for any other parts of the code that may be using the old parsing method and update them accordingly.\n\nRemember to update the unit tests to cover the new parsing logic and ensure that the changes do not introduce any regressions.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.0/tree//django/core) \u2192 [mail](https://github.com/testbed/django__django__3.0/tree//django/core/mail)- [Lines 1 - 75](https://github.com/testbed/django__django__3.0/blob//django/core/mail/message.py#L1-L75)\n\n This snippet imports and uses various email-related modules from the standard library, which may need to be updated to use the modern parsing approach as described in the issue. \n\n\n   - [Lines 78 - 156](https://github.com/testbed/django__django__3.0/blob//django/core/mail/message.py#L78-L156)\n\n This snippet contains the 'sanitize_address' function that uses 'parser.get_mailbox()', which is relevant to the issue as it may need to be updated or replaced with a more modern and less error-prone method.",
+        "context_relevance": 0.33,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer it completely to get a score of 10.\nSupporting Evidence: The RESPONSE provides a detailed explanation of how to update the mail backend to use a modern standard library parsing approach, directly addressing the PROMPT's request. It includes specific steps for replacing the usage of `email.utils.parseaddr` with `email.headerregistry.parser.get_mailbox()`, handling exceptions, and testing the updated function. The RESPONSE also includes a revised version of the `sanitize_address` function and suggests checking other parts of the code for updates, which is relevant to the entire PROMPT. Additionally, it provides links to code snippets that may need updating, which is directly related to the task described in the PROMPT. The RESPONSE is comprehensive and fully answers the PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

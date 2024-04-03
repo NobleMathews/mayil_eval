@@ -1,0 +1,223 @@
+{
+    "id": "sympy__sympy-20741",
+    "repo_name": "testbed/sympy__sympy__1.8",
+    "task_id": 4938701123593728433,
+    "title": "Matrix expressions aren't simplified properly",
+    "body": "```python\r\n>>> A = MatrixSymbol('A', m, n)\r\n>>> B = MatrixSymbol('B', m, n)\r\n>>> Z = ZeroMatrix(m, n)\r\n>>> -(-A + B) - A + B\r\n-(-A + B) -A + B\r\n>>> (-(-A + B) - A + B).simplify()\r\n-(-A + B) -A + B\r\n>>> (-(-A + B) - A + B).expand()\r\n-B + A -A + B\r\n>>> (-(-A + B) - A + B - Z).simplify()\r\n-(-A + B) -A + B\r\n>>> (-(-A + B) - A + B - Z).expand()\r\n-B + A -A + B\r\n```\r\nFirst reported in https://github.com/sympy/sympy/issues/13508\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/sympy__sympy__1.8.git",
+    "requested_commit": "",
+    "mayil_response": "- The issue described is related to the simplification of matrix expressions involving negation and addition, specifically with symbolic matrices and zero matrices.\n- The relevant code snippets for this issue are likely to be found in `sympy/matrices/expressions/matexpr.py` where the `MatrixSymbol` and `ZeroMatrix` classes are defined, and any simplification methods such as `_eval_simplify` or similar functions that handle matrix expressions.\n- The `block_collapse` function in `sympy/matrices/expressions/blockmatrix.py` is not directly relevant to the issue as it deals with block matrices, which are not mentioned in the issue description.\n\nTo address the issue, the following steps should be taken:\n\n- Ensure that the `MatrixSymbol` class has proper simplification rules when combined with `ZeroMatrix` and negation.\n- Check the implementation of the `simplify` and `expand` functions to ensure they handle the case `-(-A + B) - A + B` correctly, where `A` and `B` are `MatrixSymbol` instances and the expected result is `ZeroMatrix(m, n)`.\n- If the simplification rules are not handling the negation and addition of `MatrixSymbol` instances correctly, update the `_eval_simplify` method in the `MatrixSymbol` class or the relevant simplification functions to correctly simplify the expression.\n- Add or modify tests to cover the case described in the issue to ensure the fix works as expected and to prevent regressions in the future.\n\n### Code snippets to check\n\n-  \u2192 [sympy](https://github.com/testbed/sympy__sympy__1.8/tree//sympy) \u2192 [matrices](https://github.com/testbed/sympy__sympy__1.8/tree//sympy/matrices) \u2192 [expressions](https://github.com/testbed/sympy__sympy__1.8/tree//sympy/matrices/expressions)- [Lines 760 - 844](https://github.com/testbed/sympy__sympy__1.8/blob//sympy/matrices/expressions/matexpr.py#L760-L844)\n\n This snippet defines the MatrixSymbol class, which is directly related to the issue as the problem occurs with MatrixSymbol expressions not simplifying correctly. \n\n\n   - [Lines 946 - 1029](https://github.com/testbed/sympy__sympy__1.8/blob//sympy/matrices/expressions/matexpr.py#L946-L1029)\n\n This snippet defines the ZeroMatrix class, which is used in the issue's example. Understanding its implementation is necessary to address the simplification problem involving ZeroMatrix.\n-  \u2192 [sympy](https://github.com/testbed/sympy__sympy__1.8/tree//sympy) \u2192 [matrices](https://github.com/testbed/sympy__sympy__1.8/tree//sympy/matrices) \u2192 [expressions](https://github.com/testbed/sympy__sympy__1.8/tree//sympy/matrices/expressions)- [Lines 407 - 511](https://github.com/testbed/sympy__sympy__1.8/blob//sympy/matrices/expressions/blockmatrix.py#L407-L511)\n\n This snippet contains the block_collapse function which might be involved in the simplification process of block matrices. Since the issue is with matrix expression simplification, this function could be relevant.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00027949999999999996,
+        "snippet_processor": 0.07997,
+        "issue_star_creation": 0.025429999999999998,
+        "issue_star_solver": 0.06191,
+        "bouncer": 0.02603
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711744952.969229,
+        "relevant_snippets": [
+            {
+                "code": "def block_collapse(expr):\n    \"\"\"Evaluates a block matrix expression\n\n    >>> from sympy import MatrixSymbol, BlockMatrix, symbols, \\\n                          Identity, Matrix, ZeroMatrix, block_collapse\n    >>> n,m,l = symbols('n m l')\n    >>> X = MatrixSymbol('X', n, n)\n    >>> Y = MatrixSymbol('Y', m ,m)\n    >>> Z = MatrixSymbol('Z', n, m)\n    >>> B = BlockMatrix([[X, Z], [ZeroMatrix(m, n), Y]])\n    >>> print(B)\n    Matrix([\n    [X, Z],\n    [0, Y]])\n\n    >>> C = BlockMatrix([[Identity(n), Z]])\n    >>> print(C)\n    Matrix([[I, Z]])\n\n    >>> print(block_collapse(C*B))\n    Matrix([[X, Z + Z*Y]])\n    \"\"\"\n    from sympy.strategies.util import expr_fns\n\n    hasbm = lambda expr: isinstance(expr, MatrixExpr) and expr.has(BlockMatrix)\n\n    conditioned_rl = condition(\n        hasbm,\n        typed(\n            {MatAdd: do_one(bc_matadd, bc_block_plus_ident),\n             MatMul: do_one(bc_matmul, bc_dist),\n             MatPow: bc_matmul,\n             Transpose: bc_transpose,\n             Inverse: bc_inverse,\n             BlockMatrix: do_one(bc_unpack, deblock)}\n        )\n    )\n\n    rule = exhaust(\n        bottom_up(\n            exhaust(conditioned_rl),\n            fns=expr_fns\n        )\n    )\n\n    result = rule(expr)\n    doit = getattr(result, 'doit', None)\n    if doit is not None:\n        return doit()\n    else:\n        return result\n\ndef bc_unpack(expr):\n    if expr.blockshape == (1, 1):\n        return expr.blocks[0, 0]\n    return expr\n\ndef bc_matadd(expr):\n    args = sift(expr.args, lambda M: isinstance(M, BlockMatrix))\n    blocks = args[True]\n    if not blocks:\n        return expr\n\n    nonblocks = args[False]\n    block = blocks[0]\n    for b in blocks[1:]:\n        block = block._blockadd(b)\n    if nonblocks:\n        return MatAdd(*nonblocks) + block\n    else:\n        return block\n\ndef bc_block_plus_ident(expr):\n    idents = [arg for arg in expr.args if arg.is_Identity]\n    if not idents:\n        return expr\n\n    blocks = [arg for arg in expr.args if isinstance(arg, BlockMatrix)]\n    if (blocks and all(b.structurally_equal(blocks[0]) for b in blocks)\n               and blocks[0].is_structurally_symmetric):\n        block_id = BlockDiagMatrix(*[Identity(k)\n                                        for k in blocks[0].rowblocksizes])\n        rest = [arg for arg in expr.args if not arg.is_Identity and not isinstance(arg, BlockMatrix)]\n        return MatAdd(block_id * len(idents), *blocks, *rest).doit()\n\n    return expr\n\ndef bc_dist(expr):\n    \"\"\" Turn  a*[X, Y] into [a*X, a*Y] \"\"\"\n    factor, mat = expr.as_coeff_mmul()\n    if factor == 1:\n        return expr\n\n    unpacked = unpack(mat)\n\n    if isinstance(unpacked, BlockDiagMatrix):\n        B = unpacked.diag\n        new_B = [factor * mat for mat in B]\n        return BlockDiagMatrix(*new_B)\n    elif isinstance(unpacked, BlockMatrix):\n        B = unpacked.blocks\n        new_B = [\n            [factor * B[i, j] for j in range(B.cols)] for i in range(B.rows)]\n        return BlockMatrix(new_B)\n    return unpacked",
+                "filename": "sympy/matrices/expressions/blockmatrix.py",
+                "start_index": 13961,
+                "end_index": 16959,
+                "start_line": 407,
+                "end_line": 511,
+                "max_line": 704,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ZeroMatrix(MatrixExpr):\n    \"\"\"The Matrix Zero 0 - additive identity\n\n    Examples\n    ========\n\n    >>> from sympy import MatrixSymbol, ZeroMatrix\n    >>> A = MatrixSymbol('A', 3, 5)\n    >>> Z = ZeroMatrix(3, 5)\n    >>> A + Z\n    A\n    >>> Z*A.T\n    0\n    \"\"\"\n    is_ZeroMatrix = True\n\n    def __new__(cls, m, n):\n        m, n = _sympify(m), _sympify(n)\n        cls._check_dim(m)\n        cls._check_dim(n)\n\n        return super().__new__(cls, m, n)\n\n    @property\n    def shape(self):\n        return (self.args[0], self.args[1])\n\n    def _eval_power(self, exp):\n        # exp = -1, 0, 1 are already handled at this stage\n        if (exp < 0) == True:\n            raise NonInvertibleMatrixError(\"Matrix det == 0; not invertible\")\n        return self\n\n    def _eval_transpose(self):\n        return ZeroMatrix(self.cols, self.rows)\n\n    def _eval_trace(self):\n        return S.Zero\n\n    def _eval_determinant(self):\n        return S.Zero\n\n    def _eval_inverse(self):\n        raise NonInvertibleMatrixError(\"Matrix det == 0; not invertible.\")\n\n    def conjugate(self):\n        return self\n\n    def _entry(self, i, j, **kwargs):\n        return S.Zero\n\nclass GenericZeroMatrix(ZeroMatrix):\n    \"\"\"\n    A zero matrix without a specified shape\n\n    This exists primarily so MatAdd() with no arguments can return something\n    meaningful.\n    \"\"\"\n    def __new__(cls):\n        # super(ZeroMatrix, cls) instead of super(GenericZeroMatrix, cls)\n        # because ZeroMatrix.__new__ doesn't have the same signature\n        return super(ZeroMatrix, cls).__new__(cls)\n\n    @property\n    def rows(self):\n        raise TypeError(\"GenericZeroMatrix does not have a specified shape\")\n\n    @property\n    def cols(self):\n        raise TypeError(\"GenericZeroMatrix does not have a specified shape\")\n\n    @property\n    def shape(self):\n        raise TypeError(\"GenericZeroMatrix does not have a specified shape\")\n\n    # Avoid Matrix.__eq__ which might call .shape\n    def __eq__(self, other):\n        return isinstance(other, GenericZeroMatrix)\n\n    def __ne__(self, other):\n        return not (self == other)\n\n    def __hash__(self):\n        return super().__hash__()",
+                "filename": "sympy/matrices/expressions/matexpr.py",
+                "start_index": 30268,
+                "end_index": 32422,
+                "start_line": 946,
+                "end_line": 1029,
+                "max_line": 1274,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"A BlockMatrix is a Matrix comprised of other matrices.\n\n    The submatrices are stored in a SymPy Matrix object but accessed as part of\n    a Matrix Expression\n\n    >>> from sympy import (MatrixSymbol, BlockMatrix, symbols,\n    ...     Identity, ZeroMatrix, block_collapse)\n    >>> n,m,l = symbols('n m l')\n    >>> X = MatrixSymbol('X', n, n)\n    >>> Y = MatrixSymbol('Y', m ,m)\n    >>> Z = MatrixSymbol('Z', n, m)\n    >>> B = BlockMatrix([[X, Z], [ZeroMatrix(m,n), Y]])\n    >>> print(B)\n    Matrix([\n    [X, Z],\n    [0, Y]])\n\n    >>> C = BlockMatrix([[Identity(n), Z]])\n    >>> print(C)\n    Matrix([[I, Z]])\n\n    >>> print(block_collapse(C*B))\n    Matrix([[X, Z + Z*Y]])\n\n    Some matrices might be comprised of rows of blocks with\n    the matrices in each row having the same height and the\n    rows all having the same total number of columns but\n    not having the same number of columns for each matrix\n    in each row. In this case, the matrix is not a block\n    matrix and should be instantiated by Matrix.\n\n    >>> from sympy import ones, Matrix\n    >>> dat = [\n    ... [ones(3,2), ones(3,3)*2],\n    ... [ones(2,3)*3, ones(2,2)*4]]\n    ...\n    >>> BlockMatrix(dat)\n    Traceback (most recent call last):\n    ...\n    ValueError:\n    Although this matrix is comprised of blocks, the blocks do not fill\n    the matrix in a size-symmetric fashion. To create a full matrix from\n    these arguments, pass them directly to Matrix.\n    >>> Matrix(dat)\n    Matrix([\n    [1, 1, 2, 2, 2],\n    [1, 1, 2, 2, 2],\n    [1, 1, 2, 2, 2],\n    [3, 3, 3, 4, 4],\n    [3, 3, 3, 4, 4]])\n\n    See Also\n    ========\n    sympy.matrices.matrices.MatrixBase.irregular\n    \"\"\"",
+                "filename": "sympy/matrices/expressions/blockmatrix.py",
+                "start_index": 1056,
+                "end_index": 2713,
+                "start_line": 23,
+                "end_line": 698,
+                "max_line": 704,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from sympy.matrices.expressions import MatrixExpr\nfrom sympy import MatrixBase, Dummy, Lambda, Function, FunctionClass\nfrom sympy.core.sympify import sympify, _sympify",
+                "filename": "sympy/matrices/expressions/applyfunc.py",
+                "start_index": 0,
+                "end_index": 167,
+                "start_line": 1,
+                "end_line": 3,
+                "max_line": 189,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class MatrixSymbol(MatrixExpr):\n    \"\"\"Symbolic representation of a Matrix object\n\n    Creates a SymPy Symbol to represent a Matrix. This matrix has a shape and\n    can be included in Matrix Expressions\n\n    Examples\n    ========\n\n    >>> from sympy import MatrixSymbol, Identity\n    >>> A = MatrixSymbol('A', 3, 4) # A 3 by 4 Matrix\n    >>> B = MatrixSymbol('B', 4, 3) # A 4 by 3 Matrix\n    >>> A.shape\n    (3, 4)\n    >>> 2*A*B + Identity(3)\n    I + 2*A*B\n    \"\"\"\n    is_commutative = False\n    is_symbol = True\n    _diff_wrt = True\n\n    def __new__(cls, name, n, m):\n        n, m = _sympify(n), _sympify(m)\n\n        cls._check_dim(m)\n        cls._check_dim(n)\n\n        if isinstance(name, str):\n            name = Symbol(name)\n        obj = Basic.__new__(cls, name, n, m)\n        return obj\n\n    def _hashable_content(self):\n        return (self.name, self.shape)\n\n    @property\n    def shape(self):\n        return self.args[1:3]\n\n    @property\n    def name(self):\n        return self.args[0].name\n\n    def _eval_subs(self, old, new):\n        # only do substitutions in shape\n        shape = Tuple(*self.shape)._subs(old, new)\n        return MatrixSymbol(self.args[0], *shape)\n\n    def __call__(self, *args):\n        raise TypeError(\"%s object is not callable\" % self.__class__)\n\n    def _entry(self, i, j, **kwargs):\n        return MatrixElement(self, i, j)\n\n    @property\n    def free_symbols(self):\n        return {self}\n\n    def doit(self, **hints):\n        if hints.get('deep', True):\n            return type(self)(self.args[0], self.args[1].doit(**hints),\n                    self.args[2].doit(**hints))\n        else:\n            return self\n\n    def _eval_simplify(self, **kwargs):\n        return self\n\n    def _eval_derivative(self, x):\n        # x is a scalar:\n        return ZeroMatrix(self.shape[0], self.shape[1])\n\n    def _eval_derivative_matrix_lines(self, x):\n        if self != x:\n            first = ZeroMatrix(x.shape[0], self.shape[0]) if self.shape[0] != 1 else S.Zero\n            second = ZeroMatrix(x.shape[1], self.shape[1]) if self.shape[1] != 1 else S.Zero\n            return [_LeftRightArgs(\n                [first, second],\n            )]\n        else:\n            first = Identity(self.shape[0]) if self.shape[0] != 1 else S.One\n            second = Identity(self.shape[1]) if self.shape[1] != 1 else S.One\n            return [_LeftRightArgs(\n                [first, second],\n            )]",
+                "filename": "sympy/matrices/expressions/matexpr.py",
+                "start_index": 25667,
+                "end_index": 28087,
+                "start_line": 760,
+                "end_line": 844,
+                "max_line": 1274,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nBasic methods common to all matrices to be used\nwhen creating more advanced matrices (e.g., matrices over rings,\netc.).\n\"\"\"\n\nfrom sympy.core.logic import FuzzyBool\n\nfrom collections import defaultdict\nfrom inspect import isfunction\n\nfrom sympy.assumptions.refine import refine\nfrom sympy.core import SympifyError, Add\nfrom sympy.core.basic import Atom\nfrom sympy.core.compatibility import (\n    Iterable, as_int, is_sequence, reduce)\nfrom sympy.core.decorators import call_highest_priority\nfrom sympy.core.logic import fuzzy_and\nfrom sympy.core.singleton import S\nfrom sympy.core.symbol import Symbol\nfrom sympy.core.sympify import sympify\nfrom sympy.functions import Abs\nfrom sympy.simplify import simplify as _simplify\nfrom sympy.simplify.simplify import dotprodsimp as _dotprodsimp\nfrom sympy.utilities.exceptions import SymPyDeprecationWarning\nfrom sympy.utilities.iterables import flatten\nfrom sympy.utilities.misc import filldedent\n\nfrom .utilities import _get_intermediate_simp_bool\n\n\nclass MatrixError(Exception):\n    pass\n\n\nclass ShapeError(ValueError, MatrixError):\n    \"\"\"Wrong matrix shape\"\"\"\n    pass\n\n\nclass NonSquareMatrixError(ShapeError):\n    pass\n\n\nclass NonInvertibleMatrixError(ValueError, MatrixError):\n    \"\"\"The matrix in not invertible (division by multidimensional zero error).\"\"\"\n    pass\n\n\nclass NonPositiveDefiniteMatrixError(ValueError, MatrixError):\n    \"\"\"The matrix is not a positive-definite matrix.\"\"\"\n    pass\n\n\nclass MatrixRequired:\n    \"\"\"All subclasses of matrix objects must implement the\n    required matrix properties listed here.\"\"\"\n    rows = None  # type: int\n    cols = None  # type: int\n    _simplify = None\n\n    @classmethod\n    def _new(cls, *args, **kwargs):\n        \"\"\"`_new` must, at minimum, be callable as\n        `_new(rows, cols, mat) where mat is a flat list of the\n        elements of the matrix.\"\"\"\n        raise NotImplementedError(\"Subclasses must implement this.\")\n\n    def __eq__(self, other):\n        raise NotImplementedError(\"Subclasses must implement this.\")\n\n    def __getitem__(self, key):\n        \"\"\"Implementations of __getitem__ should accept ints, in which\n        case the matrix is indexed as a flat list, tuples (i,j) in which\n        case the (i,j) entry is returned, slices, or mixed tuples (a,b)\n        where a and b are any combintion of slices and integers.\"\"\"\n        raise NotImplementedError(\"Subclasses must implement this.\")\n\n    def __len__(self):\n        \"\"\"The total number of entries in the matrix.\"\"\"\n        raise NotImplementedError(\"Subclasses must implement this.\")\n\n    @property\n    def shape(self):\n        raise NotImplementedError(\"Subclasses must implement this.\")",
+                "filename": "sympy/matrices/common.py",
+                "start_index": 0,
+                "end_index": 2669,
+                "start_line": 1,
+                "end_line": 85,
+                "max_line": 2934,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from sympy import ask, Q\nfrom sympy.core import Basic, Add, Mul, S\nfrom sympy.core.sympify import _sympify\nfrom sympy.matrices.common import NonInvertibleMatrixError\nfrom sympy.strategies import typed, exhaust, condition, do_one, unpack\nfrom sympy.strategies.traverse import bottom_up\nfrom sympy.utilities import sift\nfrom sympy.utilities.misc import filldedent\n\nfrom sympy.matrices.expressions.matexpr import MatrixExpr, ZeroMatrix, Identity, MatrixElement\nfrom sympy.matrices.expressions.matmul import MatMul\nfrom sympy.matrices.expressions.matadd import MatAdd\nfrom sympy.matrices.expressions.matpow import MatPow\nfrom sympy.matrices.expressions.transpose import Transpose, transpose\nfrom sympy.matrices.expressions.trace import trace\nfrom sympy.matrices.expressions.determinant import det, Determinant\nfrom sympy.matrices.expressions.slice import MatrixSlice\nfrom sympy.matrices.expressions.inverse import Inverse\nfrom sympy.matrices import Matrix, ShapeError\nfrom sympy.functions.elementary.complexes import re, im",
+                "filename": "sympy/matrices/expressions/blockmatrix.py",
+                "start_index": 0,
+                "end_index": 1019,
+                "start_line": 1,
+                "end_line": 20,
+                "max_line": 704,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from sympy.matrices.common import NonSquareMatrixError\nfrom .matexpr import MatrixExpr, Identity\nfrom sympy.core import S\nfrom sympy.core.sympify import _sympify\nfrom sympy.matrices import MatrixBase",
+                "filename": "sympy/matrices/expressions/matpow.py",
+                "start_index": 0,
+                "end_index": 199,
+                "start_line": 1,
+                "end_line": 5,
+                "max_line": 139,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def main():\n    a = Symbol(\"a\", real=True)\n    b = Symbol(\"b\", real=True)\n    c = Symbol(\"c\", real=True)\n\n    p = (a, b, c)\n\n    assert u(p, 1).D*u(p, 2) == Matrix(1, 1, [0])\n    assert u(p, 2).D*u(p, 1) == Matrix(1, 1, [0])\n\n    p1, p2, p3 = [Symbol(x, real=True) for x in [\"p1\", \"p2\", \"p3\"]]\n    pp1, pp2, pp3 = [Symbol(x, real=True) for x in [\"pp1\", \"pp2\", \"pp3\"]]\n    k1, k2, k3 = [Symbol(x, real=True) for x in [\"k1\", \"k2\", \"k3\"]]\n    kp1, kp2, kp3 = [Symbol(x, real=True) for x in [\"kp1\", \"kp2\", \"kp3\"]]\n\n    p = (p1, p2, p3)\n    pp = (pp1, pp2, pp3)\n\n    k = (k1, k2, k3)\n    kp = (kp1, kp2, kp3)\n\n    mu = Symbol(\"mu\")\n\n    e = (pslash(p) + m*ones(4))*(pslash(k) - m*ones(4))\n    f = pslash(p) + m*ones(4)\n    g = pslash(p) - m*ones(4)\n\n    xprint('Tr(f*g)', Tr(f*g))\n\n    M0 = [(v(pp, 1).D*mgamma(mu)*u(p, 1))*(u(k, 1).D*mgamma(mu, True) *\n                                                 v(kp, 1)) for mu in range(4)]\n    M = M0[0] + M0[1] + M0[2] + M0[3]\n    M = M[0]\n    if not isinstance(M, Basic):\n        raise TypeError(\"Invalid type of variable\")\n\n    d = Symbol(\"d\", real=True)  # d=E+m\n\n    xprint('M', M)\n    print(\"-\"*40)\n    M = ((M.subs(E, d - m)).expand()*d**2).expand()\n    xprint('M2', 1 / (E + m)**2*M)\n    print(\"-\"*40)\n    x, y = M.as_real_imag()\n    xprint('Re(M)', x)\n    xprint('Im(M)', y)\n    e = x**2 + y**2\n    xprint('abs(M)**2', e)\n    print(\"-\"*40)\n    xprint('Expand(abs(M)**2)', e.expand())\n\nif __name__ == \"__main__\":\n    main()",
+                "filename": "examples/advanced/qft.py",
+                "start_index": 1931,
+                "end_index": 3400,
+                "start_line": 85,
+                "end_line": 137,
+                "max_line": 137,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "def validate(*args):\n    if not all(arg.is_Matrix for arg in args):\n        raise TypeError(\"Mix of Matrix and Scalar symbols\")\n    A = args[0]\n    for B in args[1:]:\n        if A.shape != B.shape:\n            raise ShapeError(\"Matrices %s and %s are not aligned\" % (A, B))\n\n\n# TODO Implement algorithm for rewriting Hadamard product as diagonal matrix\n# if matmul identy matrix is multiplied.",
+                "filename": "sympy/matrices/expressions/hadamard.py",
+                "start_index": 4853,
+                "end_index": 5246,
+                "start_line": 150,
+                "end_line": 160,
+                "max_line": 466,
+                "git_instance": "github",
+                "repo_name": "testbed/sympy__sympy__1.8",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "sympy/matrices/expressions/matexpr.py": [
+                {
+                    "chunk": {
+                        "code": "class MatrixSymbol(MatrixExpr):\n    \"\"\"Symbolic representation of a Matrix object\n\n    Creates a SymPy Symbol to represent a Matrix. This matrix has a shape and\n    can be included in Matrix Expressions\n\n    Examples\n    ========\n\n    >>> from sympy import MatrixSymbol, Identity\n    >>> A = MatrixSymbol('A', 3, 4) # A 3 by 4 Matrix\n    >>> B = MatrixSymbol('B', 4, 3) # A 4 by 3 Matrix\n    >>> A.shape\n    (3, 4)\n    >>> 2*A*B + Identity(3)\n    I + 2*A*B\n    \"\"\"\n    is_commutative = False\n    is_symbol = True\n    _diff_wrt = True\n\n    def __new__(cls, name, n, m):\n        n, m = _sympify(n), _sympify(m)\n\n        cls._check_dim(m)\n        cls._check_dim(n)\n\n        if isinstance(name, str):\n            name = Symbol(name)\n        obj = Basic.__new__(cls, name, n, m)\n        return obj\n\n    def _hashable_content(self):\n        return (self.name, self.shape)\n\n    @property\n    def shape(self):\n        return self.args[1:3]\n\n    @property\n    def name(self):\n        return self.args[0].name\n\n    def _eval_subs(self, old, new):\n        # only do substitutions in shape\n        shape = Tuple(*self.shape)._subs(old, new)\n        return MatrixSymbol(self.args[0], *shape)\n\n    def __call__(self, *args):\n        raise TypeError(\"%s object is not callable\" % self.__class__)\n\n    def _entry(self, i, j, **kwargs):\n        return MatrixElement(self, i, j)\n\n    @property\n    def free_symbols(self):\n        return {self}\n\n    def doit(self, **hints):\n        if hints.get('deep', True):\n            return type(self)(self.args[0], self.args[1].doit(**hints),\n                    self.args[2].doit(**hints))\n        else:\n            return self\n\n    def _eval_simplify(self, **kwargs):\n        return self\n\n    def _eval_derivative(self, x):\n        # x is a scalar:\n        return ZeroMatrix(self.shape[0], self.shape[1])\n\n    def _eval_derivative_matrix_lines(self, x):\n        if self != x:\n            first = ZeroMatrix(x.shape[0], self.shape[0]) if self.shape[0] != 1 else S.Zero\n            second = ZeroMatrix(x.shape[1], self.shape[1]) if self.shape[1] != 1 else S.Zero\n            return [_LeftRightArgs(\n                [first, second],\n            )]\n        else:\n            first = Identity(self.shape[0]) if self.shape[0] != 1 else S.One\n            second = Identity(self.shape[1]) if self.shape[1] != 1 else S.One\n            return [_LeftRightArgs(\n                [first, second],\n            )]",
+                        "filename": "sympy/matrices/expressions/matexpr.py",
+                        "start_index": 25667,
+                        "end_index": 28087,
+                        "start_line": 760,
+                        "end_line": 844,
+                        "max_line": 1274,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sympy__sympy__1.8",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the MatrixSymbol class, which is directly related to the issue as the problem occurs with MatrixSymbol expressions not simplifying correctly."
+                },
+                {
+                    "chunk": {
+                        "code": "class ZeroMatrix(MatrixExpr):\n    \"\"\"The Matrix Zero 0 - additive identity\n\n    Examples\n    ========\n\n    >>> from sympy import MatrixSymbol, ZeroMatrix\n    >>> A = MatrixSymbol('A', 3, 5)\n    >>> Z = ZeroMatrix(3, 5)\n    >>> A + Z\n    A\n    >>> Z*A.T\n    0\n    \"\"\"\n    is_ZeroMatrix = True\n\n    def __new__(cls, m, n):\n        m, n = _sympify(m), _sympify(n)\n        cls._check_dim(m)\n        cls._check_dim(n)\n\n        return super().__new__(cls, m, n)\n\n    @property\n    def shape(self):\n        return (self.args[0], self.args[1])\n\n    def _eval_power(self, exp):\n        # exp = -1, 0, 1 are already handled at this stage\n        if (exp < 0) == True:\n            raise NonInvertibleMatrixError(\"Matrix det == 0; not invertible\")\n        return self\n\n    def _eval_transpose(self):\n        return ZeroMatrix(self.cols, self.rows)\n\n    def _eval_trace(self):\n        return S.Zero\n\n    def _eval_determinant(self):\n        return S.Zero\n\n    def _eval_inverse(self):\n        raise NonInvertibleMatrixError(\"Matrix det == 0; not invertible.\")\n\n    def conjugate(self):\n        return self\n\n    def _entry(self, i, j, **kwargs):\n        return S.Zero\n\nclass GenericZeroMatrix(ZeroMatrix):\n    \"\"\"\n    A zero matrix without a specified shape\n\n    This exists primarily so MatAdd() with no arguments can return something\n    meaningful.\n    \"\"\"\n    def __new__(cls):\n        # super(ZeroMatrix, cls) instead of super(GenericZeroMatrix, cls)\n        # because ZeroMatrix.__new__ doesn't have the same signature\n        return super(ZeroMatrix, cls).__new__(cls)\n\n    @property\n    def rows(self):\n        raise TypeError(\"GenericZeroMatrix does not have a specified shape\")\n\n    @property\n    def cols(self):\n        raise TypeError(\"GenericZeroMatrix does not have a specified shape\")\n\n    @property\n    def shape(self):\n        raise TypeError(\"GenericZeroMatrix does not have a specified shape\")\n\n    # Avoid Matrix.__eq__ which might call .shape\n    def __eq__(self, other):\n        return isinstance(other, GenericZeroMatrix)\n\n    def __ne__(self, other):\n        return not (self == other)\n\n    def __hash__(self):\n        return super().__hash__()",
+                        "filename": "sympy/matrices/expressions/matexpr.py",
+                        "start_index": 30268,
+                        "end_index": 32422,
+                        "start_line": 946,
+                        "end_line": 1029,
+                        "max_line": 1274,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sympy__sympy__1.8",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the ZeroMatrix class, which is used in the issue's example. Understanding its implementation is necessary to address the simplification problem involving ZeroMatrix."
+                }
+            ],
+            "sympy/matrices/expressions/blockmatrix.py": [
+                {
+                    "chunk": {
+                        "code": "def block_collapse(expr):\n    \"\"\"Evaluates a block matrix expression\n\n    >>> from sympy import MatrixSymbol, BlockMatrix, symbols, \\\n                          Identity, Matrix, ZeroMatrix, block_collapse\n    >>> n,m,l = symbols('n m l')\n    >>> X = MatrixSymbol('X', n, n)\n    >>> Y = MatrixSymbol('Y', m ,m)\n    >>> Z = MatrixSymbol('Z', n, m)\n    >>> B = BlockMatrix([[X, Z], [ZeroMatrix(m, n), Y]])\n    >>> print(B)\n    Matrix([\n    [X, Z],\n    [0, Y]])\n\n    >>> C = BlockMatrix([[Identity(n), Z]])\n    >>> print(C)\n    Matrix([[I, Z]])\n\n    >>> print(block_collapse(C*B))\n    Matrix([[X, Z + Z*Y]])\n    \"\"\"\n    from sympy.strategies.util import expr_fns\n\n    hasbm = lambda expr: isinstance(expr, MatrixExpr) and expr.has(BlockMatrix)\n\n    conditioned_rl = condition(\n        hasbm,\n        typed(\n            {MatAdd: do_one(bc_matadd, bc_block_plus_ident),\n             MatMul: do_one(bc_matmul, bc_dist),\n             MatPow: bc_matmul,\n             Transpose: bc_transpose,\n             Inverse: bc_inverse,\n             BlockMatrix: do_one(bc_unpack, deblock)}\n        )\n    )\n\n    rule = exhaust(\n        bottom_up(\n            exhaust(conditioned_rl),\n            fns=expr_fns\n        )\n    )\n\n    result = rule(expr)\n    doit = getattr(result, 'doit', None)\n    if doit is not None:\n        return doit()\n    else:\n        return result\n\ndef bc_unpack(expr):\n    if expr.blockshape == (1, 1):\n        return expr.blocks[0, 0]\n    return expr\n\ndef bc_matadd(expr):\n    args = sift(expr.args, lambda M: isinstance(M, BlockMatrix))\n    blocks = args[True]\n    if not blocks:\n        return expr\n\n    nonblocks = args[False]\n    block = blocks[0]\n    for b in blocks[1:]:\n        block = block._blockadd(b)\n    if nonblocks:\n        return MatAdd(*nonblocks) + block\n    else:\n        return block\n\ndef bc_block_plus_ident(expr):\n    idents = [arg for arg in expr.args if arg.is_Identity]\n    if not idents:\n        return expr\n\n    blocks = [arg for arg in expr.args if isinstance(arg, BlockMatrix)]\n    if (blocks and all(b.structurally_equal(blocks[0]) for b in blocks)\n               and blocks[0].is_structurally_symmetric):\n        block_id = BlockDiagMatrix(*[Identity(k)\n                                        for k in blocks[0].rowblocksizes])\n        rest = [arg for arg in expr.args if not arg.is_Identity and not isinstance(arg, BlockMatrix)]\n        return MatAdd(block_id * len(idents), *blocks, *rest).doit()\n\n    return expr\n\ndef bc_dist(expr):\n    \"\"\" Turn  a*[X, Y] into [a*X, a*Y] \"\"\"\n    factor, mat = expr.as_coeff_mmul()\n    if factor == 1:\n        return expr\n\n    unpacked = unpack(mat)\n\n    if isinstance(unpacked, BlockDiagMatrix):\n        B = unpacked.diag\n        new_B = [factor * mat for mat in B]\n        return BlockDiagMatrix(*new_B)\n    elif isinstance(unpacked, BlockMatrix):\n        B = unpacked.blocks\n        new_B = [\n            [factor * B[i, j] for j in range(B.cols)] for i in range(B.rows)]\n        return BlockMatrix(new_B)\n    return unpacked",
+                        "filename": "sympy/matrices/expressions/blockmatrix.py",
+                        "start_index": 13961,
+                        "end_index": 16959,
+                        "start_line": 407,
+                        "end_line": 511,
+                        "max_line": 704,
+                        "git_instance": "github",
+                        "repo_name": "testbed/sympy__sympy__1.8",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the block_collapse function which might be involved in the simplification process of block matrices. Since the issue is with matrix expression simplification, this function could be relevant."
+                }
+            ]
+        },
+        "solution_task": "- The issue described is related to the simplification of matrix expressions involving negation and addition, specifically with symbolic matrices and zero matrices.\n- The relevant code snippets for this issue are likely to be found in `sympy/matrices/expressions/matexpr.py` where the `MatrixSymbol` and `ZeroMatrix` classes are defined, and any simplification methods such as `_eval_simplify` or similar functions that handle matrix expressions.\n- The `block_collapse` function in `sympy/matrices/expressions/blockmatrix.py` is not directly relevant to the issue as it deals with block matrices, which are not mentioned in the issue description.\n\nTo address the issue, the following steps should be taken:\n\n- Ensure that the `MatrixSymbol` class has proper simplification rules when combined with `ZeroMatrix` and negation.\n- Check the implementation of the `simplify` and `expand` functions to ensure they handle the case `-(-A + B) - A + B` correctly, where `A` and `B` are `MatrixSymbol` instances and the expected result is `ZeroMatrix(m, n)`.\n- If the simplification rules are not handling the negation and addition of `MatrixSymbol` instances correctly, update the `_eval_simplify` method in the `MatrixSymbol` class or the relevant simplification functions to correctly simplify the expression.\n- Add or modify tests to cover the case described in the issue to ensure the fix works as expected and to prevent regressions in the future.",
+        "bouncer_response": {
+            "score": 6,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a good analysis of the problem, identifying that the issue is with the simplification of matrix expressions involving negation and addition. It correctly points out that the relevant code is likely in the `MatrixSymbol` and `ZeroMatrix` classes and their simplification methods. The RESPONSE also correctly dismisses the `block_collapse` function as not directly relevant, which shows an understanding of the problem domain. However, the RESPONSE could be more actionable by providing more specific guidance on what to look for in the simplification rules or suggesting potential fixes. It also includes a link to the `block_collapse` function, which it previously stated as not directly relevant, which is contradictory and reduces the utility of the RESPONSE.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711745087.199737,
+        "result": "- The issue described is related to the simplification of matrix expressions involving negation and addition, specifically with symbolic matrices and zero matrices.\n- The relevant code snippets for this issue are likely to be found in `sympy/matrices/expressions/matexpr.py` where the `MatrixSymbol` and `ZeroMatrix` classes are defined, and any simplification methods such as `_eval_simplify` or similar functions that handle matrix expressions.\n- The `block_collapse` function in `sympy/matrices/expressions/blockmatrix.py` is not directly relevant to the issue as it deals with block matrices, which are not mentioned in the issue description.\n\nTo address the issue, the following steps should be taken:\n\n- Ensure that the `MatrixSymbol` class has proper simplification rules when combined with `ZeroMatrix` and negation.\n- Check the implementation of the `simplify` and `expand` functions to ensure they handle the case `-(-A + B) - A + B` correctly, where `A` and `B` are `MatrixSymbol` instances and the expected result is `ZeroMatrix(m, n)`.\n- If the simplification rules are not handling the negation and addition of `MatrixSymbol` instances correctly, update the `_eval_simplify` method in the `MatrixSymbol` class or the relevant simplification functions to correctly simplify the expression.\n- Add or modify tests to cover the case described in the issue to ensure the fix works as expected and to prevent regressions in the future.\n\n### Code snippets to check\n\n-  \u2192 [sympy](https://github.com/testbed/sympy__sympy__1.8/tree//sympy) \u2192 [matrices](https://github.com/testbed/sympy__sympy__1.8/tree//sympy/matrices) \u2192 [expressions](https://github.com/testbed/sympy__sympy__1.8/tree//sympy/matrices/expressions)- [Lines 760 - 844](https://github.com/testbed/sympy__sympy__1.8/blob//sympy/matrices/expressions/matexpr.py#L760-L844)\n\n This snippet defines the MatrixSymbol class, which is directly related to the issue as the problem occurs with MatrixSymbol expressions not simplifying correctly. \n\n\n   - [Lines 946 - 1029](https://github.com/testbed/sympy__sympy__1.8/blob//sympy/matrices/expressions/matexpr.py#L946-L1029)\n\n This snippet defines the ZeroMatrix class, which is used in the issue's example. Understanding its implementation is necessary to address the simplification problem involving ZeroMatrix.\n-  \u2192 [sympy](https://github.com/testbed/sympy__sympy__1.8/tree//sympy) \u2192 [matrices](https://github.com/testbed/sympy__sympy__1.8/tree//sympy/matrices) \u2192 [expressions](https://github.com/testbed/sympy__sympy__1.8/tree//sympy/matrices/expressions)- [Lines 407 - 511](https://github.com/testbed/sympy__sympy__1.8/blob//sympy/matrices/expressions/blockmatrix.py#L407-L511)\n\n This snippet contains the block_collapse function which might be involved in the simplification process of block matrices. Since the issue is with matrix expression simplification, this function could be relevant.",
+        "context_relevance": 0.18,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: RESPONSE that is RELEVANT to most of the PROMPT should get a score between a 5, 6, 7 or 8.\nSupporting Evidence: The RESPONSE provides a detailed analysis of the issue with matrix expression simplification, referencing the specific classes and methods that are likely involved in the problem. It also outlines steps to address the issue and suggests checking the relevant code snippets. However, the RESPONSE includes a paragraph about the `block_collapse` function, which is not directly relevant to the issue described in the PROMPT, as the issue is with symbolic matrices and zero matrices, not block matrices. This irrelevant information prevents the RESPONSE from scoring higher, as it does not pertain to the entire PROMPT."
+        },
+        "qa_relevance": 0.7
+    }
+}

@@ -1,0 +1,206 @@
+{
+    "id": "django__django-14014",
+    "repo_name": "testbed/django__django__4.0",
+    "task_id": 8141335391493898503,
+    "title": "Introspection doesn't return column order for unique constraints on SQLite.",
+    "body": "Description\n\t\nIntrospection doesn't return column order for unique constraints on SQLite.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.0.git",
+    "requested_commit": "",
+    "mayil_response": "- The issue is related to the retrieval of unique constraints and their column order from a SQLite database.\n- The relevant code snippet for this issue is in `django/db/backends/sqlite3/introspection.py` (Lines: 20 to 371) where the `get_constraints` method is defined.\n- The `get_constraints` method retrieves various types of constraints including unique constraints, but it does not seem to handle the column order within the unique constraints.\n- The `_get_index_columns_orders` method (Lines: 401 to 434) in the same file parses the SQL to determine the order of columns in an index, which could be adapted for use with unique constraints.\n\nTo resolve the issue:\n- Modify the `get_constraints` method in `django/db/backends/sqlite3/introspection.py` to include the column order for unique constraints.\n- Use the `_get_index_columns_orders` method to parse the SQL definition of unique constraints to extract the column order.\n- Ensure that when adding the unique constraint information to the `constraints` dictionary, include the column order in the same format as indexes, using the \"orders\" key.\n- If the unique constraint does not specify an order, default to \"ASC\" for each column.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__4.0/tree//django/db/backends) \u2192 [sqlite3](https://github.com/testbed/django__django__4.0/tree//django/db/backends/sqlite3)- [Lines 20 - 371](https://github.com/testbed/django__django__4.0/blob//django/db/backends/sqlite3/introspection.py#L20-L371)\n\n This snippet contains the logic for retrieving constraints from a SQLite database, which is relevant to the issue of introspection not returning column order for unique constraints. \n\n\n   - [Lines 401 - 434](https://github.com/testbed/django__django__4.0/blob//django/db/backends/sqlite3/introspection.py#L401-L434)\n\n This snippet includes the method '_get_index_columns_orders' which is used to parse the column order from the SQL definition of an index, which could be relevant to the issue if unique constraints are treated similarly to indexes.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00020250000000000002,
+        "snippet_processor": 0.06362000000000001,
+        "issue_star_creation": 0.03132,
+        "issue_star_solver": 0.06203,
+        "bouncer": 0.027230000000000004
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711724878.734421,
+        "relevant_snippets": [
+            {
+                "code": "class SpatiaLiteIntrospection(DatabaseIntrospection):\n    data_types_reverse = GeoFlexibleFieldLookupDict()\n\n    def get_geometry_type(self, table_name, description):\n        with self.connection.cursor() as cursor:\n            # Querying the `geometry_columns` table to get additional metadata.\n            cursor.execute(\n                \"SELECT coord_dimension, srid, geometry_type \"\n                \"FROM geometry_columns \"\n                \"WHERE f_table_name=%s AND f_geometry_column=%s\",\n                (table_name, description.name),\n            )\n            row = cursor.fetchone()\n            if not row:\n                raise Exception(\n                    'Could not find a geometry column for \"%s\".\"%s\"'\n                    % (table_name, description.name)\n                )\n\n            # OGRGeomType does not require GDAL and makes it easy to convert\n            # from OGC geom type name to Django field.\n            ogr_type = row[2]\n            if isinstance(ogr_type, int) and ogr_type > 1000:\n                # SpatiaLite uses SFSQL 1.2 offsets 1000 (Z), 2000 (M), and\n                # 3000 (ZM) to indicate the presence of higher dimensional\n                # coordinates (M not yet supported by Django).\n                ogr_type = ogr_type % 1000 + OGRGeomType.wkb25bit\n            field_type = OGRGeomType(ogr_type).django\n\n            # Getting any GeometryField keyword arguments that are not the default.\n            dim = row[0]\n            srid = row[1]\n            field_params = {}\n            if srid != 4326:\n                field_params[\"srid\"] = srid\n            if (isinstance(dim, str) and \"Z\" in dim) or dim == 3:\n                field_params[\"dim\"] = 3\n        return field_type, field_params\n\n    def get_constraints(self, cursor, table_name):\n        constraints = super().get_constraints(cursor, table_name)\n        cursor.execute(\n            \"SELECT f_geometry_column \"\n            \"FROM geometry_columns \"\n            \"WHERE f_table_name=%s AND spatial_index_enabled=1\",\n            (table_name,),\n        )\n        for row in cursor.fetchall():\n            constraints[\"%s__spatial__index\" % row[0]] = {\n                \"columns\": [row[0]],\n                \"primary_key\": False,\n                \"unique\": False,\n                \"foreign_key\": None,\n                \"check\": False,\n                \"index\": True,\n            }\n        return constraints",
+                "filename": "django/contrib/gis/db/backends/spatialite/introspection.py",
+                "start_index": 718,
+                "end_index": 3117,
+                "start_line": 26,
+                "end_line": 82,
+                "max_line": 82,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _get_index_columns_orders(self, sql):\n        tokens = sqlparse.parse(sql)[0]\n        for token in tokens:\n            if isinstance(token, sqlparse.sql.Parenthesis):\n                columns = str(token).strip(\"()\").split(\", \")\n                return [\"DESC\" if info.endswith(\"DESC\") else \"ASC\" for info in columns]\n        return None\n\n    def _get_column_collations(self, cursor, table_name):\n        row = cursor.execute(\n            \"\"\"\n            SELECT sql\n            FROM sqlite_master\n            WHERE type = 'table' AND name = %s\n        \"\"\",\n            [table_name],\n        ).fetchone()\n        if not row:\n            return {}\n\n        sql = row[0]\n        columns = str(sqlparse.parse(sql)[0][-1]).strip(\"()\").split(\", \")\n        collations = {}\n        for column in columns:\n            tokens = column[1:].split()\n            column_name = tokens[0].strip('\"')\n            for index, token in enumerate(tokens):\n                if token == \"COLLATE\":\n                    collation = tokens[index + 1]\n                    break\n            else:\n                collation = None\n            collations[column_name] = collation\n        return collations",
+                "filename": "django/db/backends/sqlite3/introspection.py",
+                "start_index": 16180,
+                "end_index": 17356,
+                "start_line": 401,
+                "end_line": 434,
+                "max_line": 434,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\n        Retrieve any constraints or keys (unique, pk, fk, check, index) across\n        one or more columns.\n        \"\"\"\n        constraints = {}\n        # Find inline check constraints.\n        try:\n            table_schema = cursor.execute(\n                \"SELECT sql FROM sqlite_master WHERE type='table' and name=%s\"\n                % (self.connection.ops.quote_name(table_name),)\n            ).fetchone()[0]\n        except TypeError:\n            # table_name is a view.\n            pass\n        else:\n            columns = {\n                info.name for info in self.get_table_description(cursor, table_name)\n            }\n            constraints.update(self._parse_table_constraints(table_schema, columns))\n\n        # Get the index info\n        cursor.execute(\n            \"PRAGMA index_list(%s)\" % self.connection.ops.quote_name(table_name)\n        )\n        for row in cursor.fetchall():\n            # SQLite 3.8.9+ has 5 columns, however older versions only give 3\n            # columns. Discard last 2 columns if there.\n            number, index, unique = row[:3]\n            cursor.execute(\n                \"SELECT sql FROM sqlite_master \"\n                \"WHERE type='index' AND name=%s\" % self.connection.ops.quote_name(index)\n            )\n            # There's at most one row.\n            (sql,) = cursor.fetchone() or (None,)\n            # Inline constraints are already detected in\n            # _parse_table_constraints(). The reasons to avoid fetching inline\n            # constraints from `PRAGMA index_list` are:\n            # - Inline constraints can have a different name and information\n            #   than what `PRAGMA index_list` gives.\n            # - Not all inline constraints may appear in `PRAGMA index_list`.\n            if not sql:\n                # An inline constraint\n                continue\n            # Get the index info for that index\n            cursor.execute(\n                \"PRAGMA index_info(%s)\" % self.connection.ops.quote_name(index)\n            )\n            for index_rank, column_rank, column in cursor.fetchall():\n                if index not in constraints:\n                    constraints[index] = {\n                        \"columns\": [],\n                        \"primary_key\": False,\n                        \"unique\": bool(unique),\n                        \"foreign_key\": None,\n                        \"check\": False,\n                        \"index\": True,\n                    }\n                constraints[index][\"columns\"].append(column)\n            # Add type and column orders for indexes\n            if constraints[index][\"index\"]:\n                # SQLite doesn't support any index type other than b-tree\n                constraints[index][\"type\"] = Index.suffix\n                orders = self._get_index_columns_orders(sql)\n                if orders is not None:\n                    constraints[index][\"orders\"] = orders\n        # Get the PK\n        pk_columns = self.get_primary_key_columns(cursor, table_name)",
+                "filename": "django/db/backends/sqlite3/introspection.py",
+                "start_index": 11991,
+                "end_index": 14972,
+                "start_line": 20,
+                "end_line": 371,
+                "max_line": 434,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.9
+            },
+            {
+                "code": "if self.connection.features.can_introspect_check_constraints:\n            unnamed_constraints_index = 0\n            columns = {\n                info.name for info in self.get_table_description(cursor, table_name)\n            }\n            if self.connection.mysql_is_mariadb:\n                type_query = \"\"\"\n                    SELECT c.constraint_name, c.check_clause\n                    FROM information_schema.check_constraints AS c\n                    WHERE\n                        c.constraint_schema = DATABASE() AND\n                        c.table_name = %s\n                \"\"\"\n            else:\n                type_query = \"\"\"\n                    SELECT cc.constraint_name, cc.check_clause\n                    FROM\n                        information_schema.check_constraints AS cc,\n                        information_schema.table_constraints AS tc\n                    WHERE\n                        cc.constraint_schema = DATABASE() AND\n                        tc.table_schema = cc.constraint_schema AND\n                        cc.constraint_name = tc.constraint_name AND\n                        tc.constraint_type = 'CHECK' AND\n                        tc.table_name = %s\n                \"\"\"\n            cursor.execute(type_query, [table_name])\n            for constraint, check_clause in cursor.fetchall():\n                constraint_columns = self._parse_constraint_columns(\n                    check_clause, columns\n                )\n                # Ensure uniqueness of unnamed constraints. Unnamed unique\n                # and check columns constraints have the same name as\n                # a column.\n                if set(constraint_columns) == {constraint}:\n                    unnamed_constraints_index += 1\n                    constraint = \"__unnamed_constraint_%s__\" % unnamed_constraints_index\n                constraints[constraint] = {\n                    \"columns\": constraint_columns,\n                    \"primary_key\": False,\n                    \"unique\": False,\n                    \"index\": False,\n                    \"check\": True,\n                    \"foreign_key\": None,\n                }\n        # Now add in the indexes\n        cursor.execute(\n            \"SHOW INDEX FROM %s\" % self.connection.ops.quote_name(table_name)\n        )",
+                "filename": "django/db/backends/mysql/introspection.py",
+                "start_index": 10733,
+                "end_index": 13002,
+                "start_line": 277,
+                "end_line": 342,
+                "max_line": 349,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "class PostGISIntrospection(DatabaseIntrospection):",
+                "filename": "django/contrib/gis/db/backends/postgis/introspection.py",
+                "start_index": 128,
+                "end_index": 178,
+                "start_line": 5,
+                "end_line": 5,
+                "max_line": 71,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class DatabaseIntrospection(BaseDatabaseIntrospection):",
+                "filename": "django/db/backends/oracle/introspection.py",
+                "start_index": 548,
+                "end_index": 603,
+                "start_line": 17,
+                "end_line": 17,
+                "max_line": 434,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "class DatabaseIntrospection(BaseDatabaseIntrospection):",
+                "filename": "django/db/backends/sqlite3/introspection.py",
+                "start_index": 2035,
+                "end_index": 2090,
+                "start_line": 59,
+                "end_line": 59,
+                "max_line": 434,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "class DatabaseIntrospection(BaseDatabaseIntrospection):",
+                "filename": "django/db/backends/mysql/introspection.py",
+                "start_index": 770,
+                "end_index": 825,
+                "start_line": 24,
+                "end_line": 24,
+                "max_line": 349,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "class BaseDatabaseIntrospection:",
+                "filename": "django/db/backends/base/introspection.py",
+                "start_index": 371,
+                "end_index": 403,
+                "start_line": 14,
+                "end_line": 14,
+                "max_line": 212,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "if pk_columns:\n            # SQLite doesn't actually give a name to the PK constraint,\n            # so we invent one. This is fine, as the SQLite backend never\n            # deletes PK constraints by name, as you can't delete constraints\n            # in SQLite; we remake the table with a new PK instead.\n            constraints[\"__primary__\"] = {\n                \"columns\": pk_columns,\n                \"primary_key\": True,\n                \"unique\": False,  # It's not actually a unique constraint.\n                \"foreign_key\": None,\n                \"check\": False,\n                \"index\": False,\n            }\n        relations = enumerate(self.get_relations(cursor, table_name).items())\n        constraints.update(\n            {\n                f\"fk_{index}\": {\n                    \"columns\": [column_name],\n                    \"primary_key\": False,\n                    \"unique\": False,\n                    \"foreign_key\": (ref_table_name, ref_column_name),\n                    \"check\": False,\n                    \"index\": False,\n                }\n                for index, (column_name, (ref_column_name, ref_table_name)) in relations\n            }\n        )\n        return constraints",
+                "filename": "django/db/backends/sqlite3/introspection.py",
+                "start_index": 14981,
+                "end_index": 16174,
+                "start_line": 372,
+                "end_line": 399,
+                "max_line": 434,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/backends/sqlite3/introspection.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n        Retrieve any constraints or keys (unique, pk, fk, check, index) across\n        one or more columns.\n        \"\"\"\n        constraints = {}\n        # Find inline check constraints.\n        try:\n            table_schema = cursor.execute(\n                \"SELECT sql FROM sqlite_master WHERE type='table' and name=%s\"\n                % (self.connection.ops.quote_name(table_name),)\n            ).fetchone()[0]\n        except TypeError:\n            # table_name is a view.\n            pass\n        else:\n            columns = {\n                info.name for info in self.get_table_description(cursor, table_name)\n            }\n            constraints.update(self._parse_table_constraints(table_schema, columns))\n\n        # Get the index info\n        cursor.execute(\n            \"PRAGMA index_list(%s)\" % self.connection.ops.quote_name(table_name)\n        )\n        for row in cursor.fetchall():\n            # SQLite 3.8.9+ has 5 columns, however older versions only give 3\n            # columns. Discard last 2 columns if there.\n            number, index, unique = row[:3]\n            cursor.execute(\n                \"SELECT sql FROM sqlite_master \"\n                \"WHERE type='index' AND name=%s\" % self.connection.ops.quote_name(index)\n            )\n            # There's at most one row.\n            (sql,) = cursor.fetchone() or (None,)\n            # Inline constraints are already detected in\n            # _parse_table_constraints(). The reasons to avoid fetching inline\n            # constraints from `PRAGMA index_list` are:\n            # - Inline constraints can have a different name and information\n            #   than what `PRAGMA index_list` gives.\n            # - Not all inline constraints may appear in `PRAGMA index_list`.\n            if not sql:\n                # An inline constraint\n                continue\n            # Get the index info for that index\n            cursor.execute(\n                \"PRAGMA index_info(%s)\" % self.connection.ops.quote_name(index)\n            )\n            for index_rank, column_rank, column in cursor.fetchall():\n                if index not in constraints:\n                    constraints[index] = {\n                        \"columns\": [],\n                        \"primary_key\": False,\n                        \"unique\": bool(unique),\n                        \"foreign_key\": None,\n                        \"check\": False,\n                        \"index\": True,\n                    }\n                constraints[index][\"columns\"].append(column)\n            # Add type and column orders for indexes\n            if constraints[index][\"index\"]:\n                # SQLite doesn't support any index type other than b-tree\n                constraints[index][\"type\"] = Index.suffix\n                orders = self._get_index_columns_orders(sql)\n                if orders is not None:\n                    constraints[index][\"orders\"] = orders\n        # Get the PK\n        pk_columns = self.get_primary_key_columns(cursor, table_name)",
+                        "filename": "django/db/backends/sqlite3/introspection.py",
+                        "start_index": 11991,
+                        "end_index": 14972,
+                        "start_line": 20,
+                        "end_line": 371,
+                        "max_line": 434,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the logic for retrieving constraints from a SQLite database, which is relevant to the issue of introspection not returning column order for unique constraints."
+                },
+                {
+                    "chunk": {
+                        "code": "def _get_index_columns_orders(self, sql):\n        tokens = sqlparse.parse(sql)[0]\n        for token in tokens:\n            if isinstance(token, sqlparse.sql.Parenthesis):\n                columns = str(token).strip(\"()\").split(\", \")\n                return [\"DESC\" if info.endswith(\"DESC\") else \"ASC\" for info in columns]\n        return None\n\n    def _get_column_collations(self, cursor, table_name):\n        row = cursor.execute(\n            \"\"\"\n            SELECT sql\n            FROM sqlite_master\n            WHERE type = 'table' AND name = %s\n        \"\"\",\n            [table_name],\n        ).fetchone()\n        if not row:\n            return {}\n\n        sql = row[0]\n        columns = str(sqlparse.parse(sql)[0][-1]).strip(\"()\").split(\", \")\n        collations = {}\n        for column in columns:\n            tokens = column[1:].split()\n            column_name = tokens[0].strip('\"')\n            for index, token in enumerate(tokens):\n                if token == \"COLLATE\":\n                    collation = tokens[index + 1]\n                    break\n            else:\n                collation = None\n            collations[column_name] = collation\n        return collations",
+                        "filename": "django/db/backends/sqlite3/introspection.py",
+                        "start_index": 16180,
+                        "end_index": 17356,
+                        "start_line": 401,
+                        "end_line": 434,
+                        "max_line": 434,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the method '_get_index_columns_orders' which is used to parse the column order from the SQL definition of an index, which could be relevant to the issue if unique constraints are treated similarly to indexes."
+                }
+            ]
+        },
+        "solution_task": "- The issue is related to the retrieval of unique constraints and their column order from a SQLite database.\n- The relevant code snippet for this issue is in `django/db/backends/sqlite3/introspection.py` (Lines: 20 to 371) where the `get_constraints` method is defined.\n- The `get_constraints` method retrieves various types of constraints including unique constraints, but it does not seem to handle the column order within the unique constraints.\n- The `_get_index_columns_orders` method (Lines: 401 to 434) in the same file parses the SQL to determine the order of columns in an index, which could be adapted for use with unique constraints.\n\nTo resolve the issue:\n- Modify the `get_constraints` method in `django/db/backends/sqlite3/introspection.py` to include the column order for unique constraints.\n- Use the `_get_index_columns_orders` method to parse the SQL definition of unique constraints to extract the column order.\n- Ensure that when adding the unique constraint information to the `constraints` dictionary, include the column order in the same format as indexes, using the \"orders\" key.\n- If the unique constraint does not specify an order, default to \"ASC\" for each column.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE accurately identifies the issue as being related to the retrieval of unique constraints and their column order from a SQLite database. It correctly pinpoints the relevant code snippet in `django/db/backends/sqlite3/introspection.py` and the `get_constraints` method where the issue likely resides. The RESPONSE also suggests a potential solution by adapting the `_get_index_columns_orders` method to handle unique constraints, which is a logical and actionable recommendation. The RESPONSE provides a clear step-by-step guide on how to modify the `get_constraints` method to include the column order for unique constraints, which is highly relevant and actionable. Additionally, the RESPONSE includes links to the code snippets, which can be very helpful for the developer addressing the issue. The RESPONSE does not address all aspects of the described bug, such as testing the changes or considering edge cases, which is why it does not receive a perfect score.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711725088.9521,
+        "result": "- The issue is related to the retrieval of unique constraints and their column order from a SQLite database.\n- The relevant code snippet for this issue is in `django/db/backends/sqlite3/introspection.py` (Lines: 20 to 371) where the `get_constraints` method is defined.\n- The `get_constraints` method retrieves various types of constraints including unique constraints, but it does not seem to handle the column order within the unique constraints.\n- The `_get_index_columns_orders` method (Lines: 401 to 434) in the same file parses the SQL to determine the order of columns in an index, which could be adapted for use with unique constraints.\n\nTo resolve the issue:\n- Modify the `get_constraints` method in `django/db/backends/sqlite3/introspection.py` to include the column order for unique constraints.\n- Use the `_get_index_columns_orders` method to parse the SQL definition of unique constraints to extract the column order.\n- Ensure that when adding the unique constraint information to the `constraints` dictionary, include the column order in the same format as indexes, using the \"orders\" key.\n- If the unique constraint does not specify an order, default to \"ASC\" for each column.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__4.0/tree//django/db/backends) \u2192 [sqlite3](https://github.com/testbed/django__django__4.0/tree//django/db/backends/sqlite3)- [Lines 20 - 371](https://github.com/testbed/django__django__4.0/blob//django/db/backends/sqlite3/introspection.py#L20-L371)\n\n This snippet contains the logic for retrieving constraints from a SQLite database, which is relevant to the issue of introspection not returning column order for unique constraints. \n\n\n   - [Lines 401 - 434](https://github.com/testbed/django__django__4.0/blob//django/db/backends/sqlite3/introspection.py#L401-L434)\n\n This snippet includes the method '_get_index_columns_orders' which is used to parse the column order from the SQL definition of an index, which could be relevant to the issue if unique constraints are treated similarly to indexes.",
+        "context_relevance": 0.21000000000000002,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant to the entire PROMPT and answers the PROMPT completely.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT, which is the lack of column order for unique constraints in SQLite introspection. It provides a detailed explanation of where the problem lies within the Django codebase, specifically pointing out the relevant sections of the `introspection.py` file. It also offers a step-by-step solution to resolve the issue, including the adaptation of existing methods and the exact changes needed in the code. The RESPONSE includes links to the code snippets, which are directly related to the problem and the proposed solution, making it highly relevant to the PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

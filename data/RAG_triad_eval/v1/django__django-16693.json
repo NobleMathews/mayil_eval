@@ -1,0 +1,225 @@
+{
+    "id": "django__django-16693",
+    "repo_name": "testbed/django__django__5.0",
+    "task_id": 7917566519688348864,
+    "title": "Improve error message for incorrect context processors",
+    "body": "Description\n\t\nIf you write a template context processor but return the wrong type, for example None by missing the return statement:\ndef data(request):\n\tdata = {\"something\": True}\nThen currently the error message is very mysterious:\nInternal Server Error: /\nTraceback (most recent call last):\n ...\n File \"/..../site-packages/django/template/backends/django.py\", line 61, in render\n\treturn self.template.render(context)\n\t\t ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n File \"/..../site-packages/django/template/base.py\", line 173, in render\n\twith context.bind_template(self):\n File \"/.../lib/python3.11/contextlib.py\", line 137, in __enter__\n\treturn next(self.gen)\n\t\t ^^^^^^^^^^^^^^\n File \"/..../site-packages/django/template/context.py\", line 254, in bind_template\n\tupdates.update(processor(self.request))\nTypeError: 'NoneType' object is not iterable\nIf a view returns the wrong type, Django raises a nice error message:\nThe view example.views.index didn't return an HttpResponse object. It returned None instead.\nI suggest we do the same for context processors. If we use try/except around the updates.update() line, it will not slow down normal processing any noticeable amount, thanks to Python 3.11's \u201czero-cost\u201d exception handling: \u200bhttps://docs.python.org/3.11/whatsnew/3.11.html#misc\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__5.0.git",
+    "requested_commit": "",
+    "mayil_response": "To improve the error message for incorrect context processors, you can modify the `django/template/context.py` file where the context processors are applied. Here's a high-level overview of the steps to implement the feature:\n\n- Wrap the code where the context processor is called with a try-except block.\n- Catch the `TypeError` that occurs when a `NoneType` is not iterable.\n- Raise a more informative error message that indicates the context processor returned `None` instead of a dictionary.\n\nHere's a pseudo-code snippet to illustrate the changes:\n\n```python\n# In django/template/context.py\n\nfrom django.core.exceptions import ImproperlyConfigured\n\n# ... existing code ...\n\nclass RequestContext(Context):\n    # ... existing methods ...\n\n    def __init__(self, request, dict_=None, processors=None, current_app=None, use_l10n=None, use_tz=None):\n        # ... existing code ...\n\n        # Apply context processors\n        for processor in self._processors:\n            try:\n                updates = processor(request)\n                if not isinstance(updates, dict):\n                    raise ImproperlyConfigured(\n                        f\"The context processor {processor.__module__}.{processor.__name__} \"\n                        f\"did not return a dictionary, it returned {type(updates)} instead.\"\n                    )\n                self.update(updates)\n            except TypeError as e:\n                if updates is None:\n                    raise ImproperlyConfigured(\n                        f\"The context processor {processor.__module__}.{processor.__name__} \"\n                        \"returned None instead of a dictionary. Please ensure it returns a dictionary.\"\n                    ) from e\n                else:\n                    raise\n```\n\nThis code snippet assumes that the `TypeError` is only raised when a context processor returns `None`. If there are other scenarios where `TypeError` could be raised, you may need to adjust the logic to handle those cases appropriately.\n\nRemember to add tests for this new behavior to ensure that the correct error message is raised when a context processor returns `None` or an incorrect type.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [template](https://github.com/testbed/django__django__5.0/tree//django/template)- [Lines 1 - 24](https://github.com/testbed/django__django__5.0/blob//django/template/context.py#L1-L24)\n\n This snippet contains the 'bind_template' method within the 'Context' class where the error occurs when the context processor returns None. It is the direct location where the TypeError is raised and should be modified to handle the error more gracefully.\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [views](https://github.com/testbed/django__django__5.0/tree//django/views)- [Lines 1 - 86](https://github.com/testbed/django__django__5.0/blob//django/views/debug.py#L1-L86)\n\n This snippet contains the 'technical_500_response' function which generates the error page for a server error (500). It may be useful to look at this function to ensure that the improved error message is displayed correctly when a context processor returns an incorrect type.\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [template](https://github.com/testbed/django__django__5.0/tree//django/template)- [Lines 197 - 935](https://github.com/testbed/django__django__5.0/blob//django/template/base.py#L197-L935)\n\n This snippet is from 'django/template/base.py' and shows exception handling within template rendering. It may be relevant to understand how exceptions are currently handled in template rendering to improve the error message for context processors.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000224,
+        "snippet_processor": 0.05249,
+        "issue_star_creation": 0.021079999999999998,
+        "issue_star_solver": 0.06552000000000001,
+        "bouncer": 0.02299
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711705691.4726982,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"\nA set of request processors that return dictionaries to be merged into a\ntemplate context. Each function takes the request object as its only parameter\nand returns a dictionary to add to the context.\n\nThese are referenced from the 'context_processors' option of the configuration\nof a DjangoTemplates backend and used by RequestContext.\n\"\"\"\n\nimport itertools\n\nfrom django.conf import settings\nfrom django.middleware.csrf import get_token\nfrom django.utils.functional import SimpleLazyObject, lazy\n\n\ndef csrf(request):\n    \"\"\"\n    Context processor that provides a CSRF token, or the string 'NOTPROVIDED' if\n    it has not been provided by either a view decorator or the middleware\n    \"\"\"\n\n    def _get_val():\n        token = get_token(request)\n        if token is None:\n            # In order to be able to provide debugging info in the\n            # case of misconfiguration, we use a sentinel value\n            # instead of returning an empty dict.\n            return \"NOTPROVIDED\"\n        else:\n            return token\n\n    return {\"csrf_token\": SimpleLazyObject(_get_val)}\n\n\ndef debug(request):\n    \"\"\"\n    Return context variables helpful for debugging.\n    \"\"\"\n    context_extras = {}\n    if settings.DEBUG and request.META.get(\"REMOTE_ADDR\") in settings.INTERNAL_IPS:\n        context_extras[\"debug\"] = True\n        from django.db import connections\n\n        # Return a lazy reference that computes connection.queries on access,\n        # to ensure it contains queries triggered after this function runs.\n        context_extras[\"sql_queries\"] = lazy(\n            lambda: list(\n                itertools.chain.from_iterable(\n                    connections[x].queries for x in connections\n                )\n            ),\n            list,\n        )\n    return context_extras\n\n\ndef i18n(request):\n    from django.utils import translation\n\n    return {\n        \"LANGUAGES\": settings.LANGUAGES,\n        \"LANGUAGE_CODE\": translation.get_language(),\n        \"LANGUAGE_BIDI\": translation.get_language_bidi(),\n    }\n\n\ndef tz(request):\n    from django.utils import timezone\n\n    return {\"TIME_ZONE\": timezone.get_current_timezone_name()}\n\n\ndef static(request):\n    \"\"\"\n    Add static-related context variables to the context.\n    \"\"\"\n    return {\"STATIC_URL\": settings.STATIC_URL}\n\n\ndef media(request):\n    \"\"\"\n    Add media-related context variables to the context.\n    \"\"\"\n    return {\"MEDIA_URL\": settings.MEDIA_URL}\n\n\ndef request(request):\n    return {\"request\": request}",
+                "filename": "django/template/context_processors.py",
+                "start_index": 0,
+                "end_index": 2479,
+                "start_line": 1,
+                "end_line": 89,
+                "max_line": 89,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "import functools\nimport inspect\nimport itertools\nimport re\nimport sys\nimport types\nimport warnings\nfrom pathlib import Path\n\nfrom django.conf import settings\nfrom django.http import Http404, HttpResponse, HttpResponseNotFound\nfrom django.template import Context, Engine, TemplateDoesNotExist\nfrom django.template.defaultfilters import pprint\nfrom django.urls import resolve\nfrom django.utils import timezone\nfrom django.utils.datastructures import MultiValueDict\nfrom django.utils.encoding import force_str\nfrom django.utils.module_loading import import_string\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.version import PY311, get_docs_version\nfrom django.views.decorators.debug import coroutine_functions_to_sensitive_variables\n\n# Minimal Django templates engine to render the error templates\n# regardless of the project's TEMPLATES setting. Templates are\n# read directly from the filesystem so that the error handler\n# works even if the template loader is broken.\nDEBUG_ENGINE = Engine(\n    debug=True,\n    libraries={\"i18n\": \"django.templatetags.i18n\"},\n)\n\n\ndef builtin_template_path(name):\n    \"\"\"\n    Return a path to a builtin template.\n\n    Avoid calling this function at the module level or in a class-definition\n    because __file__ may not exist, e.g. in frozen environments.\n    \"\"\"\n    return Path(__file__).parent / \"templates\" / name\n\n\nclass ExceptionCycleWarning(UserWarning):\n    pass\n\n\nclass CallableSettingWrapper:\n    \"\"\"\n    Object to wrap callable appearing in settings.\n    * Not to call in the debug page (#21345).\n    * Not to break the debug page if the callable forbidding to set attributes\n      (#23070).\n    \"\"\"\n\n    def __init__(self, callable_setting):\n        self._wrapped = callable_setting\n\n    def __repr__(self):\n        return repr(self._wrapped)\n\n\ndef technical_500_response(request, exc_type, exc_value, tb, status_code=500):\n    \"\"\"\n    Create a technical server error response. The last three arguments are\n    the values returned from sys.exc_info() and friends.\n    \"\"\"\n    reporter = get_exception_reporter_class(request)(request, exc_type, exc_value, tb)\n    if request.accepts(\"text/html\"):\n        html = reporter.get_traceback_html()\n        return HttpResponse(html, status=status_code)\n    else:\n        text = reporter.get_traceback_text()\n        return HttpResponse(\n            text, status=status_code, content_type=\"text/plain; charset=utf-8\"\n        )\n\n\n@functools.lru_cache\ndef get_default_exception_reporter_filter():\n    # Instantiate the default filter for the first time and cache it.\n    return import_string(settings.DEFAULT_EXCEPTION_REPORTER_FILTER)()\n\n\ndef get_exception_reporter_filter(request):\n    default_filter = get_default_exception_reporter_filter()\n    return getattr(request, \"exception_reporter_filter\", default_filter)",
+                "filename": "django/views/debug.py",
+                "start_index": 0,
+                "end_index": 2827,
+                "start_line": 1,
+                "end_line": 86,
+                "max_line": 665,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "except Exception as e:\n            template_name = getattr(context, \"template_name\", None) or \"unknown\"\n            logger.debug(\n                \"Exception while resolving variable '%s' in template '%s'.\",\n                bit,\n                template_name,\n                exc_info=True,\n            )\n\n            if getattr(e, \"silent_variable_failure\", False):\n                current = context.template.engine.string_if_invalid\n            else:\n                raise",
+                "filename": "django/template/base.py",
+                "start_index": 34053,
+                "end_index": 34526,
+                "start_line": 197,
+                "end_line": 935,
+                "max_line": 1116,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from contextlib import contextmanager\nfrom copy import copy\n\n# Hard-coded processor for easier use of CSRF protection.\n_builtin_context_processors = (\"django.template.context_processors.csrf\",)\n\n\nclass ContextPopException(Exception):\n    \"pop() has been called more times than push()\"\n    pass\n\n\nclass ContextDict(dict):\n    def __init__(self, context, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n\n        context.dicts.append(self)\n        self.context = context\n\n    def __enter__(self):\n        return self\n\n    def __exit__(self, *args, **kwargs):\n        self.context.pop()",
+                "filename": "django/template/context.py",
+                "start_index": 0,
+                "end_index": 594,
+                "start_line": 1,
+                "end_line": 24,
+                "max_line": 298,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@requires_csrf_token\ndef server_error(request, template_name=ERROR_500_TEMPLATE_NAME):\n    \"\"\"\n    500 error handler.\n\n    Templates: :template:`500.html`\n    Context: None\n    \"\"\"\n    try:\n        template = loader.get_template(template_name)\n    except TemplateDoesNotExist:\n        if template_name != ERROR_500_TEMPLATE_NAME:\n            # Reraise if it's a missing custom template.\n            raise\n        return HttpResponseServerError(\n            ERROR_PAGE_TEMPLATE % {\"title\": \"Server Error (500)\", \"details\": \"\"},\n        )\n    return HttpResponseServerError(template.render())\n\n\n@requires_csrf_token\ndef bad_request(request, exception, template_name=ERROR_400_TEMPLATE_NAME):\n    \"\"\"\n    400 error handler.\n\n    Templates: :template:`400.html`\n    Context: None\n    \"\"\"\n    try:\n        template = loader.get_template(template_name)\n    except TemplateDoesNotExist:\n        if template_name != ERROR_400_TEMPLATE_NAME:\n            # Reraise if it's a missing custom template.\n            raise\n        return HttpResponseBadRequest(\n            ERROR_PAGE_TEMPLATE % {\"title\": \"Bad Request (400)\", \"details\": \"\"},\n        )\n    # No exception content is passed to the template, to not disclose any\n    # sensitive information.\n    return HttpResponseBadRequest(template.render())\n\n\n@requires_csrf_token\ndef permission_denied(request, exception, template_name=ERROR_403_TEMPLATE_NAME):\n    \"\"\"\n    Permission denied (403) handler.\n\n    Templates: :template:`403.html`\n    Context:\n        exception\n            The message from the exception which triggered the 403 (if one was\n            supplied).\n\n    If the template does not exist, an Http403 response containing the text\n    \"403 Forbidden\" (as per RFC 9110 Section 15.5.4) will be returned.\n    \"\"\"\n    try:\n        template = loader.get_template(template_name)\n    except TemplateDoesNotExist:\n        if template_name != ERROR_403_TEMPLATE_NAME:\n            # Reraise if it's a missing custom template.\n            raise\n        return HttpResponseForbidden(\n            ERROR_PAGE_TEMPLATE % {\"title\": \"403 Forbidden\", \"details\": \"\"},\n        )\n    return HttpResponseForbidden(\n        template.render(request=request, context={\"exception\": str(exception)})\n    )",
+                "filename": "django/views/defaults.py",
+                "start_index": 2444,
+                "end_index": 4682,
+                "start_line": 30,
+                "end_line": 149,
+                "max_line": 149,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.http import HttpResponse\n\nfrom .loader import get_template, select_template\n\n\nclass ContentNotRenderedError(Exception):\n    pass",
+                "filename": "django/template/response.py",
+                "start_index": 0,
+                "end_index": 140,
+                "start_line": 1,
+                "end_line": 7,
+                "max_line": 164,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import logging\n\nfrom asgiref.sync import iscoroutinefunction, markcoroutinefunction\n\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.http import (\n    HttpResponse,\n    HttpResponseGone,\n    HttpResponseNotAllowed,\n    HttpResponsePermanentRedirect,\n    HttpResponseRedirect,\n)\nfrom django.template.response import TemplateResponse\nfrom django.urls import reverse\nfrom django.utils.decorators import classonlymethod\nfrom django.utils.functional import classproperty\n\nlogger = logging.getLogger(\"django.request\")\n\n\nclass ContextMixin:\n    \"\"\"\n    A default context mixin that passes the keyword arguments received by\n    get_context_data() as the template context.\n    \"\"\"\n\n    extra_context = None\n\n    def get_context_data(self, **kwargs):\n        kwargs.setdefault(\"view\", self)\n        if self.extra_context is not None:\n            kwargs.update(self.extra_context)\n        return kwargs",
+                "filename": "django/views/generic/base.py",
+                "start_index": 0,
+                "end_index": 911,
+                "start_line": 1,
+                "end_line": 33,
+                "max_line": 285,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from urllib.parse import quote\n\nfrom django.http import (\n    HttpResponseBadRequest,\n    HttpResponseForbidden,\n    HttpResponseNotFound,\n    HttpResponseServerError,\n)\nfrom django.template import Context, Engine, TemplateDoesNotExist, loader\nfrom django.views.decorators.csrf import requires_csrf_token\n\nERROR_404_TEMPLATE_NAME = \"404.html\"\nERROR_403_TEMPLATE_NAME = \"403.html\"\nERROR_400_TEMPLATE_NAME = \"400.html\"\nERROR_500_TEMPLATE_NAME = \"500.html\"\nERROR_PAGE_TEMPLATE = \"\"\"\n<!doctype html>\n<html lang=\"en\">\n<head>\n  <title>%(title)s</title>\n</head>\n<body>\n  <h1>%(title)s</h1><p>%(details)s</p>\n</body>\n</html>\n\"\"\"\n\n\n# These views can be called when CsrfViewMiddleware.process_view() not run,\n# therefore need @requires_csrf_token in case the template needs\n# {% csrf_token %}.\n\n\n@requires_csrf_token\ndef page_not_found(request, exception, template_name=ERROR_404_TEMPLATE_NAME):\n    \"\"\"\n    Default 404 handler.\n\n    Templates: :template:`404.html`\n    Context:\n        request_path\n            The path of the requested URL (e.g., '/app/pages/bad_page/'). It's\n            quoted to prevent a content injection attack.\n        exception\n            The message from the exception which triggered the 404 (if one was\n            supplied), or the exception class name\n    \"\"\"\n    exception_repr = exception.__class__.__name__\n    # Try to get an \"interesting\" exception message, if any (and not the ugly\n    # Resolver404 dictionary)\n    try:\n        message = exception.args[0]\n    except (AttributeError, IndexError):\n        pass\n    else:\n        if isinstance(message, str):\n            exception_repr = message\n    context = {\n        \"request_path\": quote(request.path),\n        \"exception\": exception_repr,\n    }\n    try:\n        template = loader.get_template(template_name)\n        body = template.render(context, request)\n    except TemplateDoesNotExist:\n        if template_name != ERROR_404_TEMPLATE_NAME:\n            # Reraise if it's a missing custom template.\n            raise\n        # Render template (even though there are no substitutions) to allow\n        # inspecting the context in tests.\n        template = Engine().from_string(\n            ERROR_PAGE_TEMPLATE\n            % {\n                \"title\": \"Not Found\",\n                \"details\": \"The requested resource was not found on this server.\",\n            },\n        )\n        body = template.render(Context(context))\n    return HttpResponseNotFound(body)",
+                "filename": "django/views/defaults.py",
+                "start_index": 0,
+                "end_index": 2441,
+                "start_line": 1,
+                "end_line": 79,
+                "max_line": 149,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _check_custom_error_handlers(self):\n        messages = []\n        # All handlers take (request, exception) arguments except handler500\n        # which takes (request).\n        for status_code, num_parameters in [(400, 2), (403, 2), (404, 2), (500, 1)]:\n            try:\n                handler = self.resolve_error_handler(status_code)\n            except (ImportError, ViewDoesNotExist) as e:\n                path = getattr(self.urlconf_module, \"handler%s\" % status_code)\n                msg = (\n                    \"The custom handler{status_code} view '{path}' could not be \"\n                    \"imported.\"\n                ).format(status_code=status_code, path=path)\n                messages.append(Error(msg, hint=str(e), id=\"urls.E008\"))\n                continue\n            signature = inspect.signature(handler)\n            args = [None] * num_parameters\n            try:\n                signature.bind(*args)\n            except TypeError:\n                msg = (\n                    \"The custom handler{status_code} view '{path}' does not \"\n                    \"take the correct number of arguments ({args}).\"\n                ).format(\n                    status_code=status_code,\n                    path=handler.__module__ + \".\" + handler.__qualname__,\n                    args=\"request, exception\" if num_parameters == 2 else \"request\",\n                )\n                messages.append(Error(msg, id=\"urls.E007\"))\n        return messages",
+                "filename": "django/urls/resolvers.py",
+                "start_index": 18017,
+                "end_index": 19471,
+                "start_line": 521,
+                "end_line": 550,
+                "max_line": 848,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "while tb is not None:\n            # Support for __traceback_hide__ which is used by a few libraries\n            # to hide internal frames.\n            if tb.tb_frame.f_locals.get(\"__traceback_hide__\"):\n                tb = tb.tb_next\n                continue\n            filename = tb.tb_frame.f_code.co_filename\n            function = tb.tb_frame.f_code.co_name\n            lineno = tb.tb_lineno - 1\n            loader = tb.tb_frame.f_globals.get(\"__loader__\")\n            module_name = tb.tb_frame.f_globals.get(\"__name__\") or \"\"\n            (\n                pre_context_lineno,\n                pre_context,\n                context_line,\n                post_context,\n            ) = self._get_lines_from_file(\n                filename,\n                lineno,\n                7,\n                loader,\n                module_name,\n            )\n            if pre_context_lineno is None:\n                pre_context_lineno = lineno\n                pre_context = []\n                context_line = \"<source code not available>\"\n                post_context = []\n\n            colno = tb_area_colno = \"\"\n            if PY311:\n                _, _, start_column, end_column = next(\n                    itertools.islice(\n                        tb.tb_frame.f_code.co_positions(), tb.tb_lasti // 2, None\n                    )\n                )\n                if start_column and end_column:\n                    underline = \"^\" * (end_column - start_column)\n                    spaces = \" \" * (start_column + len(str(lineno + 1)) + 2)\n                    colno = f\"\\n{spaces}{underline}\"\n                    tb_area_spaces = \" \" * (\n                        4\n                        + start_column\n                        - (len(context_line) - len(context_line.lstrip()))\n                    )\n                    tb_area_colno = f\"\\n{tb_area_spaces}{underline}\"\n            yield {\n                \"exc_cause\": exc_cause,\n                \"exc_cause_explicit\": exc_cause_explicit,\n                \"tb\": tb,\n                \"type\": \"django\" if module_name.startswith(\"django.\") else \"user\",\n                \"filename\": filename,\n                \"function\": function,\n                \"lineno\": lineno + 1,\n                \"vars\": self.filter.get_traceback_frame_variables(\n                    self.request, tb.tb_frame\n                ),\n                \"id\": id(tb),\n                \"pre_context\": pre_context,\n                \"context_line\": context_line,\n                \"post_context\": post_context,\n                \"pre_context_lineno\": pre_context_lineno + 1,\n                \"colno\": colno,\n                \"tb_area_colno\": tb_area_colno,\n            }\n            tb = tb.tb_next",
+                "filename": "django/views/debug.py",
+                "start_index": 20950,
+                "end_index": 23634,
+                "start_line": 540,
+                "end_line": 605,
+                "max_line": 665,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__5.0",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "feature request",
+        "snippet_processor_task": {
+            "django/template/context.py": [
+                {
+                    "chunk": {
+                        "code": "from contextlib import contextmanager\nfrom copy import copy\n\n# Hard-coded processor for easier use of CSRF protection.\n_builtin_context_processors = (\"django.template.context_processors.csrf\",)\n\n\nclass ContextPopException(Exception):\n    \"pop() has been called more times than push()\"\n    pass\n\n\nclass ContextDict(dict):\n    def __init__(self, context, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n\n        context.dicts.append(self)\n        self.context = context\n\n    def __enter__(self):\n        return self\n\n    def __exit__(self, *args, **kwargs):\n        self.context.pop()",
+                        "filename": "django/template/context.py",
+                        "start_index": 0,
+                        "end_index": 594,
+                        "start_line": 1,
+                        "end_line": 24,
+                        "max_line": 298,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__5.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'bind_template' method within the 'Context' class where the error occurs when the context processor returns None. It is the direct location where the TypeError is raised and should be modified to handle the error more gracefully."
+                }
+            ],
+            "django/views/debug.py": [
+                {
+                    "chunk": {
+                        "code": "import functools\nimport inspect\nimport itertools\nimport re\nimport sys\nimport types\nimport warnings\nfrom pathlib import Path\n\nfrom django.conf import settings\nfrom django.http import Http404, HttpResponse, HttpResponseNotFound\nfrom django.template import Context, Engine, TemplateDoesNotExist\nfrom django.template.defaultfilters import pprint\nfrom django.urls import resolve\nfrom django.utils import timezone\nfrom django.utils.datastructures import MultiValueDict\nfrom django.utils.encoding import force_str\nfrom django.utils.module_loading import import_string\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.version import PY311, get_docs_version\nfrom django.views.decorators.debug import coroutine_functions_to_sensitive_variables\n\n# Minimal Django templates engine to render the error templates\n# regardless of the project's TEMPLATES setting. Templates are\n# read directly from the filesystem so that the error handler\n# works even if the template loader is broken.\nDEBUG_ENGINE = Engine(\n    debug=True,\n    libraries={\"i18n\": \"django.templatetags.i18n\"},\n)\n\n\ndef builtin_template_path(name):\n    \"\"\"\n    Return a path to a builtin template.\n\n    Avoid calling this function at the module level or in a class-definition\n    because __file__ may not exist, e.g. in frozen environments.\n    \"\"\"\n    return Path(__file__).parent / \"templates\" / name\n\n\nclass ExceptionCycleWarning(UserWarning):\n    pass\n\n\nclass CallableSettingWrapper:\n    \"\"\"\n    Object to wrap callable appearing in settings.\n    * Not to call in the debug page (#21345).\n    * Not to break the debug page if the callable forbidding to set attributes\n      (#23070).\n    \"\"\"\n\n    def __init__(self, callable_setting):\n        self._wrapped = callable_setting\n\n    def __repr__(self):\n        return repr(self._wrapped)\n\n\ndef technical_500_response(request, exc_type, exc_value, tb, status_code=500):\n    \"\"\"\n    Create a technical server error response. The last three arguments are\n    the values returned from sys.exc_info() and friends.\n    \"\"\"\n    reporter = get_exception_reporter_class(request)(request, exc_type, exc_value, tb)\n    if request.accepts(\"text/html\"):\n        html = reporter.get_traceback_html()\n        return HttpResponse(html, status=status_code)\n    else:\n        text = reporter.get_traceback_text()\n        return HttpResponse(\n            text, status=status_code, content_type=\"text/plain; charset=utf-8\"\n        )\n\n\n@functools.lru_cache\ndef get_default_exception_reporter_filter():\n    # Instantiate the default filter for the first time and cache it.\n    return import_string(settings.DEFAULT_EXCEPTION_REPORTER_FILTER)()\n\n\ndef get_exception_reporter_filter(request):\n    default_filter = get_default_exception_reporter_filter()\n    return getattr(request, \"exception_reporter_filter\", default_filter)",
+                        "filename": "django/views/debug.py",
+                        "start_index": 0,
+                        "end_index": 2827,
+                        "start_line": 1,
+                        "end_line": 86,
+                        "max_line": 665,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__5.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'technical_500_response' function which generates the error page for a server error (500). It may be useful to look at this function to ensure that the improved error message is displayed correctly when a context processor returns an incorrect type."
+                }
+            ],
+            "django/template/base.py": [
+                {
+                    "chunk": {
+                        "code": "except Exception as e:\n            template_name = getattr(context, \"template_name\", None) or \"unknown\"\n            logger.debug(\n                \"Exception while resolving variable '%s' in template '%s'.\",\n                bit,\n                template_name,\n                exc_info=True,\n            )\n\n            if getattr(e, \"silent_variable_failure\", False):\n                current = context.template.engine.string_if_invalid\n            else:\n                raise",
+                        "filename": "django/template/base.py",
+                        "start_index": 34053,
+                        "end_index": 34526,
+                        "start_line": 197,
+                        "end_line": 935,
+                        "max_line": 1116,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__5.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is from 'django/template/base.py' and shows exception handling within template rendering. It may be relevant to understand how exceptions are currently handled in template rendering to improve the error message for context processors."
+                }
+            ]
+        },
+        "solution_task": "To improve the error message for incorrect context processors, you can modify the `django/template/context.py` file where the context processors are applied. Here's a high-level overview of the steps to implement the feature:\n\n- Wrap the code where the context processor is called with a try-except block.\n- Catch the `TypeError` that occurs when a `NoneType` is not iterable.\n- Raise a more informative error message that indicates the context processor returned `None` instead of a dictionary.\n\nHere's a pseudo-code snippet to illustrate the changes:\n\n```python\n# In django/template/context.py\n\nfrom django.core.exceptions import ImproperlyConfigured\n\n# ... existing code ...\n\nclass RequestContext(Context):\n    # ... existing methods ...\n\n    def __init__(self, request, dict_=None, processors=None, current_app=None, use_l10n=None, use_tz=None):\n        # ... existing code ...\n\n        # Apply context processors\n        for processor in self._processors:\n            try:\n                updates = processor(request)\n                if not isinstance(updates, dict):\n                    raise ImproperlyConfigured(\n                        f\"The context processor {processor.__module__}.{processor.__name__} \"\n                        f\"did not return a dictionary, it returned {type(updates)} instead.\"\n                    )\n                self.update(updates)\n            except TypeError as e:\n                if updates is None:\n                    raise ImproperlyConfigured(\n                        f\"The context processor {processor.__module__}.{processor.__name__} \"\n                        \"returned None instead of a dictionary. Please ensure it returns a dictionary.\"\n                    ) from e\n                else:\n                    raise\n```\n\nThis code snippet assumes that the `TypeError` is only raised when a context processor returns `None`. If there are other scenarios where `TypeError` could be raised, you may need to adjust the logic to handle those cases appropriately.\n\nRemember to add tests for this new behavior to ensure that the correct error message is raised when a context processor returns `None` or an incorrect type.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant suggestions that can directly lead to the successful implementation or improvement of the requested feature.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable plan for improving the error message for incorrect context processors. It suggests wrapping the code where the context processor is called with a try-except block, catching the TypeError, and raising a more informative error message. The inclusion of pseudo-code makes the guidance clear and directly implementable. The RESPONSE also correctly identifies the need to add tests for the new behavior, which is an essential part of software development. Furthermore, it provides links to relevant code snippets in the Django repository, which would be useful for a developer working on this feature. The only reason it does not score a 10 is that it does not explicitly mention the need to document the changes, which is a minor aspect of the feature implementation process.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711705786.0569248,
+        "result": "To improve the error message for incorrect context processors, you can modify the `django/template/context.py` file where the context processors are applied. Here's a high-level overview of the steps to implement the feature:\n\n- Wrap the code where the context processor is called with a try-except block.\n- Catch the `TypeError` that occurs when a `NoneType` is not iterable.\n- Raise a more informative error message that indicates the context processor returned `None` instead of a dictionary.\n\nHere's a pseudo-code snippet to illustrate the changes:\n\n```python\n# In django/template/context.py\n\nfrom django.core.exceptions import ImproperlyConfigured\n\n# ... existing code ...\n\nclass RequestContext(Context):\n    # ... existing methods ...\n\n    def __init__(self, request, dict_=None, processors=None, current_app=None, use_l10n=None, use_tz=None):\n        # ... existing code ...\n\n        # Apply context processors\n        for processor in self._processors:\n            try:\n                updates = processor(request)\n                if not isinstance(updates, dict):\n                    raise ImproperlyConfigured(\n                        f\"The context processor {processor.__module__}.{processor.__name__} \"\n                        f\"did not return a dictionary, it returned {type(updates)} instead.\"\n                    )\n                self.update(updates)\n            except TypeError as e:\n                if updates is None:\n                    raise ImproperlyConfigured(\n                        f\"The context processor {processor.__module__}.{processor.__name__} \"\n                        \"returned None instead of a dictionary. Please ensure it returns a dictionary.\"\n                    ) from e\n                else:\n                    raise\n```\n\nThis code snippet assumes that the `TypeError` is only raised when a context processor returns `None`. If there are other scenarios where `TypeError` could be raised, you may need to adjust the logic to handle those cases appropriately.\n\nRemember to add tests for this new behavior to ensure that the correct error message is raised when a context processor returns `None` or an incorrect type.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [template](https://github.com/testbed/django__django__5.0/tree//django/template)- [Lines 1 - 24](https://github.com/testbed/django__django__5.0/blob//django/template/context.py#L1-L24)\n\n This snippet contains the 'bind_template' method within the 'Context' class where the error occurs when the context processor returns None. It is the direct location where the TypeError is raised and should be modified to handle the error more gracefully.\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [views](https://github.com/testbed/django__django__5.0/tree//django/views)- [Lines 1 - 86](https://github.com/testbed/django__django__5.0/blob//django/views/debug.py#L1-L86)\n\n This snippet contains the 'technical_500_response' function which generates the error page for a server error (500). It may be useful to look at this function to ensure that the improved error message is displayed correctly when a context processor returns an incorrect type.\n-  \u2192 [django](https://github.com/testbed/django__django__5.0/tree//django) \u2192 [template](https://github.com/testbed/django__django__5.0/tree//django/template)- [Lines 197 - 935](https://github.com/testbed/django__django__5.0/blob//django/template/base.py#L197-L935)\n\n This snippet is from 'django/template/base.py' and shows exception handling within template rendering. It may be relevant to understand how exceptions are currently handled in template rendering to improve the error message for context processors.",
+        "context_relevance": 0.25,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer it completely to get a score of 10.\nSupporting Evidence: The RESPONSE provides a detailed explanation of how to improve the error message for incorrect context processors, which is the main focus of the PROMPT. It includes a high-level overview of the steps to implement the feature, a pseudo-code snippet illustrating the changes, and references to specific code snippets in the Django project that would be relevant to the changes. The RESPONSE is directly related to the PROMPT's request for a solution to make error messages more informative when a context processor returns the wrong type. It also addresses the suggestion to use try/except around the updates.update() line and mentions the need for tests to ensure the new behavior works as expected. The RESPONSE is comprehensive, relevant to the entire PROMPT, and provides a complete answer, thus deserving a score of 10."
+        },
+        "qa_relevance": 1.0
+    }
+}

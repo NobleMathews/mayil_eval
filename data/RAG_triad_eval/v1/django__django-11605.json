@@ -1,0 +1,240 @@
+{
+    "id": "django__django-11605",
+    "repo_name": "testbed/django__django__3.0",
+    "task_id": 6986621904954811163,
+    "title": "Filter by window expression should raise a descriptive error.",
+    "body": "Description\n\t\nDjango has a check that filter does not contain window expressions. \nBut it is shallow, neither right side of the expression nor combined expressions are checked.\nclass Employee(models.Model):\n\tgrade = models.IntegerField()\n# raises NotSupportedError\nEmployee.objects.annotate(\n\tprev_grade=Window(expression=Lag('grade'))\n).filter(prev_grade=F('grade'))\n# Do not raise anything, fail on database backend once executed.\nEmployee.objects.annotate(\n\tprev_grade=Window(expression=Lag('grade'))\n).filter(grade=F('prev_grade'))\nEmployee.objects.annotate(\n\tprev_grade=Window(expression=Lag('grade')),\n\tdec_grade=F('prev_grade') - Value(1)\n).filter(dec_grade=F('grade'))\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.0.git",
+    "requested_commit": "",
+    "mayil_response": "Doesn't seem like we have fully grasped all the specifics of this ticket \ud83d\ude15.                   But we've outlined some ideas that might help you get started:\n\n- Ensure that the `Window` expression is not used directly within the `filter` method, as this is not supported by Django ORM. Instead, use the `annotate` method to create a computed field and then filter on that field.\n- Modify the query to use `annotate` to create a computed field for the window expression, and then use `filter` on that computed field.\n\n```python\nfrom django.db.models import F, Window, Lag\nfrom django.db.models.functions import RowNumber\n\n# Correct usage with annotate and filter\nEmployee.objects.annotate(\n    prev_grade=Window(\n        expression=Lag('grade'),\n        order_by=F('id').asc()\n    )\n).filter(grade=F('prev_grade'))\n```\n\n- Ensure that the database backend being used supports window functions. If not, the `NotSupportedError` will be raised.\n- If the `NotSupportedError` is being raised due to a lack of backend support, consider either changing the database backend to one that supports window functions or rewriting the query to avoid using window functions.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models) \u2192 [sql](https://github.com/testbed/django__django__3.0/tree//django/db/models/sql)- [Lines 1277 - 1311](https://github.com/testbed/django__django__3.0/blob//django/db/models/sql/query.py#L1277-L1311)\n\n This snippet contains the check_filterable method which is responsible for raising errors if an expression cannot be used in a WHERE clause. It is likely that this method needs to be updated to handle window expressions properly.\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models)- [Lines 1698 - 1748](https://github.com/testbed/django__django__3.0/blob//django/db/models/expressions.py#L1698-L1748)\n\n This snippet defines the Window class and its initialization, which is relevant because the issue is related to window expressions not being checked properly in filter clauses. \n\n\n   - [Lines 1750 - 1810](https://github.com/testbed/django__django__3.0/blob//django/db/models/expressions.py#L1750-L1810)\n\n This snippet contains the as_sql method of the Window class, which is relevant for understanding how window expressions are converted to SQL and may need to be reviewed to ensure proper error handling.\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models) \u2192 [functions](https://github.com/testbed/django__django__3.0/tree//django/db/models/functions)- [Lines 1 - 120](https://github.com/testbed/django__django__3.0/blob//django/db/models/functions/window.py#L1-L120)\n\n This snippet defines the Lag window function used in the issue description. It may be necessary to review this to understand how window functions are defined and how they might interact with filter clauses.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000263,
+        "snippet_processor": 0.03901,
+        "issue_star_creation": 0.01774,
+        "issue_star_solver": 0.07738,
+        "bouncer": 0.02554
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711728338.6365929,
+        "relevant_snippets": [
+            {
+                "code": "from django.db.models.expressions import Func\nfrom django.db.models.fields import FloatField, IntegerField\n\n__all__ = [\n    \"CumeDist\",\n    \"DenseRank\",\n    \"FirstValue\",\n    \"Lag\",\n    \"LastValue\",\n    \"Lead\",\n    \"NthValue\",\n    \"Ntile\",\n    \"PercentRank\",\n    \"Rank\",\n    \"RowNumber\",\n]\n\n\nclass CumeDist(Func):\n    function = \"CUME_DIST\"\n    output_field = FloatField()\n    window_compatible = True\n\n\nclass DenseRank(Func):\n    function = \"DENSE_RANK\"\n    output_field = IntegerField()\n    window_compatible = True\n\n\nclass FirstValue(Func):\n    arity = 1\n    function = \"FIRST_VALUE\"\n    window_compatible = True\n\n\nclass LagLeadFunction(Func):\n    window_compatible = True\n\n    def __init__(self, expression, offset=1, default=None, **extra):\n        if expression is None:\n            raise ValueError(\n                \"%s requires a non-null source expression.\" % self.__class__.__name__\n            )\n        if offset is None or offset <= 0:\n            raise ValueError(\n                \"%s requires a positive integer for the offset.\"\n                % self.__class__.__name__\n            )\n        args = (expression, offset)\n        if default is not None:\n            args += (default,)\n        super().__init__(*args, **extra)\n\n    def _resolve_output_field(self):\n        sources = self.get_source_expressions()\n        return sources[0].output_field\n\n\nclass Lag(LagLeadFunction):\n    function = \"LAG\"\n\n\nclass LastValue(Func):\n    arity = 1\n    function = \"LAST_VALUE\"\n    window_compatible = True\n\n\nclass Lead(LagLeadFunction):\n    function = \"LEAD\"\n\n\nclass NthValue(Func):\n    function = \"NTH_VALUE\"\n    window_compatible = True\n\n    def __init__(self, expression, nth=1, **extra):\n        if expression is None:\n            raise ValueError(\n                \"%s requires a non-null source expression.\" % self.__class__.__name__\n            )\n        if nth is None or nth <= 0:\n            raise ValueError(\n                \"%s requires a positive integer as for nth.\" % self.__class__.__name__\n            )\n        super().__init__(expression, nth, **extra)\n\n    def _resolve_output_field(self):\n        sources = self.get_source_expressions()\n        return sources[0].output_field\n\n\nclass Ntile(Func):\n    function = \"NTILE\"\n    output_field = IntegerField()\n    window_compatible = True\n\n    def __init__(self, num_buckets=1, **extra):\n        if num_buckets <= 0:\n            raise ValueError(\"num_buckets must be greater than 0.\")\n        super().__init__(num_buckets, **extra)\n\n\nclass PercentRank(Func):\n    function = \"PERCENT_RANK\"\n    output_field = FloatField()\n    window_compatible = True\n\n\nclass Rank(Func):\n    function = \"RANK\"\n    output_field = IntegerField()\n    window_compatible = True\n\n\nclass RowNumber(Func):\n    function = \"ROW_NUMBER\"\n    output_field = IntegerField()\n    window_compatible = True",
+                "filename": "django/db/models/functions/window.py",
+                "start_index": 0,
+                "end_index": 2840,
+                "start_line": 1,
+                "end_line": 120,
+                "max_line": 120,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "def as_sql(self, compiler, connection, template=None):\n        connection.ops.check_expression_support(self)\n        if not connection.features.supports_over_clause:\n            raise NotSupportedError(\"This backend does not support window expressions.\")\n        expr_sql, params = compiler.compile(self.source_expression)\n        window_sql, window_params = [], ()\n\n        if self.partition_by is not None:\n            sql_expr, sql_params = self.partition_by.as_sql(\n                compiler=compiler,\n                connection=connection,\n                template=\"PARTITION BY %(expressions)s\",\n            )\n            window_sql.append(sql_expr)\n            window_params += tuple(sql_params)\n\n        if self.order_by is not None:\n            order_sql, order_params = compiler.compile(self.order_by)\n            window_sql.append(order_sql)\n            window_params += tuple(order_params)\n\n        if self.frame:\n            frame_sql, frame_params = compiler.compile(self.frame)\n            window_sql.append(frame_sql)\n            window_params += tuple(frame_params)\n\n        template = template or self.template\n\n        return (\n            template % {\"expression\": expr_sql, \"window\": \" \".join(window_sql).strip()},\n            (*params, *window_params),\n        )\n\n    def as_sqlite(self, compiler, connection):\n        if isinstance(self.output_field, fields.DecimalField):\n            # Casting to numeric must be outside of the window expression.\n            copy = self.copy()\n            source_expressions = copy.get_source_expressions()\n            source_expressions[0].output_field = fields.FloatField()\n            copy.set_source_expressions(source_expressions)\n            return super(Window, copy).as_sqlite(compiler, connection)\n        return self.as_sql(compiler, connection)\n\n    def __str__(self):\n        return \"{} OVER ({}{}{})\".format(\n            str(self.source_expression),\n            \"PARTITION BY \" + str(self.partition_by) if self.partition_by else \"\",\n            str(self.order_by or \"\"),\n            str(self.frame or \"\"),\n        )\n\n    def __repr__(self):\n        return \"<%s: %s>\" % (self.__class__.__name__, self)\n\n    def get_group_by_cols(self):\n        group_by_cols = []\n        if self.partition_by:\n            group_by_cols.extend(self.partition_by.get_group_by_cols())\n        if self.order_by is not None:\n            group_by_cols.extend(self.order_by.get_group_by_cols())\n        return group_by_cols",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 60382,
+                "end_index": 62850,
+                "start_line": 1750,
+                "end_line": 1810,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "class WindowFrame(Expression):\n    \"\"\"\n    Model the frame clause in window expressions. There are two types of frame\n    clauses which are subclasses, however, all processing and validation (by no\n    means intended to be complete) is done here. Thus, providing an end for a\n    frame is optional (the default is UNBOUNDED FOLLOWING, which is the last\n    row in the frame).\n    \"\"\"\n\n    template = \"%(frame_type)s BETWEEN %(start)s AND %(end)s\"\n\n    def __init__(self, start=None, end=None):\n        self.start = Value(start)\n        self.end = Value(end)\n\n    def set_source_expressions(self, exprs):\n        self.start, self.end = exprs\n\n    def get_source_expressions(self):\n        return [self.start, self.end]\n\n    def as_sql(self, compiler, connection):\n        connection.ops.check_expression_support(self)\n        start, end = self.window_frame_start_end(\n            connection, self.start.value, self.end.value\n        )\n        return (\n            self.template\n            % {\n                \"frame_type\": self.frame_type,\n                \"start\": start,\n                \"end\": end,\n            },\n            [],\n        )\n\n    def __repr__(self):\n        return \"<%s: %s>\" % (self.__class__.__name__, self)\n\n    def get_group_by_cols(self):\n        return []\n\n    def __str__(self):\n        if self.start.value is not None and self.start.value < 0:\n            start = \"%d %s\" % (abs(self.start.value), connection.ops.PRECEDING)\n        elif self.start.value is not None and self.start.value == 0:\n            start = connection.ops.CURRENT_ROW\n        else:\n            start = connection.ops.UNBOUNDED_PRECEDING\n\n        if self.end.value is not None and self.end.value > 0:\n            end = \"%d %s\" % (self.end.value, connection.ops.FOLLOWING)\n        elif self.end.value is not None and self.end.value == 0:\n            end = connection.ops.CURRENT_ROW\n        else:\n            end = connection.ops.UNBOUNDED_FOLLOWING\n        return self.template % {\n            \"frame_type\": self.frame_type,\n            \"start\": start,\n            \"end\": end,\n        }\n\n    def window_frame_start_end(self, connection, start, end):\n        raise NotImplementedError(\"Subclasses must implement window_frame_start_end().\")\n\n\nclass RowRange(WindowFrame):\n    frame_type = \"ROWS\"\n\n    def window_frame_start_end(self, connection, start, end):\n        return connection.ops.window_frame_rows_start_end(start, end)\n\n\nclass ValueRange(WindowFrame):\n    frame_type = \"RANGE\"\n\n    def window_frame_start_end(self, connection, start, end):\n        return connection.ops.window_frame_range_start_end(start, end)",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 62853,
+                "end_index": 65466,
+                "start_line": 1813,
+                "end_line": 1890,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "template = \"%(expression)s OVER (%(window)s)\"\n    # Although the main expression may either be an aggregate or an\n    # expression with an aggregate function, the GROUP BY that will\n    # be introduced in the query as a result is not desired.\n    contains_aggregate = False\n    contains_over_clause = True\n\n    def __init__(\n        self,\n        expression,\n        partition_by=None,\n        order_by=None,\n        frame=None,\n        output_field=None,\n    ):\n        self.partition_by = partition_by\n        self.order_by = order_by\n        self.frame = frame\n\n        if not getattr(expression, \"window_compatible\", False):\n            raise ValueError(\n                \"Expression '%s' isn't compatible with OVER clauses.\"\n                % expression.__class__.__name__\n            )\n\n        if self.partition_by is not None:\n            if not isinstance(self.partition_by, (tuple, list)):\n                self.partition_by = (self.partition_by,)\n            self.partition_by = ExpressionList(*self.partition_by)\n\n        if self.order_by is not None:\n            if isinstance(self.order_by, (list, tuple)):\n                self.order_by = OrderByList(*self.order_by)\n            elif isinstance(self.order_by, (BaseExpression, str)):\n                self.order_by = OrderByList(self.order_by)\n            else:\n                raise ValueError(\n                    \"Window.order_by must be either a string reference to a \"\n                    \"field, an expression, or a list or tuple of them.\"\n                )\n        super().__init__(output_field=output_field)\n        self.source_expression = self._parse_expressions(expression)[0]\n\n    def _resolve_output_field(self):\n        return self.source_expression.output_field\n\n    def get_source_expressions(self):\n        return [self.source_expression, self.partition_by, self.order_by, self.frame]\n\n    def set_source_expressions(self, exprs):\n        self.source_expression, self.partition_by, self.order_by, self.frame = exprs",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 58383,
+                "end_index": 60376,
+                "start_line": 1698,
+                "end_line": 1748,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def check_related_objects(self, field, value, opts):\n        \"\"\"Check the type of object passed to query relations.\"\"\"\n        if field.is_relation:\n            # Check that the field and the queryset use the same model in a\n            # query like .filter(author=Author.objects.all()). For example, the\n            # opts would be Author's (from the author field) and value.model\n            # would be Author.objects.all() queryset's .model (Author also).\n            # The field is the related field on the lhs side.\n            if (\n                isinstance(value, Query)\n                and not value.has_select_fields\n                and not check_rel_lookup_compatibility(value.model, opts, field)\n            ):\n                raise ValueError(\n                    'Cannot use QuerySet for \"%s\": Use a QuerySet for \"%s\".'\n                    % (value.model._meta.object_name, opts.object_name)\n                )\n            elif hasattr(value, \"_meta\"):\n                self.check_query_object_type(value, opts, field)\n            elif hasattr(value, \"__iter__\"):\n                for v in value:\n                    self.check_query_object_type(v, opts, field)\n\n    def check_filterable(self, expression):\n        \"\"\"Raise an error if expression cannot be used in a WHERE clause.\"\"\"\n        if hasattr(expression, \"resolve_expression\") and not getattr(\n            expression, \"filterable\", True\n        ):\n            raise NotSupportedError(\n                expression.__class__.__name__ + \" is disallowed in the filter \"\n                \"clause.\"\n            )\n        if hasattr(expression, \"get_source_expressions\"):\n            for expr in expression.get_source_expressions():\n                self.check_filterable(expr)",
+                "filename": "django/db/models/sql/query.py",
+                "start_index": 53408,
+                "end_index": 55146,
+                "start_line": 1277,
+                "end_line": 1311,
+                "max_line": 2687,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "template = \"%(function)s(%(distinct)s%(expressions)s)\"\n    contains_aggregate = True\n    name = None\n    filter_template = \"%s FILTER (WHERE %%(filter)s)\"\n    window_compatible = True\n    allow_distinct = False\n    empty_result_set_value = None\n\n    def __init__(\n        self, *expressions, distinct=False, filter=None, default=None, **extra\n    ):\n        if distinct and not self.allow_distinct:\n            raise TypeError(\"%s does not allow distinct.\" % self.__class__.__name__)\n        if default is not None and self.empty_result_set_value is not None:\n            raise TypeError(f\"{self.__class__.__name__} does not allow default.\")\n        self.distinct = distinct\n        self.filter = filter\n        self.default = default\n        super().__init__(*expressions, **extra)\n\n    def get_source_fields(self):\n        # Don't return the filter expression since it's not a source field.\n        return [e._output_field_or_none for e in super().get_source_expressions()]\n\n    def get_source_expressions(self):\n        source_expressions = super().get_source_expressions()\n        if self.filter:\n            return source_expressions + [self.filter]\n        return source_expressions\n\n    def set_source_expressions(self, exprs):\n        self.filter = self.filter and exprs.pop()\n        return super().set_source_expressions(exprs)",
+                "filename": "django/db/models/aggregates.py",
+                "start_index": 563,
+                "end_index": 1900,
+                "start_line": 26,
+                "end_line": 58,
+                "max_line": 210,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class Window(SQLiteNumericMixin, Expression):",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 58333,
+                "end_index": 58378,
+                "start_line": 1697,
+                "end_line": 1697,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"Database functions that do comparisons or type conversions.\"\"\"\nfrom django.db import NotSupportedError\nfrom django.db.models.expressions import Func, Value\nfrom django.db.models.fields import TextField\nfrom django.db.models.fields.json import JSONField\nfrom django.utils.regex_helper import _lazy_re_compile",
+                "filename": "django/db/models/functions/comparison.py",
+                "start_index": 0,
+                "end_index": 310,
+                "start_line": 1,
+                "end_line": 6,
+                "max_line": 221,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from types import NoneType\n\nfrom django.contrib.postgres.indexes import OpClass\nfrom django.core.exceptions import ValidationError\nfrom django.db import DEFAULT_DB_ALIAS, NotSupportedError\nfrom django.db.backends.ddl_references import Expressions, Statement, Table\nfrom django.db.models import BaseConstraint, Deferrable, F, Q\nfrom django.db.models.expressions import Exists, ExpressionList\nfrom django.db.models.indexes import IndexExpression\nfrom django.db.models.lookups import PostgresOperatorLookup\nfrom django.db.models.sql import Query\n\n__all__ = [\"ExclusionConstraint\"]\n\n\nclass ExclusionConstraintExpression(IndexExpression):\n    template = \"%(expressions)s WITH %(operator)s\"",
+                "filename": "django/contrib/postgres/constraints.py",
+                "start_index": 0,
+                "end_index": 684,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 227,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.contrib.gis.db.models.fields import BaseSpatialField\nfrom django.contrib.gis.measure import Distance\nfrom django.db import NotSupportedError\nfrom django.db.models import Expression, Lookup, Transform\nfrom django.db.models.sql.query import Query\nfrom django.utils.regex_helper import _lazy_re_compile\n\n\nclass RasterBandTransform(Transform):\n    def as_sql(self, compiler, connection):\n        return compiler.compile(self.lhs)",
+                "filename": "django/contrib/gis/db/models/lookups.py",
+                "start_index": 0,
+                "end_index": 437,
+                "start_line": 1,
+                "end_line": 11,
+                "max_line": 395,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.0
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/models/sql/query.py": [
+                {
+                    "chunk": {
+                        "code": "def check_related_objects(self, field, value, opts):\n        \"\"\"Check the type of object passed to query relations.\"\"\"\n        if field.is_relation:\n            # Check that the field and the queryset use the same model in a\n            # query like .filter(author=Author.objects.all()). For example, the\n            # opts would be Author's (from the author field) and value.model\n            # would be Author.objects.all() queryset's .model (Author also).\n            # The field is the related field on the lhs side.\n            if (\n                isinstance(value, Query)\n                and not value.has_select_fields\n                and not check_rel_lookup_compatibility(value.model, opts, field)\n            ):\n                raise ValueError(\n                    'Cannot use QuerySet for \"%s\": Use a QuerySet for \"%s\".'\n                    % (value.model._meta.object_name, opts.object_name)\n                )\n            elif hasattr(value, \"_meta\"):\n                self.check_query_object_type(value, opts, field)\n            elif hasattr(value, \"__iter__\"):\n                for v in value:\n                    self.check_query_object_type(v, opts, field)\n\n    def check_filterable(self, expression):\n        \"\"\"Raise an error if expression cannot be used in a WHERE clause.\"\"\"\n        if hasattr(expression, \"resolve_expression\") and not getattr(\n            expression, \"filterable\", True\n        ):\n            raise NotSupportedError(\n                expression.__class__.__name__ + \" is disallowed in the filter \"\n                \"clause.\"\n            )\n        if hasattr(expression, \"get_source_expressions\"):\n            for expr in expression.get_source_expressions():\n                self.check_filterable(expr)",
+                        "filename": "django/db/models/sql/query.py",
+                        "start_index": 53408,
+                        "end_index": 55146,
+                        "start_line": 1277,
+                        "end_line": 1311,
+                        "max_line": 2687,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the check_filterable method which is responsible for raising errors if an expression cannot be used in a WHERE clause. It is likely that this method needs to be updated to handle window expressions properly."
+                }
+            ],
+            "django/db/models/expressions.py": [
+                {
+                    "chunk": {
+                        "code": "template = \"%(expression)s OVER (%(window)s)\"\n    # Although the main expression may either be an aggregate or an\n    # expression with an aggregate function, the GROUP BY that will\n    # be introduced in the query as a result is not desired.\n    contains_aggregate = False\n    contains_over_clause = True\n\n    def __init__(\n        self,\n        expression,\n        partition_by=None,\n        order_by=None,\n        frame=None,\n        output_field=None,\n    ):\n        self.partition_by = partition_by\n        self.order_by = order_by\n        self.frame = frame\n\n        if not getattr(expression, \"window_compatible\", False):\n            raise ValueError(\n                \"Expression '%s' isn't compatible with OVER clauses.\"\n                % expression.__class__.__name__\n            )\n\n        if self.partition_by is not None:\n            if not isinstance(self.partition_by, (tuple, list)):\n                self.partition_by = (self.partition_by,)\n            self.partition_by = ExpressionList(*self.partition_by)\n\n        if self.order_by is not None:\n            if isinstance(self.order_by, (list, tuple)):\n                self.order_by = OrderByList(*self.order_by)\n            elif isinstance(self.order_by, (BaseExpression, str)):\n                self.order_by = OrderByList(self.order_by)\n            else:\n                raise ValueError(\n                    \"Window.order_by must be either a string reference to a \"\n                    \"field, an expression, or a list or tuple of them.\"\n                )\n        super().__init__(output_field=output_field)\n        self.source_expression = self._parse_expressions(expression)[0]\n\n    def _resolve_output_field(self):\n        return self.source_expression.output_field\n\n    def get_source_expressions(self):\n        return [self.source_expression, self.partition_by, self.order_by, self.frame]\n\n    def set_source_expressions(self, exprs):\n        self.source_expression, self.partition_by, self.order_by, self.frame = exprs",
+                        "filename": "django/db/models/expressions.py",
+                        "start_index": 58383,
+                        "end_index": 60376,
+                        "start_line": 1698,
+                        "end_line": 1748,
+                        "max_line": 1890,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the Window class and its initialization, which is relevant because the issue is related to window expressions not being checked properly in filter clauses."
+                },
+                {
+                    "chunk": {
+                        "code": "def as_sql(self, compiler, connection, template=None):\n        connection.ops.check_expression_support(self)\n        if not connection.features.supports_over_clause:\n            raise NotSupportedError(\"This backend does not support window expressions.\")\n        expr_sql, params = compiler.compile(self.source_expression)\n        window_sql, window_params = [], ()\n\n        if self.partition_by is not None:\n            sql_expr, sql_params = self.partition_by.as_sql(\n                compiler=compiler,\n                connection=connection,\n                template=\"PARTITION BY %(expressions)s\",\n            )\n            window_sql.append(sql_expr)\n            window_params += tuple(sql_params)\n\n        if self.order_by is not None:\n            order_sql, order_params = compiler.compile(self.order_by)\n            window_sql.append(order_sql)\n            window_params += tuple(order_params)\n\n        if self.frame:\n            frame_sql, frame_params = compiler.compile(self.frame)\n            window_sql.append(frame_sql)\n            window_params += tuple(frame_params)\n\n        template = template or self.template\n\n        return (\n            template % {\"expression\": expr_sql, \"window\": \" \".join(window_sql).strip()},\n            (*params, *window_params),\n        )\n\n    def as_sqlite(self, compiler, connection):\n        if isinstance(self.output_field, fields.DecimalField):\n            # Casting to numeric must be outside of the window expression.\n            copy = self.copy()\n            source_expressions = copy.get_source_expressions()\n            source_expressions[0].output_field = fields.FloatField()\n            copy.set_source_expressions(source_expressions)\n            return super(Window, copy).as_sqlite(compiler, connection)\n        return self.as_sql(compiler, connection)\n\n    def __str__(self):\n        return \"{} OVER ({}{}{})\".format(\n            str(self.source_expression),\n            \"PARTITION BY \" + str(self.partition_by) if self.partition_by else \"\",\n            str(self.order_by or \"\"),\n            str(self.frame or \"\"),\n        )\n\n    def __repr__(self):\n        return \"<%s: %s>\" % (self.__class__.__name__, self)\n\n    def get_group_by_cols(self):\n        group_by_cols = []\n        if self.partition_by:\n            group_by_cols.extend(self.partition_by.get_group_by_cols())\n        if self.order_by is not None:\n            group_by_cols.extend(self.order_by.get_group_by_cols())\n        return group_by_cols",
+                        "filename": "django/db/models/expressions.py",
+                        "start_index": 60382,
+                        "end_index": 62850,
+                        "start_line": 1750,
+                        "end_line": 1810,
+                        "max_line": 1890,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the as_sql method of the Window class, which is relevant for understanding how window expressions are converted to SQL and may need to be reviewed to ensure proper error handling."
+                }
+            ],
+            "django/db/models/functions/window.py": [
+                {
+                    "chunk": {
+                        "code": "from django.db.models.expressions import Func\nfrom django.db.models.fields import FloatField, IntegerField\n\n__all__ = [\n    \"CumeDist\",\n    \"DenseRank\",\n    \"FirstValue\",\n    \"Lag\",\n    \"LastValue\",\n    \"Lead\",\n    \"NthValue\",\n    \"Ntile\",\n    \"PercentRank\",\n    \"Rank\",\n    \"RowNumber\",\n]\n\n\nclass CumeDist(Func):\n    function = \"CUME_DIST\"\n    output_field = FloatField()\n    window_compatible = True\n\n\nclass DenseRank(Func):\n    function = \"DENSE_RANK\"\n    output_field = IntegerField()\n    window_compatible = True\n\n\nclass FirstValue(Func):\n    arity = 1\n    function = \"FIRST_VALUE\"\n    window_compatible = True\n\n\nclass LagLeadFunction(Func):\n    window_compatible = True\n\n    def __init__(self, expression, offset=1, default=None, **extra):\n        if expression is None:\n            raise ValueError(\n                \"%s requires a non-null source expression.\" % self.__class__.__name__\n            )\n        if offset is None or offset <= 0:\n            raise ValueError(\n                \"%s requires a positive integer for the offset.\"\n                % self.__class__.__name__\n            )\n        args = (expression, offset)\n        if default is not None:\n            args += (default,)\n        super().__init__(*args, **extra)\n\n    def _resolve_output_field(self):\n        sources = self.get_source_expressions()\n        return sources[0].output_field\n\n\nclass Lag(LagLeadFunction):\n    function = \"LAG\"\n\n\nclass LastValue(Func):\n    arity = 1\n    function = \"LAST_VALUE\"\n    window_compatible = True\n\n\nclass Lead(LagLeadFunction):\n    function = \"LEAD\"\n\n\nclass NthValue(Func):\n    function = \"NTH_VALUE\"\n    window_compatible = True\n\n    def __init__(self, expression, nth=1, **extra):\n        if expression is None:\n            raise ValueError(\n                \"%s requires a non-null source expression.\" % self.__class__.__name__\n            )\n        if nth is None or nth <= 0:\n            raise ValueError(\n                \"%s requires a positive integer as for nth.\" % self.__class__.__name__\n            )\n        super().__init__(expression, nth, **extra)\n\n    def _resolve_output_field(self):\n        sources = self.get_source_expressions()\n        return sources[0].output_field\n\n\nclass Ntile(Func):\n    function = \"NTILE\"\n    output_field = IntegerField()\n    window_compatible = True\n\n    def __init__(self, num_buckets=1, **extra):\n        if num_buckets <= 0:\n            raise ValueError(\"num_buckets must be greater than 0.\")\n        super().__init__(num_buckets, **extra)\n\n\nclass PercentRank(Func):\n    function = \"PERCENT_RANK\"\n    output_field = FloatField()\n    window_compatible = True\n\n\nclass Rank(Func):\n    function = \"RANK\"\n    output_field = IntegerField()\n    window_compatible = True\n\n\nclass RowNumber(Func):\n    function = \"ROW_NUMBER\"\n    output_field = IntegerField()\n    window_compatible = True",
+                        "filename": "django/db/models/functions/window.py",
+                        "start_index": 0,
+                        "end_index": 2840,
+                        "start_line": 1,
+                        "end_line": 120,
+                        "max_line": 120,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the Lag window function used in the issue description. It may be necessary to review this to understand how window functions are defined and how they might interact with filter clauses."
+                }
+            ]
+        },
+        "solution_task": "- Ensure that the `Window` expression is not used directly within the `filter` method, as this is not supported by Django ORM. Instead, use the `annotate` method to create a computed field and then filter on that field.\n- Modify the query to use `annotate` to create a computed field for the window expression, and then use `filter` on that computed field.\n\n```python\nfrom django.db.models import F, Window, Lag\nfrom django.db.models.functions import RowNumber\n\n# Correct usage with annotate and filter\nEmployee.objects.annotate(\n    prev_grade=Window(\n        expression=Lag('grade'),\n        order_by=F('id').asc()\n    )\n).filter(grade=F('prev_grade'))\n```\n\n- Ensure that the database backend being used supports window functions. If not, the `NotSupportedError` will be raised.\n- If the `NotSupportedError` is being raised due to a lack of backend support, consider either changing the database backend to one that supports window functions or rewriting the query to avoid using window functions.",
+        "bouncer_response": {
+            "score": 2,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher. RESPONSES that are tangentially relevant but lack actionable content should receive scores between 1 and 3.",
+            "supporting_evidence": "The RESPONSE begins by providing general advice on using the `Window` expression with `annotate` and `filter`, which is not directly addressing the bug described in the PROMPT. The PROMPT is about the lack of a descriptive error when window expressions are used incorrectly in filter clauses, not about how to use window expressions correctly. The code snippet provided in the RESPONSE does not address the bug either, as it shows a correct usage example rather than a solution to the bug. The links to the Django codebase are relevant to the issue, but the RESPONSE does not provide actionable steps on what to do with these code snippets. It merely points out their relevance without further guidance on how to modify them to fix the bug. Therefore, the RESPONSE is tangentially relevant but lacks actionable content to resolve the described bug.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711728491.71932,
+        "result": "Doesn't seem like we have fully grasped all the specifics of this ticket \ud83d\ude15.                   But we've outlined some ideas that might help you get started:\n\n- Ensure that the `Window` expression is not used directly within the `filter` method, as this is not supported by Django ORM. Instead, use the `annotate` method to create a computed field and then filter on that field.\n- Modify the query to use `annotate` to create a computed field for the window expression, and then use `filter` on that computed field.\n\n```python\nfrom django.db.models import F, Window, Lag\nfrom django.db.models.functions import RowNumber\n\n# Correct usage with annotate and filter\nEmployee.objects.annotate(\n    prev_grade=Window(\n        expression=Lag('grade'),\n        order_by=F('id').asc()\n    )\n).filter(grade=F('prev_grade'))\n```\n\n- Ensure that the database backend being used supports window functions. If not, the `NotSupportedError` will be raised.\n- If the `NotSupportedError` is being raised due to a lack of backend support, consider either changing the database backend to one that supports window functions or rewriting the query to avoid using window functions.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models) \u2192 [sql](https://github.com/testbed/django__django__3.0/tree//django/db/models/sql)- [Lines 1277 - 1311](https://github.com/testbed/django__django__3.0/blob//django/db/models/sql/query.py#L1277-L1311)\n\n This snippet contains the check_filterable method which is responsible for raising errors if an expression cannot be used in a WHERE clause. It is likely that this method needs to be updated to handle window expressions properly.\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models)- [Lines 1698 - 1748](https://github.com/testbed/django__django__3.0/blob//django/db/models/expressions.py#L1698-L1748)\n\n This snippet defines the Window class and its initialization, which is relevant because the issue is related to window expressions not being checked properly in filter clauses. \n\n\n   - [Lines 1750 - 1810](https://github.com/testbed/django__django__3.0/blob//django/db/models/expressions.py#L1750-L1810)\n\n This snippet contains the as_sql method of the Window class, which is relevant for understanding how window expressions are converted to SQL and may need to be reviewed to ensure proper error handling.\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models) \u2192 [functions](https://github.com/testbed/django__django__3.0/tree//django/db/models/functions)- [Lines 1 - 120](https://github.com/testbed/django__django__3.0/blob//django/db/models/functions/window.py#L1-L120)\n\n This snippet defines the Lag window function used in the issue description. It may be necessary to review this to understand how window functions are defined and how they might interact with filter clauses.",
+        "context_relevance": 0.25,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE provides relevant context to some parts of the PROMPT but does not address the specific issue of the error handling for window expressions in Django's filter method.\nSupporting Evidence: The RESPONSE suggests using the `annotate` method correctly and checking for database backend support, which is related to the use of window expressions in Django. However, it does not address the main issue described in the PROMPT, which is the need for a descriptive error when window expressions are used incorrectly in the `filter` method. The RESPONSE also includes code snippets and links to the Django repository, which are somewhat relevant but do not directly address the error handling concern."
+        },
+        "qa_relevance": 0.2
+    }
+}

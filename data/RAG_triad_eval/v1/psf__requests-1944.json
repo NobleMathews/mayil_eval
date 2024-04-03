@@ -1,0 +1,208 @@
+{
+    "id": "psf__requests-1944",
+    "repo_name": "testbed/psf__requests__2.2",
+    "task_id": 1213680424581243008,
+    "title": "Why decode the response body of a redirect?",
+    "body": "Requests fails on the URL `http://www.whatbird.com/forum/index.php?/gallery/image/291517-foo/`, which is a 301 redirect to\n\n```\nhttp://www.whatbird.com/forum/index.php?/gallery/image/291517-title-paused-jewel-allens-hummingbird-a-backyard-bird-painting-in-oil-by-camille-engel/\n```\n\n. The issue seems to be that the server's initial 301 response has a header falsely claiming that the response body (a simple HTML page) is gzipped, when it's actually uncompressed.\n\nWhen resolving redirects, Requests does (in `requests.sessions.resolve_redirects`):\n\n```\nresp.content  # Consume socket so it can be released\n```\n\nwhich attempts to decode\n\nOne could legitimately say this is the server's problem. However, conceptually, why decode the response body of a redirect, which won't get returned? Other programs (Chromium, Firefox, `curl`) don't do this. For example, `curl` gives an error, as expected, when not following redirects:\n\n```\n$ curl --compressed 'http://www.whatbird.com/forum/index.php?/gallery/image/291517-foo/'\ncurl: (61) Error while processing content unencoding: invalid code lengths set\n```\n\nwhereas it works if you add the `--location` flag (follow redirects).\n# Example of error\n\n```\nPython 3.3.2+ (default, Oct  9 2013, 14:56:03) \n[GCC 4.8.1] on linux\nType \"help\", \"copyright\", \"credits\" or \"license\" for more information.\n>>> import requests ; requests.get('http://www.whatbird.com/forum/index.php?/gallery/image/291517-foo/')\nTraceback (most recent call last):\n  File \"./requests/packages/urllib3/response.py\", line 199, in read\n    data = self._decoder.decompress(data)\nzlib.error: Error -3 while decompressing data: incorrect header check\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"./requests/models.py\", line 629, in generate\n    for chunk in self.raw.stream(chunk_size, decode_content=True):\n  File \"./requests/packages/urllib3/response.py\", line 236, in stream\n    data = self.read(amt=amt, decode_content=decode_content)\n  File \"./requests/packages/urllib3/response.py\", line 204, in read\n    e)\nrequests.packages.urllib3.exceptions.DecodeError: ('Received response with content-encoding: gzip, but failed to decode it.', error('Error -3 while decompressing data: incorrect header check',))\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\n  File \"./requests/api.py\", line 55, in get\n    return request('get', url, **kwargs)\n  File \"./requests/api.py\", line 44, in request\n    return session.request(method=method, url=url, **kwargs)\n  File \"./requests/sessions.py\", line 393, in request\n    resp = self.send(prep, **send_kwargs)\n  File \"./requests/sessions.py\", line 496, in send\n    r = adapter.send(request, **kwargs)\n  File \"./requests/adapters.py\", line 391, in send\n    r.content\n  File \"./requests/models.py\", line 691, in content\n    self._content = bytes().join(self.iter_content(CONTENT_CHUNK_SIZE)) or bytes()\n  File \"./requests/models.py\", line 634, in generate\n    raise ContentDecodingError(e)\nrequests.exceptions.ContentDecodingError: ('Received response with content-encoding: gzip, but failed to decode it.', error('Error -3 while decompressing data: incorrect header check',))\n```\n\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/psf__requests__2.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `resolve_redirects` function in `requests/sessions.py` to handle the case where the server sends a 301 redirect with a header indicating gzip encoding but the body is not compressed.\n- Add a check to see if the `Content-Encoding` header is set to `gzip` and if the actual content is not compressed. If this is the case, avoid attempting to decode the content.\n- You may need to catch the `ContentDecodingError` and handle it by setting the `resp._content` to the raw read content without decoding it.\n- Ensure that the `resp.content` property can still be accessed without raising an error after this change.\n\nHere is a possible solution:\n\n```python\ndef resolve_redirects(\n    self,\n    resp,\n    req,\n    stream=False,\n    timeout=None,\n    verify=True,\n    cert=None,\n    proxies=None,\n    yield_requests=False,\n    **adapter_kwargs,\n):\n    # ... existing code ...\n\n    try:\n        resp.content  # Consume socket so it can be released\n    except ContentDecodingError:\n        if resp.headers.get('Content-Encoding') == 'gzip':\n            try:\n                # Attempt to decode with gzip\n                resp._content = zlib.decompress(resp.content, 16+zlib.MAX_WBITS)\n            except zlib.error:\n                # If decompression fails, set content to raw response content\n                resp._content = resp.raw.read(decode_content=False)\n        else:\n            raise\n\n    # ... existing code ...\n```\n\n- Place this modified code block inside the `resolve_redirects` function in the appropriate location, replacing the existing `try` block that consumes the socket.\n- This solution assumes that the `zlib` module is already imported; if not, add `import zlib` at the beginning of the file.\n\n### Code snippets to check\n\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 178 - 245](https://github.com/testbed/psf__requests__2.2/blob//requests/sessions.py#L178-L245)\n\n This snippet contains the line 'resp.content  # Consume socket so it can be released' which is directly related to the issue where the response body of a redirect is being decoded unnecessarily.\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 109 - 141](https://github.com/testbed/psf__requests__2.2/blob//requests/exceptions.py#L109-L141)\n\n This snippet defines the 'ContentDecodingError' which is being raised in the example of the error provided in the issue description.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0004255,
+        "snippet_processor": 0.06504,
+        "issue_star_creation": 0.03109,
+        "issue_star_solver": 0.06328,
+        "bouncer": 0.02698
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711761659.978731,
+        "relevant_snippets": [
+            {
+                "code": "prepared_request = req.copy()\n\n            # Update history and keep track of redirects.\n            # resp.history must ignore the original request in this loop\n            hist.append(resp)\n            resp.history = hist[1:]\n\n            try:\n                resp.content  # Consume socket so it can be released\n            except (ChunkedEncodingError, ContentDecodingError, RuntimeError):\n                resp.raw.read(decode_content=False)\n\n            if len(resp.history) >= self.max_redirects:\n                raise TooManyRedirects(\n                    f\"Exceeded {self.max_redirects} redirects.\", response=resp\n                )\n\n            # Release the connection back into the pool.\n            resp.close()\n\n            # Handle redirection without scheme (see: RFC 1808 Section 4)\n            if url.startswith(\"//\"):\n                parsed_rurl = urlparse(resp.url)\n                url = \":\".join([to_native_string(parsed_rurl.scheme), url])\n\n            # Normalize url case and attach previous fragment if needed (RFC 7231 7.1.2)\n            parsed = urlparse(url)\n            if parsed.fragment == \"\" and previous_fragment:\n                parsed = parsed._replace(fragment=previous_fragment)\n            elif parsed.fragment:\n                previous_fragment = parsed.fragment\n            url = parsed.geturl()\n\n            # Facilitate relative 'location' headers, as allowed by RFC 7231.\n            # (e.g. '/path/to/resource' instead of 'http://domain.tld/path/to/resource')\n            # Compliant with RFC3986, we percent encode the url.\n            if not parsed.netloc:\n                url = urljoin(resp.url, requote_uri(url))\n            else:\n                url = requote_uri(url)\n\n            prepared_request.url = to_native_string(url)\n\n            self.rebuild_method(prepared_request, resp)\n\n            # https://github.com/psf/requests/issues/1084\n            if resp.status_code not in (\n                codes.temporary_redirect,\n                codes.permanent_redirect,\n            ):\n                # https://github.com/psf/requests/issues/3490\n                purged_headers = (\"Content-Length\", \"Content-Type\", \"Transfer-Encoding\")\n                for header in purged_headers:\n                    prepared_request.headers.pop(header, None)\n                prepared_request.body = None\n\n            headers = prepared_request.headers\n            headers.pop(\"Cookie\", None)\n\n            # Extract any cookies sent on the response to the cookiejar\n            # in the new request. Because we've mutated our copied prepared\n            # request, use the old one that we haven't yet touched.\n            extract_cookies_to_jar(prepared_request._cookies, req, resp.raw)\n            merge_cookies(prepared_request._cookies, self.cookies)\n            prepared_request.prepare_cookies(prepared_request._cookies)\n\n            # Rebuild auth and proxy information.\n            proxies = self.rebuild_proxies(prepared_request, proxies)",
+                "filename": "requests/sessions.py",
+                "start_index": 5959,
+                "end_index": 8935,
+                "start_line": 178,
+                "end_line": 245,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def get_redirect_target(self, resp):\n        \"\"\"Receives a Response. Returns a redirect URI or ``None``\"\"\"\n        # Due to the nature of how requests processes redirects this method will\n        # be called at least once upon the original response and at least twice\n        # on each subsequent redirect response (if any).\n        # If a custom mixin is used to handle this logic, it may be advantageous\n        # to cache the redirect location onto the response object as a private\n        # attribute.\n        if resp.is_redirect:\n            location = resp.headers[\"location\"]\n            # Currently the underlying http module on py3 decode headers\n            # in latin1, but empirical evidence suggests that latin1 is very\n            # rarely used with non-ASCII characters in HTTP headers.\n            # It is more likely to get UTF8 header rather than latin1.\n            # This causes incorrect handling of UTF8 encoded location headers.\n            # To solve this, we re-encode the location in latin1.\n            location = location.encode(\"latin1\")\n            return to_native_string(location, \"utf8\")\n        return None\n\n    def should_strip_auth(self, old_url, new_url):\n        \"\"\"Decide whether Authorization header should be removed when redirecting\"\"\"\n        old_parsed = urlparse(old_url)\n        new_parsed = urlparse(new_url)\n        if old_parsed.hostname != new_parsed.hostname:\n            return True\n        # Special case: allow http -> https redirect when using the standard\n        # ports. This isn't specified by RFC 7235, but is kept to avoid\n        # breaking backwards compatibility with older versions of requests\n        # that allowed any redirects on the same host.\n        if (\n            old_parsed.scheme == \"http\"\n            and old_parsed.port in (80, None)\n            and new_parsed.scheme == \"https\"\n            and new_parsed.port in (443, None)\n        ):\n            return False\n\n        # Handle default port usage corresponding to scheme.\n        changed_port = old_parsed.port != new_parsed.port\n        changed_scheme = old_parsed.scheme != new_parsed.scheme\n        default_port = (DEFAULT_PORTS.get(old_parsed.scheme, None), None)\n        if (\n            not changed_scheme\n            and old_parsed.port in default_port\n            and new_parsed.port in default_port\n        ):\n            return False\n\n        # Standard case: root URI must match\n        return changed_port or changed_scheme",
+                "filename": "requests/sessions.py",
+                "start_index": 2997,
+                "end_index": 5463,
+                "start_line": 107,
+                "end_line": 157,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def rebuild_method(self, prepared_request, response):\n        \"\"\"When being redirected we may want to change the method of the request\n        based on certain specs or browser behavior.\n        \"\"\"\n        method = prepared_request.method\n\n        # https://tools.ietf.org/html/rfc7231#section-6.4.4\n        if response.status_code == codes.see_other and method != \"HEAD\":\n            method = \"GET\"\n\n        # Do what the browsers do, despite standards...\n        # First, turn 302s into GETs.\n        if response.status_code == codes.found and method != \"HEAD\":\n            method = \"GET\"\n\n        # Second, if a POST is responded to with a 301, turn it into a GET.\n        # This bizarre behaviour is explained in Issue 1704.\n        if response.status_code == codes.moved and method == \"POST\":\n            method = \"GET\"\n\n        prepared_request.method = method",
+                "filename": "requests/sessions.py",
+                "start_index": 12385,
+                "end_index": 13252,
+                "start_line": 334,
+                "end_line": 354,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def resolve_redirects(\n        self,\n        resp,\n        req,\n        stream=False,\n        timeout=None,\n        verify=True,\n        cert=None,\n        proxies=None,\n        yield_requests=False,\n        **adapter_kwargs,\n    ):",
+                "filename": "requests/sessions.py",
+                "start_index": 5469,
+                "end_index": 5701,
+                "start_line": 159,
+                "end_line": 520,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "self.rebuild_auth(prepared_request, resp)\n\n            # A failed tell() sets `_body_position` to `object()`. This non-None\n            # value ensures `rewindable` will be True, allowing us to raise an\n            # UnrewindableBodyError, instead of hanging the connection.\n            rewindable = prepared_request._body_position is not None and (\n                \"Content-Length\" in headers or \"Transfer-Encoding\" in headers\n            )\n\n            # Attempt to rewind consumed file-like object.\n            if rewindable:\n                rewind_body(prepared_request)\n\n            # Override the original request.\n            req = prepared_request\n\n            if yield_requests:\n                yield req\n            else:\n\n                resp = self.send(\n                    req,\n                    stream=stream,\n                    timeout=timeout,\n                    verify=verify,\n                    cert=cert,\n                    proxies=proxies,\n                    allow_redirects=False,\n                    **adapter_kwargs,\n                )\n\n                extract_cookies_to_jar(self.cookies, prepared_request, resp.raw)\n\n                # extract redirect url, if any, for the next loop\n                url = self.get_redirect_target(resp)\n                yield resp",
+                "filename": "requests/sessions.py",
+                "start_index": 8948,
+                "end_index": 10242,
+                "start_line": 246,
+                "end_line": 281,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "# .-. .-. .-. . . .-. .-. .-. .-.\n# |(  |-  |.| | | |-  `-.  |  `-.\n# ' ' `-' `-`.`-' `-' `-'  '  `-'\n\n__title__ = \"requests\"\n__description__ = \"Python HTTP for Humans.\"\n__url__ = \"https://requests.readthedocs.io\"\n__version__ = \"2.31.0\"\n__build__ = 0x023100\n__author__ = \"Kenneth Reitz\"\n__author_email__ = \"me@kennethreitz.org\"\n__license__ = \"Apache 2.0\"\n__copyright__ = \"Copyright Kenneth Reitz\"\n__cake__ = \"\\u2728 \\U0001f370 \\u2728\"",
+                "filename": "requests/__version__.py",
+                "start_index": 0,
+                "end_index": 434,
+                "start_line": 1,
+                "end_line": 14,
+                "max_line": 14,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ChunkedEncodingError(RequestException):\n    \"\"\"The server declared chunked encoding but sent an invalid chunk.\"\"\"\n\n\nclass ContentDecodingError(RequestException, BaseHTTPError):\n    \"\"\"Failed to decode response content.\"\"\"\n\n\nclass StreamConsumedError(RequestException, TypeError):\n    \"\"\"The content for this response was already consumed.\"\"\"\n\n\nclass RetryError(RequestException):\n    \"\"\"Custom retries logic failed\"\"\"\n\n\nclass UnrewindableBodyError(RequestException):\n    \"\"\"Requests encountered an error when trying to rewind a body.\"\"\"\n\n\n# Warnings\n\n\nclass RequestsWarning(Warning):\n    \"\"\"Base warning for Requests.\"\"\"\n\n\nclass FileModeWarning(RequestsWarning, DeprecationWarning):\n    \"\"\"A file was opened in text mode, but Requests determined its binary length.\"\"\"\n\n\nclass RequestsDependencyWarning(RequestsWarning):\n    \"\"\"An imported dependency doesn't match the expected version range.\"\"\"",
+                "filename": "requests/exceptions.py",
+                "start_index": 2910,
+                "end_index": 3810,
+                "start_line": 109,
+                "end_line": 141,
+                "max_line": 141,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def check_header_validity(header):\n    \"\"\"Verifies that header parts don't contain leading whitespace\n    reserved characters, or return characters.\n\n    :param header: tuple, in the format (name, value).\n    \"\"\"\n    name, value = header\n    _validate_header_part(header, name, 0)\n    _validate_header_part(header, value, 1)\n\n\ndef _validate_header_part(header, header_part, header_validator_index):\n    if isinstance(header_part, str):\n        validator = _HEADER_VALIDATORS_STR[header_validator_index]\n    elif isinstance(header_part, bytes):\n        validator = _HEADER_VALIDATORS_BYTE[header_validator_index]\n    else:\n        raise InvalidHeader(\n            f\"Header part ({header_part!r}) from {header} \"\n            f\"must be of type str or bytes, not {type(header_part)}\"\n        )\n\n    if not validator.match(header_part):\n        header_kind = \"name\" if header_validator_index == 0 else \"value\"\n        raise InvalidHeader(\n            f\"Invalid leading whitespace, reserved character(s), or return\"\n            f\"character(s) in header {header_kind}: {header_part!r}\"\n        )\n\n\ndef urldefragauth(url):\n    \"\"\"\n    Given a url remove the fragment and the authentication part.\n\n    :rtype: str\n    \"\"\"\n    scheme, netloc, path, params, query, fragment = urlparse(url)\n\n    # see func:`prepend_scheme_if_needed`\n    if not netloc:\n        netloc, path = path, netloc\n\n    netloc = netloc.rsplit(\"@\", 1)[-1]\n\n    return urlunparse((scheme, netloc, path, params, query, \"\"))\n\n\ndef rewind_body(prepared_request):\n    \"\"\"Move file pointer back to its recorded starting position\n    so it can be read again on redirect.\n    \"\"\"\n    body_seek = getattr(prepared_request.body, \"seek\", None)\n    if body_seek is not None and isinstance(\n        prepared_request._body_position, integer_types\n    ):\n        try:\n            body_seek(prepared_request._body_position)\n        except OSError:\n            raise UnrewindableBodyError(\n                \"An error occurred when rewinding request body for redirect.\"\n            )\n    else:\n        raise UnrewindableBodyError(\"Unable to rewind request body for redirect.\")",
+                "filename": "requests/utils.py",
+                "start_index": 31299,
+                "end_index": 33417,
+                "start_line": 1028,
+                "end_line": 1090,
+                "max_line": 1090,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nrequests.models\n~~~~~~~~~~~~~~~\n\nThis module contains the primary objects that power Requests.\n\"\"\"\n\nimport datetime\n\n# Import encoding now, to avoid implicit import later.\n# Implicit import within threads may cause LookupError when standard library is in a ZIP,\n# such as in Embedded Python. See https://github.com/psf/requests/issues/3578.\nimport encodings.idna  # noqa: F401\nfrom io import UnsupportedOperation\n\nfrom urllib3.exceptions import (\n    DecodeError,\n    LocationParseError,\n    ProtocolError,\n    ReadTimeoutError,\n    SSLError,\n)\nfrom urllib3.fields import RequestField\nfrom urllib3.filepost import encode_multipart_formdata\nfrom urllib3.util import parse_url\n\nfrom ._internal_utils import to_native_string, unicode_is_ascii\nfrom .auth import HTTPBasicAuth\nfrom .compat import (\n    Callable,\n    JSONDecodeError,\n    Mapping,\n    basestring,\n    builtin_str,\n    chardet,\n    cookielib,\n)\nfrom .compat import json as complexjson\nfrom .compat import urlencode, urlsplit, urlunparse\nfrom .cookies import _copy_cookie_jar, cookiejar_from_dict, get_cookie_header\nfrom .exceptions import (\n    ChunkedEncodingError,\n    ConnectionError,\n    ContentDecodingError,\n    HTTPError,\n    InvalidJSONError,\n    InvalidURL,\n)\nfrom .exceptions import JSONDecodeError as RequestsJSONDecodeError\nfrom .exceptions import MissingSchema\nfrom .exceptions import SSLError as RequestsSSLError\nfrom .exceptions import StreamConsumedError\nfrom .hooks import default_hooks\nfrom .status_codes import codes\nfrom .structures import CaseInsensitiveDict\nfrom .utils import (\n    check_header_validity,\n    get_auth_from_url,\n    guess_filename,\n    guess_json_utf,\n    iter_slices,\n    parse_header_links,\n    requote_uri,\n    stream_decode_response_unicode,\n    super_len,\n    to_key_val_list,\n)\n\n#: The set of HTTP status codes that indicate an automatically\n#: processable redirect.\nREDIRECT_STATI = (\n    codes.moved,  # 301\n    codes.found,  # 302\n    codes.other,  # 303\n    codes.temporary_redirect,  # 307\n    codes.permanent_redirect,  # 308\n)\n\nDEFAULT_REDIRECT_LIMIT = 30\nCONTENT_CHUNK_SIZE = 10 * 1024\nITER_CHUNK_SIZE = 512",
+                "filename": "requests/models.py",
+                "start_index": 0,
+                "end_index": 2124,
+                "start_line": 1,
+                "end_line": 81,
+                "max_line": 1034,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def rebuild_auth(self, prepared_request, response):\n        \"\"\"When being redirected we may want to strip authentication from the\n        request to avoid leaking credentials. This method intelligently removes\n        and reapplies authentication where possible to avoid credential loss.\n        \"\"\"\n        headers = prepared_request.headers\n        url = prepared_request.url\n\n        if \"Authorization\" in headers and self.should_strip_auth(\n            response.request.url, url\n        ):\n            # If we get redirected to a new host, we should strip out any\n            # authentication headers.\n            del headers[\"Authorization\"]\n\n        # .netrc might have more auth for us on our new host.\n        new_auth = get_netrc_auth(url) if self.trust_env else None\n        if new_auth is not None:\n            prepared_request.prepare_auth(new_auth)\n\n    def rebuild_proxies(self, prepared_request, proxies):\n        \"\"\"This method re-evaluates the proxy configuration by considering the\n        environment variables. If we are redirected to a URL covered by\n        NO_PROXY, we strip the proxy configuration. Otherwise, we set missing\n        proxy keys for this URL (in case they were stripped by a previous\n        redirect).\n\n        This method also replaces the Proxy-Authorization header where\n        necessary.\n\n        :rtype: dict\n        \"\"\"\n        headers = prepared_request.headers\n        scheme = urlparse(prepared_request.url).scheme\n        new_proxies = resolve_proxies(prepared_request, proxies, self.trust_env)\n\n        if \"Proxy-Authorization\" in headers:\n            del headers[\"Proxy-Authorization\"]\n\n        try:\n            username, password = get_auth_from_url(new_proxies[scheme])\n        except KeyError:\n            username, password = None, None\n\n        # urllib3 handles proxy authorization for us in the standard adapter.\n        # Avoid appending this to TLS tunneled requests where it may be leaked.\n        if not scheme.startswith(\"https\") and username and password:\n            headers[\"Proxy-Authorization\"] = _basic_auth_str(username, password)\n\n        return new_proxies",
+                "filename": "requests/sessions.py",
+                "start_index": 10248,
+                "end_index": 12379,
+                "start_line": 283,
+                "end_line": 332,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "requests/sessions.py": [
+                {
+                    "chunk": {
+                        "code": "prepared_request = req.copy()\n\n            # Update history and keep track of redirects.\n            # resp.history must ignore the original request in this loop\n            hist.append(resp)\n            resp.history = hist[1:]\n\n            try:\n                resp.content  # Consume socket so it can be released\n            except (ChunkedEncodingError, ContentDecodingError, RuntimeError):\n                resp.raw.read(decode_content=False)\n\n            if len(resp.history) >= self.max_redirects:\n                raise TooManyRedirects(\n                    f\"Exceeded {self.max_redirects} redirects.\", response=resp\n                )\n\n            # Release the connection back into the pool.\n            resp.close()\n\n            # Handle redirection without scheme (see: RFC 1808 Section 4)\n            if url.startswith(\"//\"):\n                parsed_rurl = urlparse(resp.url)\n                url = \":\".join([to_native_string(parsed_rurl.scheme), url])\n\n            # Normalize url case and attach previous fragment if needed (RFC 7231 7.1.2)\n            parsed = urlparse(url)\n            if parsed.fragment == \"\" and previous_fragment:\n                parsed = parsed._replace(fragment=previous_fragment)\n            elif parsed.fragment:\n                previous_fragment = parsed.fragment\n            url = parsed.geturl()\n\n            # Facilitate relative 'location' headers, as allowed by RFC 7231.\n            # (e.g. '/path/to/resource' instead of 'http://domain.tld/path/to/resource')\n            # Compliant with RFC3986, we percent encode the url.\n            if not parsed.netloc:\n                url = urljoin(resp.url, requote_uri(url))\n            else:\n                url = requote_uri(url)\n\n            prepared_request.url = to_native_string(url)\n\n            self.rebuild_method(prepared_request, resp)\n\n            # https://github.com/psf/requests/issues/1084\n            if resp.status_code not in (\n                codes.temporary_redirect,\n                codes.permanent_redirect,\n            ):\n                # https://github.com/psf/requests/issues/3490\n                purged_headers = (\"Content-Length\", \"Content-Type\", \"Transfer-Encoding\")\n                for header in purged_headers:\n                    prepared_request.headers.pop(header, None)\n                prepared_request.body = None\n\n            headers = prepared_request.headers\n            headers.pop(\"Cookie\", None)\n\n            # Extract any cookies sent on the response to the cookiejar\n            # in the new request. Because we've mutated our copied prepared\n            # request, use the old one that we haven't yet touched.\n            extract_cookies_to_jar(prepared_request._cookies, req, resp.raw)\n            merge_cookies(prepared_request._cookies, self.cookies)\n            prepared_request.prepare_cookies(prepared_request._cookies)\n\n            # Rebuild auth and proxy information.\n            proxies = self.rebuild_proxies(prepared_request, proxies)",
+                        "filename": "requests/sessions.py",
+                        "start_index": 5959,
+                        "end_index": 8935,
+                        "start_line": 178,
+                        "end_line": 245,
+                        "max_line": 835,
+                        "git_instance": "github",
+                        "repo_name": "testbed/psf__requests__2.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the line 'resp.content  # Consume socket so it can be released' which is directly related to the issue where the response body of a redirect is being decoded unnecessarily."
+                }
+            ],
+            "requests/exceptions.py": [
+                {
+                    "chunk": {
+                        "code": "class ChunkedEncodingError(RequestException):\n    \"\"\"The server declared chunked encoding but sent an invalid chunk.\"\"\"\n\n\nclass ContentDecodingError(RequestException, BaseHTTPError):\n    \"\"\"Failed to decode response content.\"\"\"\n\n\nclass StreamConsumedError(RequestException, TypeError):\n    \"\"\"The content for this response was already consumed.\"\"\"\n\n\nclass RetryError(RequestException):\n    \"\"\"Custom retries logic failed\"\"\"\n\n\nclass UnrewindableBodyError(RequestException):\n    \"\"\"Requests encountered an error when trying to rewind a body.\"\"\"\n\n\n# Warnings\n\n\nclass RequestsWarning(Warning):\n    \"\"\"Base warning for Requests.\"\"\"\n\n\nclass FileModeWarning(RequestsWarning, DeprecationWarning):\n    \"\"\"A file was opened in text mode, but Requests determined its binary length.\"\"\"\n\n\nclass RequestsDependencyWarning(RequestsWarning):\n    \"\"\"An imported dependency doesn't match the expected version range.\"\"\"",
+                        "filename": "requests/exceptions.py",
+                        "start_index": 2910,
+                        "end_index": 3810,
+                        "start_line": 109,
+                        "end_line": 141,
+                        "max_line": 141,
+                        "git_instance": "github",
+                        "repo_name": "testbed/psf__requests__2.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the 'ContentDecodingError' which is being raised in the example of the error provided in the issue description."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `resolve_redirects` function in `requests/sessions.py` to handle the case where the server sends a 301 redirect with a header indicating gzip encoding but the body is not compressed.\n- Add a check to see if the `Content-Encoding` header is set to `gzip` and if the actual content is not compressed. If this is the case, avoid attempting to decode the content.\n- You may need to catch the `ContentDecodingError` and handle it by setting the `resp._content` to the raw read content without decoding it.\n- Ensure that the `resp.content` property can still be accessed without raising an error after this change.\n\nHere is a possible solution:\n\n```python\ndef resolve_redirects(\n    self,\n    resp,\n    req,\n    stream=False,\n    timeout=None,\n    verify=True,\n    cert=None,\n    proxies=None,\n    yield_requests=False,\n    **adapter_kwargs,\n):\n    # ... existing code ...\n\n    try:\n        resp.content  # Consume socket so it can be released\n    except ContentDecodingError:\n        if resp.headers.get('Content-Encoding') == 'gzip':\n            try:\n                # Attempt to decode with gzip\n                resp._content = zlib.decompress(resp.content, 16+zlib.MAX_WBITS)\n            except zlib.error:\n                # If decompression fails, set content to raw response content\n                resp._content = resp.raw.read(decode_content=False)\n        else:\n            raise\n\n    # ... existing code ...\n```\n\n- Place this modified code block inside the `resolve_redirects` function in the appropriate location, replacing the existing `try` block that consumes the socket.\n- This solution assumes that the `zlib` module is already imported; if not, add `import zlib` at the beginning of the file.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable solution to the problem described in the PROMPT. It suggests modifying the 'resolve_redirects' function to handle the specific case where the server sends a 301 redirect with incorrect gzip encoding in the header. The RESPONSE includes a code snippet that adds a check for the 'Content-Encoding' header and handles the 'ContentDecodingError' by setting the 'resp._content' to the raw read content without decoding. This is a direct and relevant solution to the problem of the Requests library failing to handle the redirect properly due to the server's incorrect header. The RESPONSE also correctly identifies the need to import the 'zlib' module if it's not already present, which is necessary for the proposed solution to work. The RESPONSE is comprehensive and addresses all aspects of the described bug, facilitating its resolution.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711761720.346569,
+        "result": "- Modify the `resolve_redirects` function in `requests/sessions.py` to handle the case where the server sends a 301 redirect with a header indicating gzip encoding but the body is not compressed.\n- Add a check to see if the `Content-Encoding` header is set to `gzip` and if the actual content is not compressed. If this is the case, avoid attempting to decode the content.\n- You may need to catch the `ContentDecodingError` and handle it by setting the `resp._content` to the raw read content without decoding it.\n- Ensure that the `resp.content` property can still be accessed without raising an error after this change.\n\nHere is a possible solution:\n\n```python\ndef resolve_redirects(\n    self,\n    resp,\n    req,\n    stream=False,\n    timeout=None,\n    verify=True,\n    cert=None,\n    proxies=None,\n    yield_requests=False,\n    **adapter_kwargs,\n):\n    # ... existing code ...\n\n    try:\n        resp.content  # Consume socket so it can be released\n    except ContentDecodingError:\n        if resp.headers.get('Content-Encoding') == 'gzip':\n            try:\n                # Attempt to decode with gzip\n                resp._content = zlib.decompress(resp.content, 16+zlib.MAX_WBITS)\n            except zlib.error:\n                # If decompression fails, set content to raw response content\n                resp._content = resp.raw.read(decode_content=False)\n        else:\n            raise\n\n    # ... existing code ...\n```\n\n- Place this modified code block inside the `resolve_redirects` function in the appropriate location, replacing the existing `try` block that consumes the socket.\n- This solution assumes that the `zlib` module is already imported; if not, add `import zlib` at the beginning of the file.\n\n### Code snippets to check\n\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 178 - 245](https://github.com/testbed/psf__requests__2.2/blob//requests/sessions.py#L178-L245)\n\n This snippet contains the line 'resp.content  # Consume socket so it can be released' which is directly related to the issue where the response body of a redirect is being decoded unnecessarily.\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 109 - 141](https://github.com/testbed/psf__requests__2.2/blob//requests/exceptions.py#L109-L141)\n\n This snippet defines the 'ContentDecodingError' which is being raised in the example of the error provided in the issue description.",
+        "context_relevance": 0.2,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant to some parts of the PROMPT but does not address the conceptual question asked.\nSupporting Evidence: The RESPONSE provides a technical solution to the problem described in the PROMPT, suggesting modifications to the `resolve_redirects` function to handle the specific error case. However, it does not address the conceptual question of why one would decode the response body of a redirect in the first place, which is the core of the PROMPT. The RESPONSE is relevant to the error and the code modification but not to the conceptual discussion, hence the score of 2."
+        },
+        "qa_relevance": 0.2
+    }
+}

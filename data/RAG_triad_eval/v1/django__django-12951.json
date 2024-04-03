@@ -1,0 +1,221 @@
+{
+    "id": "django__django-12951",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 6602775626453519150,
+    "title": "Cannot mix Exists expression with keyword arguments to When",
+    "body": "Description\n\t \n\t\t(last modified by Ryan Heard)\n\t \nI don't seem to be able to provide an Exists expression to When alongside keyword arguments like you can with filter. For instance, consider:\nclass State(models.Model):\n pass\nclass County(models.Model):\n name = CharField(max_length=50)\n state = ForeignKey(State, related_name='counties')\nI can execute the following query just fine:\nCounty.objects.filter(\n Exists(State.objects.filter(counties=OuterRef('pk'), name=\"Texas\")),\n name=\"Dallas\",\n)\nBut a similar query using When does not work:\n>>> County.objects.annotate(\n status=Case(\n\tWhen(Exists(State.objects.filter(counties=OuterRef('pk'), name=\"Texas\")), name=\"Dallas\", then=Value(\"DALLAS COUNTY\")),\n\tdefault=Value(\"ELSEWHERE\"),\n))\nTypeError: When() supports a Q object, a boolean expression, or lookups as a condition.\nInstead the arguments must be wrapped in a Q object:\n>>> County.objects.annotate(\n status=Case(\n\tWhen(Q(Exists(State.objects.filter(counties=OuterRef('pk'), name=\"Texas\")), name=\"Dallas\"), then=Value(\"DALLAS COUNTY\")),\n\tdefault=Value(\"ELSEWHERE\"),\n))\nThis is inconvenient and inconsistent with how filter works, as shown.\nWhen's init method can be modified to allow similar input as filter. \u200bCode is in a branch in my repo, but as this is my first time contributing to Django, I want to make sure I open a ticket and get feedback first.\nAlso I wasn't sure how to classify this. I wasn't sure if it was a bug, as I wasn't sure if it was designed this way.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "Based on the provided information, the issue seems to be related to the incorrect usage of `When()` in conjunction with `Exists()` within an `annotate()` call. The `TypeError` suggests that the condition provided to `When()` is not being recognized as a valid Q object, boolean expression, or set of lookups.\n\nTo resolve the issue, ensure that the condition argument passed to `When()` is a valid Q object or boolean expression. Here's how you can correct the usage:\n\n- Modify the `annotate()` call to correctly use `When()` with a `Q` object that includes the `Exists()` subquery.\n- Ensure that the `Exists()` subquery is correctly constructed and can be used as a condition.\n\nHere is the corrected code snippet:\n\n```python\nfrom django.db.models import Case, When, Value, Q, Exists, OuterRef\n\n# Correct usage of annotate with Case and When\nCounty.objects.annotate(\n    status=Case(\n        When(\n            Q(name=\"Dallas\") & \n            Q(Exists(State.objects.filter(counties=OuterRef('pk'), name=\"Texas\"))),\n            then=Value(\"DALLAS COUNTY\")\n        ),\n        default=Value(\"ELSEWHERE\"),\n    )\n)\n```\n\nThis code snippet ensures that the `When()` condition is a valid Q object that combines a check for the name \"Dallas\" and the existence of a related State with the name \"Texas\".\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.2/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.2/tree//django/db/models)- [Lines 1353 - 1429](https://github.com/testbed/django__django__3.2/blob//django/db/models/expressions.py#L1353-L1429)\n\n This snippet contains the implementation of the When class, which is directly related to the issue. The __init__ method's handling of conditions and lookups is where the reported TypeError is raised, and modifications here could resolve the issue. \n\n\n   - [Lines 21 - 1890](https://github.com/testbed/django__django__3.2/blob//django/db/models/expressions.py#L21-L1890)\n\n This snippet contains the implementation of the Case class, which uses When objects. Understanding how Case interacts with When objects may be necessary to ensure that any changes to When do not negatively impact Case. \n\n\n   - [Lines 1535 - 1603](https://github.com/testbed/django__django__3.2/blob//django/db/models/expressions.py#L1535-L1603)\n\n This snippet includes the Exists class, which is used in the example provided in the issue. Understanding how Exists is implemented may be necessary to ensure compatibility with changes to When.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000326,
+        "snippet_processor": 0.04952,
+        "issue_star_creation": 0.027679999999999996,
+        "issue_star_solver": 0.05689,
+        "bouncer": 0.02876
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711728011.366602,
+        "relevant_snippets": [
+            {
+                "code": "class When(Expression):\n    template = \"WHEN %(condition)s THEN %(result)s\"\n    # This isn't a complete conditional expression, must be used in Case().\n    conditional = False\n\n    def __init__(self, condition=None, then=None, **lookups):\n        if lookups:\n            if condition is None:\n                condition, lookups = Q(**lookups), None\n            elif getattr(condition, \"conditional\", False):\n                condition, lookups = Q(condition, **lookups), None\n        if condition is None or not getattr(condition, \"conditional\", False) or lookups:\n            raise TypeError(\n                \"When() supports a Q object, a boolean expression, or lookups \"\n                \"as a condition.\"\n            )\n        if isinstance(condition, Q) and not condition:\n            raise ValueError(\"An empty Q() can't be used as a When() condition.\")\n        super().__init__(output_field=None)\n        self.condition = condition\n        self.result = self._parse_expressions(then)[0]\n\n    def __str__(self):\n        return \"WHEN %r THEN %r\" % (self.condition, self.result)\n\n    def __repr__(self):\n        return \"<%s: %s>\" % (self.__class__.__name__, self)\n\n    def get_source_expressions(self):\n        return [self.condition, self.result]\n\n    def set_source_expressions(self, exprs):\n        self.condition, self.result = exprs\n\n    def get_source_fields(self):\n        # We're only interested in the fields of the result expressions.\n        return [self.result._output_field_or_none]\n\n    def resolve_expression(\n        self, query=None, allow_joins=True, reuse=None, summarize=False, for_save=False\n    ):\n        c = self.copy()\n        c.is_summary = summarize\n        if hasattr(c.condition, \"resolve_expression\"):\n            c.condition = c.condition.resolve_expression(\n                query, allow_joins, reuse, summarize, False\n            )\n        c.result = c.result.resolve_expression(\n            query, allow_joins, reuse, summarize, for_save\n        )\n        return c\n\n    def as_sql(self, compiler, connection, template=None, **extra_context):\n        connection.ops.check_expression_support(self)\n        template_params = extra_context\n        sql_params = []\n        condition_sql, condition_params = compiler.compile(self.condition)\n        template_params[\"condition\"] = condition_sql\n        result_sql, result_params = compiler.compile(self.result)\n        template_params[\"result\"] = result_sql\n        template = template or self.template\n        return template % template_params, (\n            *sql_params,\n            *condition_params,\n            *result_params,\n        )\n\n    def get_group_by_cols(self):\n        # This is not a complete expression and cannot be used in GROUP BY.\n        cols = []\n        for source in self.get_source_expressions():\n            cols.extend(source.get_group_by_cols())\n        return cols\n\n    @cached_property\n    def allowed_default(self):\n        return self.condition.allowed_default and self.result.allowed_default",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 46143,
+                "end_index": 49146,
+                "start_line": 1353,
+                "end_line": 1429,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "\"\"\"\n        When doing an exclude against any kind of N-to-many relation, we need\n        to use a subquery. This method constructs the nested query, given the\n        original exclude filter (filter_expr) and the portion up to the first\n        N-to-many relation field.\n\n        For example, if the origin filter is ~Q(child__name='foo'), filter_expr\n        is ('child__name', 'foo') and can_reuse is a set of joins usable for\n        filters in the original query.\n\n        We will turn this into equivalent of:\n            WHERE NOT EXISTS(\n                SELECT 1\n                FROM child\n                WHERE name = 'foo' AND child.parent_id = parent.id\n                LIMIT 1\n            )\n        \"\"\"\n        # Generate the inner query.\n        query = self.__class__(self.model)\n        query._filtered_relations = self._filtered_relations\n        filter_lhs, filter_rhs = filter_expr\n        if isinstance(filter_rhs, OuterRef):\n            filter_rhs = OuterRef(filter_rhs)\n        elif isinstance(filter_rhs, F):\n            filter_rhs = OuterRef(filter_rhs.name)\n        query.add_filter(filter_lhs, filter_rhs)\n        query.clear_ordering(force=True)\n        # Try to have as simple as possible subquery -> trim leading joins from\n        # the subquery.\n        trimmed_prefix, contains_louter = query.trim_start(names_with_path)\n\n        col = query.select[0]\n        select_field = col.target\n        alias = col.alias\n        if alias in can_reuse:\n            pk = select_field.model._meta.pk\n            # Need to add a restriction so that outer query's filters are in effect for\n            # the subquery, too.\n            query.bump_prefix(self)\n            lookup_class = select_field.get_lookup(\"exact\")\n            # Note that the query.select[0].alias is different from alias\n            # due to bump_prefix above.\n            lookup = lookup_class(pk.get_col(query.select[0].alias), pk.get_col(alias))\n            query.where.add(lookup, AND)\n            query.external_aliases[alias] = True\n        else:\n            lookup_class = select_field.get_lookup(\"exact\")\n            lookup = lookup_class(col, ResolvedOuterRef(trimmed_prefix))\n            query.where.add(lookup, AND)\n\n        condition, needed_inner = self.build_filter(Exists(query))\n\n        if contains_louter:\n            or_null_condition, _ = self.build_filter(\n                (\"%s__isnull\" % trimmed_prefix, True),\n                current_negated=True,\n                branch_negated=True,\n                can_reuse=can_reuse,\n            )\n            condition.add(or_null_condition, OR)\n            # Note that the end result will be:\n            #   NOT EXISTS (inner_q) OR outercol IS NULL\n            # this might look crazy but due to how NULL works, this seems to be\n            # correct. If the IS NULL check is removed, then if outercol\n            # IS NULL we will not match the row.\n        return condition, needed_inner",
+                "filename": "django/db/models/sql/query.py",
+                "start_index": 84520,
+                "end_index": 87462,
+                "start_line": 1,
+                "end_line": 2052,
+                "max_line": 2687,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@deconstructible(path=\"django.db.models.When\")",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 46096,
+                "end_index": 46142,
+                "start_line": 1352,
+                "end_line": 1352,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\n    An SQL searched CASE expression:\n\n        CASE\n            WHEN n > 0\n                THEN 'positive'\n            WHEN n < 0\n                THEN 'negative'\n            ELSE 'zero'\n        END\n    \"\"\"\n\n    template = \"CASE %(cases)s ELSE %(default)s END\"\n    case_joiner = \" \"\n\n    def __init__(self, *cases, default=None, output_field=None, **extra):\n        if not all(isinstance(case, When) for case in cases):\n            raise TypeError(\"Positional arguments must all be When objects.\")\n        super().__init__(output_field)\n        self.cases = list(cases)\n        self.default = self._parse_expressions(default)[0]\n        self.extra = extra\n\n    def __str__(self):\n        return \"CASE %s, ELSE %r\" % (\n            \", \".join(str(c) for c in self.cases),\n            self.default,\n        )\n\n    def __repr__(self):\n        return \"<%s: %s>\" % (self.__class__.__name__, self)\n\n    def get_source_expressions(self):\n        return self.cases + [self.default]\n\n    def set_source_expressions(self, exprs):\n        *self.cases, self.default = exprs\n\n    def resolve_expression(\n        self, query=None, allow_joins=True, reuse=None, summarize=False, for_save=False\n    ):\n        c = self.copy()\n        c.is_summary = summarize\n        for pos, case in enumerate(c.cases):\n            c.cases[pos] = case.resolve_expression(\n                query, allow_joins, reuse, summarize, for_save\n            )\n        c.default = c.default.resolve_expression(\n            query, allow_joins, reuse, summarize, for_save\n        )\n        return c\n\n    def copy(self):\n        c = super().copy()\n        c.cases = c.cases[:]\n        return c",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 49244,
+                "end_index": 50890,
+                "start_line": 21,
+                "end_line": 1890,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def as_subquery_condition(self, alias, columns, compiler):\n        qn = compiler.quote_name_unless_alias\n        qn2 = self.connection.ops.quote_name\n\n        for index, select_col in enumerate(self.query.select):\n            lhs_sql, lhs_params = self.compile(select_col)\n            rhs = \"%s.%s\" % (qn(alias), qn2(columns[index]))\n            self.query.where.add(RawSQL(\"%s = %s\" % (lhs_sql, rhs), lhs_params), AND)\n\n        sql, params = self.as_sql()\n        return \"EXISTS (%s)\" % sql, params\n\n    def explain_query(self):\n        result = list(self.execute_sql())\n        # Some backends return 1 item tuples with strings, and others return\n        # tuples with integers and strings. Flatten them out into strings.\n        format_ = self.query.explain_info.format\n        output_formatter = json.dumps if format_ and format_.lower() == \"json\" else str\n        for row in result[0]:\n            if not isinstance(row, str):\n                yield \" \".join(output_formatter(c) for c in row)\n            else:\n                yield row",
+                "filename": "django/db/models/sql/compiler.py",
+                "start_index": 68539,
+                "end_index": 69579,
+                "start_line": 1598,
+                "end_line": 1620,
+                "max_line": 2099,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class Subquery(BaseExpression, Combinable):\n    \"\"\"\n    An explicit subquery. It may contain OuterRef() references to the outer\n    query which will be resolved when it is applied to that query.\n    \"\"\"\n\n    template = \"(%(subquery)s)\"\n    contains_aggregate = False\n    empty_result_set_value = None\n    subquery = True\n\n    def __init__(self, queryset, output_field=None, **extra):\n        # Allow the usage of both QuerySet and sql.Query objects.\n        self.query = getattr(queryset, \"query\", queryset).clone()\n        self.query.subquery = True\n        self.extra = extra\n        super().__init__(output_field)\n\n    def get_source_expressions(self):\n        return [self.query]\n\n    def set_source_expressions(self, exprs):\n        self.query = exprs[0]\n\n    def _resolve_output_field(self):\n        return self.query.output_field\n\n    def copy(self):\n        clone = super().copy()\n        clone.query = clone.query.clone()\n        return clone\n\n    @property\n    def external_aliases(self):\n        return self.query.external_aliases\n\n    def get_external_cols(self):\n        return self.query.get_external_cols()\n\n    def as_sql(self, compiler, connection, template=None, **extra_context):\n        connection.ops.check_expression_support(self)\n        template_params = {**self.extra, **extra_context}\n        subquery_sql, sql_params = self.query.as_sql(compiler, connection)\n        template_params[\"subquery\"] = subquery_sql[1:-1]\n\n        template = template or template_params.get(\"template\", self.template)\n        sql = template % template_params\n        return sql, sql_params\n\n    def get_group_by_cols(self):\n        return self.query.get_group_by_cols(wrapper=self)\n\n\nclass Exists(Subquery):\n    template = \"EXISTS(%(subquery)s)\"\n    output_field = fields.BooleanField()\n    empty_result_set_value = False\n\n    def __init__(self, queryset, **kwargs):\n        super().__init__(queryset, **kwargs)\n        self.query = self.query.exists()\n\n    def select_format(self, compiler, sql, params):\n        # Wrap EXISTS() with a CASE WHEN expression if a database backend\n        # (e.g. Oracle) doesn't support boolean expression in SELECT or GROUP\n        # BY list.\n        if not compiler.connection.features.supports_boolean_expr_in_select_clause:\n            sql = \"CASE WHEN {} THEN 1 ELSE 0 END\".format(sql)\n        return sql, params",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 52588,
+                "end_index": 54942,
+                "start_line": 1535,
+                "end_line": 1603,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.8
+            },
+            {
+                "code": "if not self.condition:\n            if queryset.exists():\n                if self.expressions:\n                    raise ValidationError(\n                        self.get_violation_error_message(),\n                        code=self.violation_error_code,\n                    )\n                # When fields are defined, use the unique_error_message() for\n                # backward compatibility.\n                for model, constraints in instance.get_constraints():\n                    for constraint in constraints:\n                        if constraint is self:\n                            raise ValidationError(\n                                instance.unique_error_message(model, self.fields),\n                            )\n        else:\n            against = instance._get_field_value_map(meta=model._meta, exclude=exclude)\n            try:\n                if (self.condition & Exists(queryset.filter(self.condition))).check(\n                    against, using=using\n                ):\n                    raise ValidationError(\n                        self.get_violation_error_message(),\n                        code=self.violation_error_code,\n                    )\n            except FieldError:\n                pass",
+                "filename": "django/db/models/constraints.py",
+                "start_index": 17894,
+                "end_index": 19116,
+                "start_line": 440,
+                "end_line": 466,
+                "max_line": 466,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nCode to manage the creation and SQL rendering of 'where' constraints.\n\"\"\"\nimport operator\nfrom functools import reduce\n\nfrom django.core.exceptions import EmptyResultSet, FullResultSet\nfrom django.db.models.expressions import Case, When\nfrom django.db.models.functions import Mod\nfrom django.db.models.lookups import Exact\nfrom django.utils import tree\nfrom django.utils.functional import cached_property\n\n# Connection types\nAND = \"AND\"\nOR = \"OR\"\nXOR = \"XOR\"",
+                "filename": "django/db/models/sql/where.py",
+                "start_index": 0,
+                "end_index": 462,
+                "start_line": 1,
+                "end_line": 17,
+                "max_line": 360,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "if reffed_expression:\n            condition = self.build_lookup(lookups, reffed_expression, value)\n            return WhereNode([condition], connector=AND), []\n\n        opts = self.get_meta()\n        alias = self.get_initial_alias()\n        allow_many = not branch_negated or not split_subq\n\n        try:\n            join_info = self.setup_joins(\n                parts,\n                opts,\n                alias,\n                can_reuse=can_reuse,\n                allow_many=allow_many,\n            )\n\n            # Prevent iterator from being consumed by check_related_objects()\n            if isinstance(value, Iterator):\n                value = list(value)\n            self.check_related_objects(join_info.final_field, value, join_info.opts)\n\n            # split_exclude() needs to know which joins were generated for the\n            # lookup parts\n            self._lookup_joins = join_info.joins\n        except MultiJoin as e:\n            return self.split_exclude(filter_expr, can_reuse, e.names_with_path)\n\n        # Update used_joins before trimming since they are reused to determine\n        # which joins could be later promoted to INNER.\n        used_joins.update(join_info.joins)\n        targets, alias, join_list = self.trim_joins(\n            join_info.targets, join_info.joins, join_info.path\n        )\n        if can_reuse is not None:\n            can_reuse.update(join_list)\n\n        if join_info.final_field.is_relation:\n            if len(targets) == 1:\n                col = self._get_col(targets[0], join_info.final_field, alias)\n            else:\n                col = MultiColSource(\n                    alias, targets, join_info.targets, join_info.final_field\n                )\n        else:\n            col = self._get_col(targets[0], join_info.final_field, alias)\n\n        condition = self.build_lookup(lookups, col, value)\n        lookup_type = condition.lookup_name\n        clause = WhereNode([condition], connector=AND)\n\n        require_outer = (\n            lookup_type == \"isnull\" and condition.rhs is True and not current_negated\n        )",
+                "filename": "django/db/models/sql/query.py",
+                "start_index": 61342,
+                "end_index": 63417,
+                "start_line": 1461,
+                "end_line": 2668,
+                "max_line": 2687,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@deconstructible(path=\"django.db.models.Case\")",
+                "filename": "django/db/models/expressions.py",
+                "start_index": 49149,
+                "end_index": 49195,
+                "start_line": 1432,
+                "end_line": 1432,
+                "max_line": 1890,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.1
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/models/expressions.py": [
+                {
+                    "chunk": {
+                        "code": "class When(Expression):\n    template = \"WHEN %(condition)s THEN %(result)s\"\n    # This isn't a complete conditional expression, must be used in Case().\n    conditional = False\n\n    def __init__(self, condition=None, then=None, **lookups):\n        if lookups:\n            if condition is None:\n                condition, lookups = Q(**lookups), None\n            elif getattr(condition, \"conditional\", False):\n                condition, lookups = Q(condition, **lookups), None\n        if condition is None or not getattr(condition, \"conditional\", False) or lookups:\n            raise TypeError(\n                \"When() supports a Q object, a boolean expression, or lookups \"\n                \"as a condition.\"\n            )\n        if isinstance(condition, Q) and not condition:\n            raise ValueError(\"An empty Q() can't be used as a When() condition.\")\n        super().__init__(output_field=None)\n        self.condition = condition\n        self.result = self._parse_expressions(then)[0]\n\n    def __str__(self):\n        return \"WHEN %r THEN %r\" % (self.condition, self.result)\n\n    def __repr__(self):\n        return \"<%s: %s>\" % (self.__class__.__name__, self)\n\n    def get_source_expressions(self):\n        return [self.condition, self.result]\n\n    def set_source_expressions(self, exprs):\n        self.condition, self.result = exprs\n\n    def get_source_fields(self):\n        # We're only interested in the fields of the result expressions.\n        return [self.result._output_field_or_none]\n\n    def resolve_expression(\n        self, query=None, allow_joins=True, reuse=None, summarize=False, for_save=False\n    ):\n        c = self.copy()\n        c.is_summary = summarize\n        if hasattr(c.condition, \"resolve_expression\"):\n            c.condition = c.condition.resolve_expression(\n                query, allow_joins, reuse, summarize, False\n            )\n        c.result = c.result.resolve_expression(\n            query, allow_joins, reuse, summarize, for_save\n        )\n        return c\n\n    def as_sql(self, compiler, connection, template=None, **extra_context):\n        connection.ops.check_expression_support(self)\n        template_params = extra_context\n        sql_params = []\n        condition_sql, condition_params = compiler.compile(self.condition)\n        template_params[\"condition\"] = condition_sql\n        result_sql, result_params = compiler.compile(self.result)\n        template_params[\"result\"] = result_sql\n        template = template or self.template\n        return template % template_params, (\n            *sql_params,\n            *condition_params,\n            *result_params,\n        )\n\n    def get_group_by_cols(self):\n        # This is not a complete expression and cannot be used in GROUP BY.\n        cols = []\n        for source in self.get_source_expressions():\n            cols.extend(source.get_group_by_cols())\n        return cols\n\n    @cached_property\n    def allowed_default(self):\n        return self.condition.allowed_default and self.result.allowed_default",
+                        "filename": "django/db/models/expressions.py",
+                        "start_index": 46143,
+                        "end_index": 49146,
+                        "start_line": 1353,
+                        "end_line": 1429,
+                        "max_line": 1890,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the implementation of the When class, which is directly related to the issue. The __init__ method's handling of conditions and lookups is where the reported TypeError is raised, and modifications here could resolve the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    An SQL searched CASE expression:\n\n        CASE\n            WHEN n > 0\n                THEN 'positive'\n            WHEN n < 0\n                THEN 'negative'\n            ELSE 'zero'\n        END\n    \"\"\"\n\n    template = \"CASE %(cases)s ELSE %(default)s END\"\n    case_joiner = \" \"\n\n    def __init__(self, *cases, default=None, output_field=None, **extra):\n        if not all(isinstance(case, When) for case in cases):\n            raise TypeError(\"Positional arguments must all be When objects.\")\n        super().__init__(output_field)\n        self.cases = list(cases)\n        self.default = self._parse_expressions(default)[0]\n        self.extra = extra\n\n    def __str__(self):\n        return \"CASE %s, ELSE %r\" % (\n            \", \".join(str(c) for c in self.cases),\n            self.default,\n        )\n\n    def __repr__(self):\n        return \"<%s: %s>\" % (self.__class__.__name__, self)\n\n    def get_source_expressions(self):\n        return self.cases + [self.default]\n\n    def set_source_expressions(self, exprs):\n        *self.cases, self.default = exprs\n\n    def resolve_expression(\n        self, query=None, allow_joins=True, reuse=None, summarize=False, for_save=False\n    ):\n        c = self.copy()\n        c.is_summary = summarize\n        for pos, case in enumerate(c.cases):\n            c.cases[pos] = case.resolve_expression(\n                query, allow_joins, reuse, summarize, for_save\n            )\n        c.default = c.default.resolve_expression(\n            query, allow_joins, reuse, summarize, for_save\n        )\n        return c\n\n    def copy(self):\n        c = super().copy()\n        c.cases = c.cases[:]\n        return c",
+                        "filename": "django/db/models/expressions.py",
+                        "start_index": 49244,
+                        "end_index": 50890,
+                        "start_line": 21,
+                        "end_line": 1890,
+                        "max_line": 1890,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the implementation of the Case class, which uses When objects. Understanding how Case interacts with When objects may be necessary to ensure that any changes to When do not negatively impact Case."
+                },
+                {
+                    "chunk": {
+                        "code": "class Subquery(BaseExpression, Combinable):\n    \"\"\"\n    An explicit subquery. It may contain OuterRef() references to the outer\n    query which will be resolved when it is applied to that query.\n    \"\"\"\n\n    template = \"(%(subquery)s)\"\n    contains_aggregate = False\n    empty_result_set_value = None\n    subquery = True\n\n    def __init__(self, queryset, output_field=None, **extra):\n        # Allow the usage of both QuerySet and sql.Query objects.\n        self.query = getattr(queryset, \"query\", queryset).clone()\n        self.query.subquery = True\n        self.extra = extra\n        super().__init__(output_field)\n\n    def get_source_expressions(self):\n        return [self.query]\n\n    def set_source_expressions(self, exprs):\n        self.query = exprs[0]\n\n    def _resolve_output_field(self):\n        return self.query.output_field\n\n    def copy(self):\n        clone = super().copy()\n        clone.query = clone.query.clone()\n        return clone\n\n    @property\n    def external_aliases(self):\n        return self.query.external_aliases\n\n    def get_external_cols(self):\n        return self.query.get_external_cols()\n\n    def as_sql(self, compiler, connection, template=None, **extra_context):\n        connection.ops.check_expression_support(self)\n        template_params = {**self.extra, **extra_context}\n        subquery_sql, sql_params = self.query.as_sql(compiler, connection)\n        template_params[\"subquery\"] = subquery_sql[1:-1]\n\n        template = template or template_params.get(\"template\", self.template)\n        sql = template % template_params\n        return sql, sql_params\n\n    def get_group_by_cols(self):\n        return self.query.get_group_by_cols(wrapper=self)\n\n\nclass Exists(Subquery):\n    template = \"EXISTS(%(subquery)s)\"\n    output_field = fields.BooleanField()\n    empty_result_set_value = False\n\n    def __init__(self, queryset, **kwargs):\n        super().__init__(queryset, **kwargs)\n        self.query = self.query.exists()\n\n    def select_format(self, compiler, sql, params):\n        # Wrap EXISTS() with a CASE WHEN expression if a database backend\n        # (e.g. Oracle) doesn't support boolean expression in SELECT or GROUP\n        # BY list.\n        if not compiler.connection.features.supports_boolean_expr_in_select_clause:\n            sql = \"CASE WHEN {} THEN 1 ELSE 0 END\".format(sql)\n        return sql, params",
+                        "filename": "django/db/models/expressions.py",
+                        "start_index": 52588,
+                        "end_index": 54942,
+                        "start_line": 1535,
+                        "end_line": 1603,
+                        "max_line": 1890,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the Exists class, which is used in the example provided in the issue. Understanding how Exists is implemented may be necessary to ensure compatibility with changes to When."
+                }
+            ]
+        },
+        "solution_task": "Based on the provided information, the issue seems to be related to the incorrect usage of `When()` in conjunction with `Exists()` within an `annotate()` call. The `TypeError` suggests that the condition provided to `When()` is not being recognized as a valid Q object, boolean expression, or set of lookups.\n\nTo resolve the issue, ensure that the condition argument passed to `When()` is a valid Q object or boolean expression. Here's how you can correct the usage:\n\n- Modify the `annotate()` call to correctly use `When()` with a `Q` object that includes the `Exists()` subquery.\n- Ensure that the `Exists()` subquery is correctly constructed and can be used as a condition.\n\nHere is the corrected code snippet:\n\n```python\nfrom django.db.models import Case, When, Value, Q, Exists, OuterRef\n\n# Correct usage of annotate with Case and When\nCounty.objects.annotate(\n    status=Case(\n        When(\n            Q(name=\"Dallas\") & \n            Q(Exists(State.objects.filter(counties=OuterRef('pk'), name=\"Texas\"))),\n            then=Value(\"DALLAS COUNTY\")\n        ),\n        default=Value(\"ELSEWHERE\"),\n    )\n)\n```\n\nThis code snippet ensures that the `When()` condition is a valid Q object that combines a check for the name \"Dallas\" and the existence of a related State with the name \"Texas\".",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT by demonstrating how to correctly use a Q object with the When() function in Django. It corrects the initial misuse of When() by showing the proper syntax and usage, which is directly relevant to the TypeError described in the PROMPT. Additionally, the RESPONSE includes a corrected code snippet that combines the Exists() subquery with a check for the name \"Dallas\", which is a practical and relevant solution to the user's problem. The RESPONSE also provides links to the relevant sections of the Django codebase that could be useful for further understanding and potentially modifying the behavior of the When class, the Case class, and the Exists class. However, the RESPONSE does not address the user's uncertainty about whether this is a bug or a design choice, nor does it provide guidance on how to proceed with contributing to Django, which was part of the user's query.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711728212.827318,
+        "result": "Based on the provided information, the issue seems to be related to the incorrect usage of `When()` in conjunction with `Exists()` within an `annotate()` call. The `TypeError` suggests that the condition provided to `When()` is not being recognized as a valid Q object, boolean expression, or set of lookups.\n\nTo resolve the issue, ensure that the condition argument passed to `When()` is a valid Q object or boolean expression. Here's how you can correct the usage:\n\n- Modify the `annotate()` call to correctly use `When()` with a `Q` object that includes the `Exists()` subquery.\n- Ensure that the `Exists()` subquery is correctly constructed and can be used as a condition.\n\nHere is the corrected code snippet:\n\n```python\nfrom django.db.models import Case, When, Value, Q, Exists, OuterRef\n\n# Correct usage of annotate with Case and When\nCounty.objects.annotate(\n    status=Case(\n        When(\n            Q(name=\"Dallas\") & \n            Q(Exists(State.objects.filter(counties=OuterRef('pk'), name=\"Texas\"))),\n            then=Value(\"DALLAS COUNTY\")\n        ),\n        default=Value(\"ELSEWHERE\"),\n    )\n)\n```\n\nThis code snippet ensures that the `When()` condition is a valid Q object that combines a check for the name \"Dallas\" and the existence of a related State with the name \"Texas\".\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.2/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.2/tree//django/db/models)- [Lines 1353 - 1429](https://github.com/testbed/django__django__3.2/blob//django/db/models/expressions.py#L1353-L1429)\n\n This snippet contains the implementation of the When class, which is directly related to the issue. The __init__ method's handling of conditions and lookups is where the reported TypeError is raised, and modifications here could resolve the issue. \n\n\n   - [Lines 21 - 1890](https://github.com/testbed/django__django__3.2/blob//django/db/models/expressions.py#L21-L1890)\n\n This snippet contains the implementation of the Case class, which uses When objects. Understanding how Case interacts with When objects may be necessary to ensure that any changes to When do not negatively impact Case. \n\n\n   - [Lines 1535 - 1603](https://github.com/testbed/django__django__3.2/blob//django/db/models/expressions.py#L1535-L1603)\n\n This snippet includes the Exists class, which is used in the example provided in the issue. Understanding how Exists is implemented may be necessary to ensure compatibility with changes to When.",
+        "context_relevance": 0.33,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant and answers the entire PROMPT completely.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT by explaining the cause of the TypeError and providing a solution to the problem. It offers a corrected code snippet that demonstrates how to properly use `When()` with a `Q` object and `Exists()` within an `annotate()` call. Additionally, the RESPONSE includes references to the relevant sections of the Django codebase that pertain to the `When`, `Case`, and `Exists` classes, which are all mentioned in the PROMPT. The RESPONSE is comprehensive and provides a complete answer to the problem described, fulfilling the requirements for a score of 10."
+        },
+        "qa_relevance": 1.0
+    }
+}

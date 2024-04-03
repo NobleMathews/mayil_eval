@@ -1,0 +1,208 @@
+{
+    "id": "pydata__xarray-6601",
+    "repo_name": "testbed/pydata__xarray__2022.03",
+    "task_id": 917995695067476335,
+    "title": "`polyval` returns objects with different dimension order",
+    "body": "### What is your issue?\r\n\r\nI noticed that the dimension order of the object returned by the latest `polyval` (`main`, unreleased) is different compared to `xarray<=2022.3.0`.\r\nFor example, the following code returns different results.\r\n```python\r\nimport xarray as xr\r\nimport numpy as np\r\n\r\nvalues = np.array(\r\n    [\r\n        \"2021-04-01T05:25:19.000000000\",\r\n        \"2021-04-01T05:25:29.000000000\",\r\n        \"2021-04-01T05:25:39.000000000\",\r\n        \"2021-04-01T05:25:49.000000000\",\r\n        \"2021-04-01T05:25:59.000000000\",\r\n        \"2021-04-01T05:26:09.000000000\",\r\n    ],\r\n    dtype=\"datetime64[ns]\",\r\n)\r\nazimuth_time = xr.DataArray(\r\n    values, name=\"azimuth_time\", coords={\"azimuth_time\": values - values[0]}\r\n)\r\n\r\npolyfit_coefficients = xr.DataArray(\r\n    [\r\n        [2.33333335e-43, 1.62499999e-43, 2.79166678e-43],\r\n        [-1.15316667e-30, 1.49518518e-31, 9.08833333e-31],\r\n        [-2.50272583e-18, -1.23851062e-18, -2.99098229e-18],\r\n        [5.83965193e-06, -1.53321770e-07, -4.84640242e-06],\r\n        [4.44739216e06, 1.45053974e06, 5.29960857e06],\r\n    ],\r\n    dims=(\"degree\", \"axis\"),\r\n    coords={\"axis\": [0, 1, 2], \"degree\": [4, 3, 2, 1, 0]},\r\n)\r\n\r\nds_out = xr.polyval(azimuth_time.coords[\"azimuth_time\"], polyfit_coefficients)\r\nprint(ds_out.dims)\r\n```\r\n```\r\nxarray v2022.3.0\r\n('azimuth_time', 'axis')\r\n\r\nxarray v2022.3.1.dev103+gfc282d59\r\n('axis', 'azimuth_time')\r\n```\r\nIs this the expected behaviour? If yes, is it worth mentioning this change in what's new/breaking changes?\r\n\r\ncc: @headtr1ck\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/pydata__xarray__2022.03.git",
+    "requested_commit": "",
+    "mayil_response": "- Review the `polyval` function definition in `xarray/core/computation.py` to ensure it maintains the dimension order of the input `coord` in the output.\n- If the dimension order is not preserved, modify the `polyval` function to return a `DataArray` with the same dimension order as the input `coord`.\n- After the polynomial evaluation, reorder the dimensions of the result to match the input using `xarray.DataArray.transpose` or `xarray.DataArray.reindex_like` methods before returning the result.\n- Ensure that any dimension reordering operations are conditional, only applied if the output dimensions differ from the input dimensions.\n- Test the modified `polyval` function with inputs that have different dimension orders to verify that the output dimension order matches the input.\n\n### Code snippets to check\n\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__2022.03/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__2022.03/tree//xarray/core)- [Lines 1895 - 2084](https://github.com/testbed/pydata__xarray__2022.03/blob//xarray/core/computation.py#L1895-L2084)\n\n This snippet contains the implementation of the `polyval` function, which is directly related to the issue reported. It is necessary to review and potentially modify this code to ensure the correct dimension order is returned.\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__2022.03/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__2022.03/tree//xarray/core)- [Lines 8728 - 8796](https://github.com/testbed/pydata__xarray__2022.03/blob//xarray/core/dataset.py#L8728-L8796)\n\n This snippet is from the `dataset.py` file and includes logic related to polynomial fitting and may influence the output dimension order of `polyval`. It is relevant for understanding how the dimensions are handled post-fitting.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00075,
+        "snippet_processor": 0.05790000000000001,
+        "issue_star_creation": 0.02583,
+        "issue_star_solver": 0.07288,
+        "bouncer": 0.02492
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711752409.3826802,
+        "relevant_snippets": [
+            {
+                "code": "not in da.dims:\n                continue\n\n            if is_duck_dask_array(da.data) and (\n                rank != order or full or skipna is None\n            ):\n                # Current algorithm with dask and skipna=False neither supports\n                # deficient ranks nor does it output the \"full\" info (issue dask/dask#6516)\n                skipna_da = True\n            elif skipna is None:\n                skipna_da = bool(np.any(da.isnull()))\n\n            dims_to_stack = [dimname for dimname in da.dims if dimname != dim]\n            stacked_coords: dict[Hashable, DataArray] = {}\n            if dims_to_stack:\n                stacked_dim = utils.get_temp_dimname(dims_to_stack, \"stacked\")\n                rhs = da.transpose(dim, *dims_to_stack).stack(\n                    {stacked_dim: dims_to_stack}\n                )\n                stacked_coords = {stacked_dim: rhs[stacked_dim]}\n                scale_da = scale[:, np.newaxis]\n            else:\n                rhs = da\n                scale_da = scale\n\n            if w is not None:\n                rhs = rhs * w[:, np.newaxis]\n\n            with warnings.catch_warnings():\n                if full:  # Copy np.polyfit behavior\n                    warnings.simplefilter(\"ignore\", np.RankWarning)\n                else:  # Raise only once per variable\n                    warnings.simplefilter(\"once\", np.RankWarning)\n\n                coeffs, residuals = duck_array_ops.least_squares(\n                    lhs, rhs.data, rcond=rcond, skipna=skipna_da\n                )\n\n            if isinstance(name, str):\n                name = f\"{name}_\"\n            else:\n                # Thus a ReprObject => polyfit was called on a DataArray\n                name = \"\"\n\n            coeffs = DataArray(\n                coeffs / scale_da,\n                dims=[degree_dim] + list(stacked_coords.keys()),\n                coords={degree_dim: np.arange(order)[::-1], **stacked_coords},\n                name=name + \"polyfit_coefficients\",\n            )\n            if dims_to_stack:\n                coeffs = coeffs.unstack(stacked_dim)\n            variables[coeffs.name] = coeffs\n\n            if full or (cov is True):\n                residuals = DataArray(\n                    residuals if dims_to_stack else residuals.squeeze(),\n                    dims=list(stacked_coords.keys()),\n                    coords=stacked_coords,\n                    name=name + \"polyfit_residuals\",\n                )\n                if dims_to_stack:\n                    residuals = residuals.unstack(stacked_dim)\n                variables[residuals.name] = residuals\n\n            if cov",
+                "filename": "xarray/core/dataset.py",
+                "start_index": 328049,
+                "end_index": 330666,
+                "start_line": 8728,
+                "end_line": 8796,
+                "max_line": 10260,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import numpy as np\n\nimport xarray as xr\n\nfrom . import parameterized, randn, requires_dask\n\nNDEGS = (2, 5, 20)\nNX = (10**2, 10**6)\n\n\nclass Polyval:\n    def setup(self, *args, **kwargs):\n        self.xs = {nx: xr.DataArray(randn((nx,)), dims=\"x\", name=\"x\") for nx in NX}\n        self.coeffs = {\n            ndeg: xr.DataArray(\n                randn((ndeg,)), dims=\"degree\", coords={\"degree\": np.arange(ndeg)}\n            )\n            for ndeg in NDEGS\n        }\n\n    @parameterized([\"nx\", \"ndeg\"], [NX, NDEGS])\n    def time_polyval(self, nx, ndeg):\n        x = self.xs[nx]\n        c = self.coeffs[ndeg]\n        xr.polyval(x, c).compute()\n\n    @parameterized([\"nx\", \"ndeg\"], [NX, NDEGS])\n    def peakmem_polyval(self, nx, ndeg):\n        x = self.xs[nx]\n        c = self.coeffs[ndeg]\n        xr.polyval(x, c).compute()\n\n\nclass PolyvalDask(Polyval):\n    def setup(self, *args, **kwargs):\n        requires_dask()\n        super().setup(*args, **kwargs)\n        self.xs = {k: v.chunk({\"x\": 10000}) for k, v in self.xs.items()}",
+                "filename": "asv_bench/benchmarks/polyfit.py",
+                "start_index": 0,
+                "end_index": 1020,
+                "start_line": 1,
+                "end_line": 38,
+                "max_line": 38,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@overload\ndef polyval(\n    coord: DataArray, coeffs: DataArray, degree_dim: Hashable = \"degree\"\n) -> DataArray:\n    ...\n\n\n@overload\ndef polyval(\n    coord: DataArray, coeffs: Dataset, degree_dim: Hashable = \"degree\"\n) -> Dataset:\n    ...\n\n\n@overload\ndef polyval(\n    coord: Dataset, coeffs: DataArray, degree_dim: Hashable = \"degree\"\n) -> Dataset:\n    ...\n\n\n@overload\ndef polyval(\n    coord: Dataset, coeffs: Dataset, degree_dim: Hashable = \"degree\"\n) -> Dataset:\n    ...\n\n\n@overload\ndef polyval(\n    coord: Dataset | DataArray,\n    coeffs: Dataset | DataArray,\n    degree_dim: Hashable = \"degree\",\n) -> Dataset | DataArray:\n    ...\n\n\ndef polyval(\n    coord: Dataset | DataArray,\n    coeffs: Dataset | DataArray,\n    degree_dim: Hashable = \"degree\",\n) -> Dataset | DataArray:\n    \"\"\"Evaluate a polynomial at specific values\n\n    Parameters\n    ----------\n    coord : DataArray or Dataset\n        Values at which to evaluate the polynomial.\n    coeffs : DataArray or Dataset\n        Coefficients of the polynomial.\n    degree_dim : Hashable, default: \"degree\"\n        Name of the polynomial degree dimension in `coeffs`.\n\n    Returns\n    -------\n    DataArray or Dataset\n        Evaluated polynomial.\n\n    See Also\n    --------\n    xarray.DataArray.polyfit\n    numpy.polynomial.polynomial.polyval\n    \"\"\"\n\n    if degree_dim not in coeffs._indexes:\n        raise ValueError(\n            f\"Dimension `{degree_dim}` should be a coordinate variable with labels.\"\n        )\n    if not np.issubdtype(coeffs[degree_dim].dtype, np.integer):\n        raise ValueError(\n            f\"Dimension `{degree_dim}` should be of integer dtype. Received {coeffs[degree_dim].dtype} instead.\"\n        )\n    max_deg = coeffs[degree_dim].max().item()\n    coeffs = coeffs.reindex(\n        {degree_dim: np.arange(max_deg + 1)}, fill_value=0, copy=False\n    )\n    coord = _ensure_numeric(coord)\n\n    # using Horner's method\n    # https://en.wikipedia.org/wiki/Horner%27s_method\n    res = zeros_like(coord) + coeffs.isel({degree_dim: max_deg}, drop=True)\n    for deg in range(max_deg - 1, -1, -1):\n        res *= coord\n        res += coeffs.isel({degree_dim: deg}, drop=True)\n\n    return res",
+                "filename": "xarray/core/computation.py",
+                "start_index": 67079,
+                "end_index": 69242,
+                "start_line": 1895,
+                "end_line": 2084,
+                "max_line": 2165,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "import numpy as np\n\nimport xarray as xr\n\n\nclass SwapDims:\n    param_names = [\"size\"]\n    params = [[int(1e3), int(1e5), int(1e7)]]\n\n    def setup(self, size: int) -> None:\n        self.ds = xr.Dataset(\n            {\"a\": ((\"x\", \"t\"), np.ones((size, 2)))},\n            coords={\n                \"x\": np.arange(size),\n                \"y\": np.arange(size),\n                \"z\": np.arange(size),\n                \"x2\": (\"x\", np.arange(size)),\n                \"y2\": (\"y\", np.arange(size)),\n                \"z2\": (\"z\", np.arange(size)),\n            },\n        )\n\n    def time_swap_dims(self, size: int) -> None:\n        self.ds.swap_dims({\"x\": \"xn\", \"y\": \"yn\", \"z\": \"zn\"})\n\n    def time_swap_dims_newindex(self, size: int) -> None:\n        self.ds.swap_dims({\"x\": \"x2\", \"y\": \"y2\", \"z\": \"z2\"})",
+                "filename": "asv_bench/benchmarks/renaming.py",
+                "start_index": 0,
+                "end_index": 783,
+                "start_line": 1,
+                "end_line": 27,
+                "max_line": 27,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _maybe_reorder(xarray_obj, dim, positions, N: int | None):\n    order = _inverse_permutation_indices(positions, N)\n\n    if order is None or len(order) != xarray_obj.sizes[dim]:\n        return xarray_obj\n    else:\n        return xarray_obj[{dim: order}]",
+                "filename": "xarray/core/groupby.py",
+                "start_index": 43672,
+                "end_index": 43927,
+                "start_line": 1287,
+                "end_line": 1293,
+                "max_line": 1665,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "_one(self, coord, datetime_unit=None, cumulative=False):\n        from xarray.core.variable import Variable\n\n        if coord not in self.variables and coord not in self.dims:\n            raise ValueError(f\"Coordinate {coord} does not exist.\")\n\n        coord_var = self[coord].variable\n        if coord_var.ndim != 1:\n            raise ValueError(\n                \"Coordinate {} must be 1 dimensional but is {}\"\n                \" dimensional\".format(coord, coord_var.ndim)\n            )\n\n        dim = coord_var.dims[0]\n        if _contains_datetime_like_objects(coord_var):\n            if coord_var.dtype.kind in \"mM\" and datetime_unit is None:\n                datetime_unit, _ = np.datetime_data(coord_var.dtype)\n            elif datetime_unit is None:\n                datetime_unit = \"s\"  # Default to seconds for cftime objects\n            coord_var = coord_var._replace(\n                data=datetime_to_numeric(coord_var.data, datetime_unit=datetime_unit)\n            )\n\n        variables = {}\n        coord_names = set()\n        for k, v in self.variables.items():\n            if k in self.coords:\n                if dim not in v.dims or cumulative:\n                    variables[k] = v\n                    coord_names.add(k)\n            else:\n                if k in self.data_vars and dim in v.dims:\n                    if _contains_datetime_like_objects(v):\n                        v = datetime_to_numeric(v, datetime_unit=datetime_unit)\n                    if cumulative:\n                        integ = duck_array_ops.cumulative_trapezoid(\n                            v.data, coord_var.data, axis=v.get_axis_num(dim)\n                        )\n                        v_dims = v.dims\n                    else:\n                        integ = duck_array_ops.trapz(\n                            v.data, coord_var.data, axis=v.get_axis_num(dim)\n                        )\n                        v_dims = list(v.dims)\n                        v_dims.remove(dim)\n                    variables[k] = Variable(v_dims, integ)\n                else:\n                    variables[k] = v\n        indexes = {k: v for k, v in self._indexes.items() if k in variables}\n        return self._replace_with_new_dims(\n            variables, coord_names=coord_names, indexes=indexes\n        )\n\n    def cumulative",
+                "filename": "xarray/core/dataset.py",
+                "start_index": 308956,
+                "end_index": 311254,
+                "start_line": 8245,
+                "end_line": 8298,
+                "max_line": 10260,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "Least squares polynomial fit.\n\n        This replicates the behaviour of `numpy.polyfit` but differs by skipping\n        invalid values when `skipna = True`.\n\n        Parameters\n        ----------\n        dim : hashable\n            Coordinate along which to fit the polynomials.\n        deg : int\n            Degree of the fitting polynomial.\n        skipna : bool or None, optional\n            If True, removes all invalid values before fitting each 1D slices of the array.\n            Default is True if data is stored in a dask.array or if there is any\n            invalid values, False otherwise.\n        rcond : float or None, optional\n            Relative condition number to the fit.\n        w : hashable or Any, optional\n            Weights to apply to the y-coordinate of the sample points.\n            Can be an array-like object or the name of a coordinate in the dataset.\n        full : bool, default: False\n            Whether to return the residuals, matrix rank and singular values in addition\n            to the coefficients.\n        cov : bool or \"unscaled\", default: False\n            Whether to return to the covariance matrix in addition to the coefficients.\n            The matrix is not scaled if `cov='unscaled'`.\n\n        Returns\n        -------\n        polyfit_results : Dataset\n            A single dataset which contains (for each \"var\" in the input dataset):\n\n            [var]_polyfit_coefficients\n                The coefficients of the best fit for each variable in this dataset.\n            [var]_polyfit_residuals\n                The residuals of the least-square computation for each variable (only included if `full=True`)\n                When the matrix rank is deficient, np.nan is returned.\n            [dim]_matrix_rank\n                The effective rank of the scaled Vandermonde coefficient matrix (only included if `full=True`)\n                The rank is computed ignoring the NaN values that might be skipped.\n            [dim]_singular_values\n                The singular values of the scaled Vandermonde coefficient matrix (only included if `full=True`)\n            [var]_polyfit_covariance\n                The covariance matrix of the polynomial coefficient estimates (only included if `full=False` and `cov=True`)\n\n        Warns\n        -----\n        RankWarning\n            The rank of the coefficient matrix in the least-squares fit is deficient.\n            The warning is not raised with in-memory (not dask) data and `full=True`.\n\n        See Also\n        --------\n        numpy.polyfit\n        numpy.polyval\n        xarray.polyval\n        \"\"\"\n        from xarray.core.dataarray import DataArray\n\n        variables = {}\n        skipna_da = skipna\n\n        x = get_clean_interp_index(self, dim, strict=False)\n        xname = f\"{self[dim].name}_\"\n        order = int(deg) + 1\n        lhs = np.vander(x, order)\n\n        if rcond i",
+                "filename": "xarray/core/dataset.py",
+                "start_index": 323931,
+                "end_index": 326810,
+                "start_line": 8624,
+                "end_line": 8691,
+                "max_line": 10260,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "from __future__ import annotations\n\nimport copy\nimport itertools\nimport math\nimport numbers\nimport warnings\nfrom collections.abc import Hashable, Iterable, Mapping, Sequence\nfrom datetime import timedelta\nfrom functools import partial\nfrom typing import TYPE_CHECKING, Any, Callable, Literal, NoReturn\n\nimport numpy as np\nimport pandas as pd\nfrom numpy.typing import ArrayLike\n\nimport xarray as xr  # only for Dataset and DataArray\nfrom xarray.core import common, dtypes, duck_array_ops, indexing, nputils, ops, utils\nfrom xarray.core.arithmetic import VariableArithmetic\nfrom xarray.core.common import AbstractArray\nfrom xarray.core.indexing import (\n    BasicIndexer,\n    OuterIndexer,\n    PandasIndexingAdapter,\n    VectorizedIndexer,\n    as_indexable,\n)\nfrom xarray.core.options import OPTIONS, _get_keep_attrs\nfrom xarray.core.parallelcompat import (\n    get_chunked_array_type,\n    guess_chunkmanager,\n)\nfrom xarray.core.pycompat import (\n    array_type,\n    integer_types,\n    is_0d_dask_array,\n    is_chunked_array,\n    is_duck_dask_array,\n)\nfrom xarray.core.utils import (\n    Frozen,\n    NdimSizeLenMixin,\n    OrderedSet,\n    _default,\n    decode_numpy_dict_values,\n    drop_dims_from_indexers,\n    either_dict_or_kwargs,\n    ensure_us_time_resolution,\n    infix_dims,\n    is_duck_array,\n    maybe_coerce_to_str,\n)\n\nNON_NUMPY_SUPPORTED_ARRAY_TYPES = (\n    indexing.ExplicitlyIndexed,\n    pd.Index,\n)\n# https://github.com/python/mypy/issues/224\nBASIC_INDEXING_TYPES = integer_types + (slice,)\n\nif TYPE_CHECKING:\n    from xarray.core.parallelcompat import ChunkManagerEntrypoint\n    from xarray.core.types import (\n        Dims,\n        ErrorOptionsWithWarn,\n        PadModeOptions,\n        PadReflectOptions,\n        QuantileMethods,\n        T_Variable,\n    )\n\nNON_NANOSECOND_WARNING = (\n    \"Converting non-nanosecond precision {case} values to nanosecond precision. \"\n    \"This behavior can eventually be relaxed in xarray, as it is an artifact from \"\n    \"pandas which is now beginning to support non-nanosecond precision values. \"\n    \"This warning is caused by passing non-nanosecond np.datetime64 or \"\n    \"np.timedelta64 values to the DataArray or Variable constructor; it can be \"\n    \"silenced by converting the values to nanosecond precision ahead of time.\"\n)\n\n\nclass MissingDimensionsError(ValueError):\n    \"\"\"Error class used when we can't safely guess a dimension name.\"\"\"\n\n    # inherits from ValueError for backward compatibility\n    # TODO: move this to an xarray.exceptions module?",
+                "filename": "xarray/core/variable.py",
+                "start_index": 0,
+                "end_index": 2507,
+                "start_line": 1,
+                "end_line": 86,
+                "max_line": 3261,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from xarray.core.dataarray import DataArray\n\n    time = obj[dim]\n    if not _contains_datetime_like_objects(time.variable):\n        raise ValueError(f\"Coordinate {dim} must contain datetime objects.\")\n\n    use_cftime = _should_cftime_be_used(time, calendar, use_cftime)\n\n    source_calendar = time.dt.calendar\n    # Do nothing if request calendar is the same as the source\n    # AND source is np XOR use_cftime\n    if source_calendar == calendar and is_np_datetime_like(time.dtype) ^ use_cftime:\n        return obj\n\n    if (time.dt.year == 0).any() and calendar in _CALENDARS_WITHOUT_YEAR_ZERO:\n        raise ValueError(\n            f\"Source time coordinate contains dates with year 0, which is not supported by target calendar {calendar}.\"\n        )\n\n    if (source_calendar == \"360_day\" or calendar == \"360_day\") and align_on is None:\n        raise ValueError(\n            \"Argument `align_on` must be specified with either 'date' or \"\n            \"'year' when converting to or from a '360_day' calendar.\"\n        )\n\n    if source_calendar != \"360_day\" and calendar != \"360_day\":\n        align_on = \"date\"\n\n    out = obj.copy()\n\n    if align_on == \"year\":\n        # Special case for conversion involving 360_day calendar\n        # Instead of translating dates directly, this tries to keep the position within a year similar.\n\n        new_doy = time.groupby(f\"{dim}.year\").map(\n            _interpolate_day_of_year, target_calendar=calendar, use_cftime=use_cftime\n        )\n\n        # Convert the source datetimes, but override the day of year with our new day of years.\n        out[dim] = DataArray(\n            [\n                _convert_to_new_calendar_with_new_day_of_year(\n                    date, newdoy, calendar, use_cftime\n                )\n                for date, newdoy in zip(time.variable._data.array, new_doy)\n            ],\n            dims=(dim,),\n            name=dim,\n        )\n        # Remove duplicate timestamps, happens when reducing the number of days\n        out = out.isel({dim: np.unique(out[dim], return_index=True)[1]})\n    elif align_on == \"date\":\n        new_times = convert_times(\n            time.data,\n            get_date_type(calendar, use_cftime=use_cftime),\n            raise_on_invalid=False,\n        )\n        out[dim] = new_times\n\n        # Remove NaN that where put on invalid dates in target calendar\n        out = out.where(out[dim].notnull(), drop=True)\n\n    if missing is not None:\n        time_target = date_range_like(time, calendar=calendar, use_cftime=use_cftime)\n        out = out.reindex({dim: time_target}, fill_value=missing)\n\n    # Copy attrs but remove `calendar` if still present.\n    out[dim].attrs.update(time.attrs)\n    out[dim].attrs.pop(\"calendar\", None)\n    return out",
+                "filename": "xarray/coding/calendar_ops.py",
+                "start_index": 6525,
+                "end_index": 9260,
+                "start_line": 147,
+                "end_line": 343,
+                "max_line": 343,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "name: \ud83d\udca1 Feature Request\ndescription: Suggest an idea for xarray\nlabels: [enhancement]\nbody:\n  - type: textarea\n    id: description\n    attributes:\n      label: Is your feature request related to a problem?\n      description: |\n        Please do a quick search of existing issues to make sure that this has not been asked before.\n        Please provide a clear and concise description of what the problem is. Ex. I'm always frustrated when [...]\n    validations:\n      required: true\n  - type: textarea\n    id: solution\n    attributes:\n      label: Describe the solution you'd like\n      description: |\n        A clear and concise description of what you want to happen.\n  - type: textarea\n    id: alternatives\n    attributes:\n      label: Describe alternatives you've considered\n      description: |\n        A clear and concise description of any alternative solutions or features you've considered.\n    validations:\n      required: false\n  - type: textarea\n    id: additional-context\n    attributes:\n      label: Additional context\n      description: |\n        Add any other context about the feature request here.\n    validations:\n      required: false",
+                "filename": ".github/ISSUE_TEMPLATE/newfeature.yml",
+                "start_index": 0,
+                "end_index": 1154,
+                "start_line": 1,
+                "end_line": 35,
+                "max_line": 35,
+                "git_instance": "github",
+                "repo_name": "testbed/pydata__xarray__2022.03",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "xarray/core/computation.py": [
+                {
+                    "chunk": {
+                        "code": "@overload\ndef polyval(\n    coord: DataArray, coeffs: DataArray, degree_dim: Hashable = \"degree\"\n) -> DataArray:\n    ...\n\n\n@overload\ndef polyval(\n    coord: DataArray, coeffs: Dataset, degree_dim: Hashable = \"degree\"\n) -> Dataset:\n    ...\n\n\n@overload\ndef polyval(\n    coord: Dataset, coeffs: DataArray, degree_dim: Hashable = \"degree\"\n) -> Dataset:\n    ...\n\n\n@overload\ndef polyval(\n    coord: Dataset, coeffs: Dataset, degree_dim: Hashable = \"degree\"\n) -> Dataset:\n    ...\n\n\n@overload\ndef polyval(\n    coord: Dataset | DataArray,\n    coeffs: Dataset | DataArray,\n    degree_dim: Hashable = \"degree\",\n) -> Dataset | DataArray:\n    ...\n\n\ndef polyval(\n    coord: Dataset | DataArray,\n    coeffs: Dataset | DataArray,\n    degree_dim: Hashable = \"degree\",\n) -> Dataset | DataArray:\n    \"\"\"Evaluate a polynomial at specific values\n\n    Parameters\n    ----------\n    coord : DataArray or Dataset\n        Values at which to evaluate the polynomial.\n    coeffs : DataArray or Dataset\n        Coefficients of the polynomial.\n    degree_dim : Hashable, default: \"degree\"\n        Name of the polynomial degree dimension in `coeffs`.\n\n    Returns\n    -------\n    DataArray or Dataset\n        Evaluated polynomial.\n\n    See Also\n    --------\n    xarray.DataArray.polyfit\n    numpy.polynomial.polynomial.polyval\n    \"\"\"\n\n    if degree_dim not in coeffs._indexes:\n        raise ValueError(\n            f\"Dimension `{degree_dim}` should be a coordinate variable with labels.\"\n        )\n    if not np.issubdtype(coeffs[degree_dim].dtype, np.integer):\n        raise ValueError(\n            f\"Dimension `{degree_dim}` should be of integer dtype. Received {coeffs[degree_dim].dtype} instead.\"\n        )\n    max_deg = coeffs[degree_dim].max().item()\n    coeffs = coeffs.reindex(\n        {degree_dim: np.arange(max_deg + 1)}, fill_value=0, copy=False\n    )\n    coord = _ensure_numeric(coord)\n\n    # using Horner's method\n    # https://en.wikipedia.org/wiki/Horner%27s_method\n    res = zeros_like(coord) + coeffs.isel({degree_dim: max_deg}, drop=True)\n    for deg in range(max_deg - 1, -1, -1):\n        res *= coord\n        res += coeffs.isel({degree_dim: deg}, drop=True)\n\n    return res",
+                        "filename": "xarray/core/computation.py",
+                        "start_index": 67079,
+                        "end_index": 69242,
+                        "start_line": 1895,
+                        "end_line": 2084,
+                        "max_line": 2165,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pydata__xarray__2022.03",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the implementation of the `polyval` function, which is directly related to the issue reported. It is necessary to review and potentially modify this code to ensure the correct dimension order is returned."
+                }
+            ],
+            "xarray/core/dataset.py": [
+                {
+                    "chunk": {
+                        "code": "not in da.dims:\n                continue\n\n            if is_duck_dask_array(da.data) and (\n                rank != order or full or skipna is None\n            ):\n                # Current algorithm with dask and skipna=False neither supports\n                # deficient ranks nor does it output the \"full\" info (issue dask/dask#6516)\n                skipna_da = True\n            elif skipna is None:\n                skipna_da = bool(np.any(da.isnull()))\n\n            dims_to_stack = [dimname for dimname in da.dims if dimname != dim]\n            stacked_coords: dict[Hashable, DataArray] = {}\n            if dims_to_stack:\n                stacked_dim = utils.get_temp_dimname(dims_to_stack, \"stacked\")\n                rhs = da.transpose(dim, *dims_to_stack).stack(\n                    {stacked_dim: dims_to_stack}\n                )\n                stacked_coords = {stacked_dim: rhs[stacked_dim]}\n                scale_da = scale[:, np.newaxis]\n            else:\n                rhs = da\n                scale_da = scale\n\n            if w is not None:\n                rhs = rhs * w[:, np.newaxis]\n\n            with warnings.catch_warnings():\n                if full:  # Copy np.polyfit behavior\n                    warnings.simplefilter(\"ignore\", np.RankWarning)\n                else:  # Raise only once per variable\n                    warnings.simplefilter(\"once\", np.RankWarning)\n\n                coeffs, residuals = duck_array_ops.least_squares(\n                    lhs, rhs.data, rcond=rcond, skipna=skipna_da\n                )\n\n            if isinstance(name, str):\n                name = f\"{name}_\"\n            else:\n                # Thus a ReprObject => polyfit was called on a DataArray\n                name = \"\"\n\n            coeffs = DataArray(\n                coeffs / scale_da,\n                dims=[degree_dim] + list(stacked_coords.keys()),\n                coords={degree_dim: np.arange(order)[::-1], **stacked_coords},\n                name=name + \"polyfit_coefficients\",\n            )\n            if dims_to_stack:\n                coeffs = coeffs.unstack(stacked_dim)\n            variables[coeffs.name] = coeffs\n\n            if full or (cov is True):\n                residuals = DataArray(\n                    residuals if dims_to_stack else residuals.squeeze(),\n                    dims=list(stacked_coords.keys()),\n                    coords=stacked_coords,\n                    name=name + \"polyfit_residuals\",\n                )\n                if dims_to_stack:\n                    residuals = residuals.unstack(stacked_dim)\n                variables[residuals.name] = residuals\n\n            if cov",
+                        "filename": "xarray/core/dataset.py",
+                        "start_index": 328049,
+                        "end_index": 330666,
+                        "start_line": 8728,
+                        "end_line": 8796,
+                        "max_line": 10260,
+                        "git_instance": "github",
+                        "repo_name": "testbed/pydata__xarray__2022.03",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is from the `dataset.py` file and includes logic related to polynomial fitting and may influence the output dimension order of `polyval`. It is relevant for understanding how the dimensions are handled post-fitting."
+                }
+            ]
+        },
+        "solution_task": "- Review the `polyval` function definition in `xarray/core/computation.py` to ensure it maintains the dimension order of the input `coord` in the output.\n- If the dimension order is not preserved, modify the `polyval` function to return a `DataArray` with the same dimension order as the input `coord`.\n- After the polynomial evaluation, reorder the dimensions of the result to match the input using `xarray.DataArray.transpose` or `xarray.DataArray.reindex_like` methods before returning the result.\n- Ensure that any dimension reordering operations are conditional, only applied if the output dimensions differ from the input dimensions.\n- Test the modified `polyval` function with inputs that have different dimension orders to verify that the output dimension order matches the input.",
+        "bouncer_response": {
+            "score": 8,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a series of actionable steps to address the issue of dimension order being different in the latest `polyval` function compared to previous versions. It suggests reviewing and modifying the `polyval` function definition to ensure the dimension order of the input is maintained, using methods like `transpose` or `reindex_like` to reorder dimensions if necessary, and making the reordering conditional. Additionally, it recommends testing the changes with various inputs to ensure the output dimension order is consistent. The RESPONSE also provides specific code snippets from the `xarray` GitHub repository that are relevant to the issue, which is useful for the developer to locate the potential source of the problem. The RESPONSE does not address the question of whether the change in dimension order is expected behavior or if it should be documented in the release notes, which is part of the user's inquiry.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711752513.486538,
+        "result": "- Review the `polyval` function definition in `xarray/core/computation.py` to ensure it maintains the dimension order of the input `coord` in the output.\n- If the dimension order is not preserved, modify the `polyval` function to return a `DataArray` with the same dimension order as the input `coord`.\n- After the polynomial evaluation, reorder the dimensions of the result to match the input using `xarray.DataArray.transpose` or `xarray.DataArray.reindex_like` methods before returning the result.\n- Ensure that any dimension reordering operations are conditional, only applied if the output dimensions differ from the input dimensions.\n- Test the modified `polyval` function with inputs that have different dimension orders to verify that the output dimension order matches the input.\n\n### Code snippets to check\n\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__2022.03/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__2022.03/tree//xarray/core)- [Lines 1895 - 2084](https://github.com/testbed/pydata__xarray__2022.03/blob//xarray/core/computation.py#L1895-L2084)\n\n This snippet contains the implementation of the `polyval` function, which is directly related to the issue reported. It is necessary to review and potentially modify this code to ensure the correct dimension order is returned.\n-  \u2192 [xarray](https://github.com/testbed/pydata__xarray__2022.03/tree//xarray) \u2192 [core](https://github.com/testbed/pydata__xarray__2022.03/tree//xarray/core)- [Lines 8728 - 8796](https://github.com/testbed/pydata__xarray__2022.03/blob//xarray/core/dataset.py#L8728-L8796)\n\n This snippet is from the `dataset.py` file and includes logic related to polynomial fitting and may influence the output dimension order of `polyval`. It is relevant for understanding how the dimensions are handled post-fitting.",
+        "context_relevance": 0.28,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant to the entire PROMPT and answers the PROMPT completely.\nSupporting Evidence: The RESPONSE provides a detailed action plan to address the issue reported in the PROMPT, which is the change in dimension order of the object returned by `polyval` in `xarray`. It suggests reviewing and modifying the `polyval` function to maintain the dimension order, using conditional reordering operations, and testing the changes. Additionally, it references specific code snippets that are relevant to the issue, indicating a thorough understanding of the problem and the steps needed to resolve it. The RESPONSE is directly related to the user's concern about the change in dimension order and the potential need for documentation updates. It also acknowledges the user's code example and the differences in output between versions of `xarray`."
+        },
+        "qa_relevance": 1.0
+    }
+}

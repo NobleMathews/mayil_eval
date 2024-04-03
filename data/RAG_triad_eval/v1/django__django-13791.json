@@ -1,0 +1,208 @@
+{
+    "id": "django__django-13791",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 399742239172558292,
+    "title": "parse_duration() ISO string sign is ignored when the timedelta only has days",
+    "body": "Description\n\t\nI'm pretty sure that this is a bug even though I'm not an expert on the ISO 8601 standard. The sign of a timedelta string will be ignored by django.utils.dateparse.parse_duration if the input string only contains days. Compare the following (notice the minus signs):\nIn [4]: timedelta(days=-1)\nOut[4]: datetime.timedelta(days=-1)\nIn [5]: td = timedelta(days=-1)\nIn [6]: duration_iso_string(td)\nOut[6]: '-P1DT00H00M00S'\nIn [7]: parse_duration(duration_iso_string(td))\nOut[7]: datetime.timedelta(days=1) # <-- Why is this 1 and not -1?\nIn [8]: td = timedelta(days=-1, microseconds=1)\nIn [9]: duration_iso_string(td)\nOut[9]: '-P0DT23H59M59.999999S'\nIn [10]: parse_duration(duration_iso_string(td))\nOut[10]: datetime.timedelta(days=-1, microseconds=1)\nI guess the problem is in django/utils/dateparse.py line 147 that reads return days + sign * datetime.timedelta(**kw).\nHowever, if datetime.timedelta(**kw) ends up being zero (timedelta(0)) then the sign multiplication ends up in zero, not -0. This is just a preliminary quick look though and maybe the problem is something else.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Review the `parse_duration` function in `django/utils/dateparse.py` to ensure it correctly handles negative durations when the ISO string only contains days.\n- Specifically, check the line where `days` is multiplied by `sign` and ensure that the sign is applied correctly to the `timedelta` object representing days.\n- If the issue is that the sign is not applied when there are no smaller units than days, consider applying the sign to the `days` `timedelta` object regardless of the presence of smaller units.\n- The corrected code should ensure that `parse_duration` returns a negative `timedelta` when the ISO string represents a negative duration with only days specified.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [utils](https://github.com/testbed/django__django__3.2/tree//django/utils)- [Lines 81 - 154](https://github.com/testbed/django__django__3.2/blob//django/utils/dateparse.py#L81-L154)\n\n This snippet contains the parse_duration function where the issue is likely located, specifically the line mentioned in the issue description.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [utils](https://github.com/testbed/django__django__3.2/tree//django/utils)- [Lines 1 - 46](https://github.com/testbed/django__django__3.2/blob//django/utils/duration.py#L1-L46)\n\n This snippet contains the duration_iso_string function which is used to generate the ISO string that is then parsed by parse_duration, and may be relevant to understand how the sign is included in the string.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003035,
+        "snippet_processor": 0.055850000000000004,
+        "issue_star_creation": 0.02406,
+        "issue_star_solver": 0.03527,
+        "bouncer": 0.01812
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711725112.845,
+        "relevant_snippets": [
+            {
+                "code": "import datetime\n\n\ndef _get_duration_components(duration):\n    days = duration.days\n    seconds = duration.seconds\n    microseconds = duration.microseconds\n\n    minutes = seconds // 60\n    seconds %= 60\n\n    hours = minutes // 60\n    minutes %= 60\n\n    return days, hours, minutes, seconds, microseconds\n\n\ndef duration_string(duration):\n    \"\"\"Version of str(timedelta) which is not English specific.\"\"\"\n    days, hours, minutes, seconds, microseconds = _get_duration_components(duration)\n\n    string = \"{:02d}:{:02d}:{:02d}\".format(hours, minutes, seconds)\n    if days:\n        string = \"{} \".format(days) + string\n    if microseconds:\n        string += \".{:06d}\".format(microseconds)\n\n    return string\n\n\ndef duration_iso_string(duration):\n    if duration < datetime.timedelta(0):\n        sign = \"-\"\n        duration *= -1\n    else:\n        sign = \"\"\n\n    days, hours, minutes, seconds, microseconds = _get_duration_components(duration)\n    ms = \".{:06d}\".format(microseconds) if microseconds else \"\"\n    return \"{}P{}DT{:02d}H{:02d}M{:02d}{}S\".format(\n        sign, days, hours, minutes, seconds, ms\n    )\n\n\ndef duration_microseconds(delta):\n    return (24 * 60 * 60 * delta.days + delta.seconds) * 1000000 + delta.microseconds",
+                "filename": "django/utils/duration.py",
+                "start_index": 0,
+                "end_index": 1229,
+                "start_line": 1,
+                "end_line": 46,
+                "max_line": 46,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "def parse_time(value):\n    \"\"\"Parse a string and return a datetime.time.\n\n    This function doesn't support time zone offsets.\n\n    Raise ValueError if the input is well formatted but not a valid time.\n    Return None if the input isn't well formatted, in particular if it\n    contains an offset.\n    \"\"\"\n    try:\n        # The fromisoformat() method takes time zone info into account and\n        # returns a time with a tzinfo component, if possible. However, there\n        # are no circumstances where aware datetime.time objects make sense, so\n        # remove the time zone offset.\n        return datetime.time.fromisoformat(value).replace(tzinfo=None)\n    except ValueError:\n        if match := time_re.match(value):\n            kw = match.groupdict()\n            kw[\"microsecond\"] = kw[\"microsecond\"] and kw[\"microsecond\"].ljust(6, \"0\")\n            kw = {k: int(v) for k, v in kw.items() if v is not None}\n            return datetime.time(**kw)\n\n\ndef parse_datetime(value):\n    \"\"\"Parse a string and return a datetime.datetime.\n\n    This function supports time zone offsets. When the input contains one,\n    the output uses a timezone with a fixed offset from UTC.\n\n    Raise ValueError if the input is well formatted but not a valid datetime.\n    Return None if the input isn't well formatted.\n    \"\"\"\n    try:\n        return datetime.datetime.fromisoformat(value)\n    except ValueError:\n        if match := datetime_re.match(value):\n            kw = match.groupdict()\n            kw[\"microsecond\"] = kw[\"microsecond\"] and kw[\"microsecond\"].ljust(6, \"0\")\n            tzinfo = kw.pop(\"tzinfo\")\n            if tzinfo == \"Z\":\n                tzinfo = datetime.timezone.utc\n            elif tzinfo is not None:\n                offset_mins = int(tzinfo[-2:]) if len(tzinfo) > 3 else 0\n                offset = 60 * int(tzinfo[1:3]) + offset_mins\n                if tzinfo[0] == \"-\":\n                    offset = -offset\n                tzinfo = get_fixed_timezone(offset)\n            kw = {k: int(v) for k, v in kw.items() if v is not None}\n            return datetime.datetime(**kw, tzinfo=tzinfo)\n\n\ndef parse_duration(value):\n    \"\"\"Parse a duration string and return a datetime.timedelta.\n\n    The preferred format for durations in Django is '%d %H:%M:%S.%f'.\n\n    Also supports ISO 8601 representation and PostgreSQL's day-time interval\n    format.\n    \"\"\"\n    match = (\n        standard_duration_re.match(value)\n        or iso8601_duration_re.match(value)\n        or postgres_interval_re.match(value)\n    )\n    if match:\n        kw = match.groupdict()\n        sign = -1 if kw.pop(\"sign\", \"+\") == \"-\" else 1\n        if kw.get(\"microseconds\"):\n            kw[\"microseconds\"] = kw[\"microseconds\"].ljust(6, \"0\")\n        kw = {k: float(v.replace(\",\", \".\")) for k, v in kw.items() if v is not None}\n        days = datetime.timedelta(kw.pop(\"days\", 0.0) or 0.0)\n        if match.re == iso8601_duration_re:\n            days *= sign\n        return days + sign * datetime.timedelta(**kw)",
+                "filename": "django/utils/dateparse.py",
+                "start_index": 2378,
+                "end_index": 5362,
+                "start_line": 81,
+                "end_line": 154,
+                "max_line": 154,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "import datetime\n\nfrom django.utils.html import avoid_wrapping\nfrom django.utils.timezone import is_aware\nfrom django.utils.translation import gettext, ngettext_lazy\n\nTIME_STRINGS = {\n    \"year\": ngettext_lazy(\"%(num)d year\", \"%(num)d years\", \"num\"),\n    \"month\": ngettext_lazy(\"%(num)d month\", \"%(num)d months\", \"num\"),\n    \"week\": ngettext_lazy(\"%(num)d week\", \"%(num)d weeks\", \"num\"),\n    \"day\": ngettext_lazy(\"%(num)d day\", \"%(num)d days\", \"num\"),\n    \"hour\": ngettext_lazy(\"%(num)d hour\", \"%(num)d hours\", \"num\"),\n    \"minute\": ngettext_lazy(\"%(num)d minute\", \"%(num)d minutes\", \"num\"),\n}\n\nTIME_STRINGS_KEYS = list(TIME_STRINGS.keys())\n\nTIME_CHUNKS = [\n    60 * 60 * 24 * 7,  # week\n    60 * 60 * 24,  # day\n    60 * 60,  # hour\n    60,  # minute\n]\n\nMONTHS_DAYS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)",
+                "filename": "django/utils/timesince.py",
+                "start_index": 0,
+                "end_index": 816,
+                "start_line": 1,
+                "end_line": 25,
+                "max_line": 142,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "\"\"\"Functions to parse datetime objects.\"\"\"\n\n# We're using regular expressions rather than time.strptime because:\n# - They provide both validation and parsing.\n# - They're more flexible for datetimes.\n# - The date/datetime/time constructors produce friendlier error messages.\n\nimport datetime\n\nfrom django.utils.regex_helper import _lazy_re_compile\nfrom django.utils.timezone import get_fixed_timezone\n\ndate_re = _lazy_re_compile(r\"(?P<year>\\d{4})-(?P<month>\\d{1,2})-(?P<day>\\d{1,2})$\")\n\ntime_re = _lazy_re_compile(\n    r\"(?P<hour>\\d{1,2}):(?P<minute>\\d{1,2})\"\n    r\"(?::(?P<second>\\d{1,2})(?:[\\.,](?P<microsecond>\\d{1,6})\\d{0,6})?)?$\"\n)\n\ndatetime_re = _lazy_re_compile(\n    r\"(?P<year>\\d{4})-(?P<month>\\d{1,2})-(?P<day>\\d{1,2})\"\n    r\"[T ](?P<hour>\\d{1,2}):(?P<minute>\\d{1,2})\"\n    r\"(?::(?P<second>\\d{1,2})(?:[\\.,](?P<microsecond>\\d{1,6})\\d{0,6})?)?\"\n    r\"\\s*(?P<tzinfo>Z|[+-]\\d{2}(?::?\\d{2})?)?$\"\n)\n\nstandard_duration_re = _lazy_re_compile(\n    r\"^\"\n    r\"(?:(?P<days>-?\\d+) (days?, )?)?\"\n    r\"(?P<sign>-?)\"\n    r\"((?:(?P<hours>\\d+):)(?=\\d+:\\d+))?\"\n    r\"(?:(?P<minutes>\\d+):)?\"\n    r\"(?P<seconds>\\d+)\"\n    r\"(?:[\\.,](?P<microseconds>\\d{1,6})\\d{0,6})?\"\n    r\"$\"\n)\n\n# Support the sections of ISO 8601 date representation that are accepted by\n# timedelta\niso8601_duration_re = _lazy_re_compile(\n    r\"^(?P<sign>[-+]?)\"\n    r\"P\"\n    r\"(?:(?P<days>\\d+([\\.,]\\d+)?)D)?\"\n    r\"(?:T\"\n    r\"(?:(?P<hours>\\d+([\\.,]\\d+)?)H)?\"\n    r\"(?:(?P<minutes>\\d+([\\.,]\\d+)?)M)?\"\n    r\"(?:(?P<seconds>\\d+([\\.,]\\d+)?)S)?\"\n    r\")?\"\n    r\"$\"\n)\n\n# Support PostgreSQL's day-time interval format, e.g. \"3 days 04:05:06\". The\n# year-month and mixed intervals cannot be converted to a timedelta and thus\n# aren't accepted.\npostgres_interval_re = _lazy_re_compile(\n    r\"^\"\n    r\"(?:(?P<days>-?\\d+) (days? ?))?\"\n    r\"(?:(?P<sign>[-+])?\"\n    r\"(?P<hours>\\d+):\"\n    r\"(?P<minutes>\\d\\d):\"\n    r\"(?P<seconds>\\d\\d)\"\n    r\"(?:\\.(?P<microseconds>\\d{1,6}))?\"\n    r\")?$\"\n)\n\n\ndef parse_date(value):\n    \"\"\"Parse a string and return a datetime.date.\n\n    Raise ValueError if the input is well formatted but not a valid date.\n    Return None if the input isn't well formatted.\n    \"\"\"\n    try:\n        return datetime.date.fromisoformat(value)\n    except ValueError:\n        if match := date_re.match(value):\n            kw = {k: int(v) for k, v in match.groupdict().items()}\n            return datetime.date(**kw)",
+                "filename": "django/utils/dateparse.py",
+                "start_index": 0,
+                "end_index": 2375,
+                "start_line": 1,
+                "end_line": 78,
+                "max_line": 154,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "gs_allowed = False\n    default_error_messages = {\n        \"invalid\": _(\n            \"\u201c%(value)s\u201d value has an invalid format. It must be in \"\n            \"YYYY-MM-DD HH:MM[:ss[.uuuuuu]][TZ] format.\"\n        ),\n        \"invalid_date\": _(\n            \"\u201c%(value)s\u201d value has the correct format \"\n            \"(YYYY-MM-DD) but it is an invalid date.\"\n        ),\n        \"invalid_datetime\": _(\n            \"\u201c%(value)s\u201d value has the correct format \"\n            \"(YYYY-MM-DD HH:MM[:ss[.uuuuuu]][TZ]) \"\n            \"but it is an invalid date/time.\"\n        ),\n    }\n    description = _(\"Date (with time)\")\n\n    # __init__ is inherited from DateField\n\n    def _check_fix_default_value(self):\n        \"\"\"\n        Warn that using an actual date or datetime value is probably wrong;\n        it's only evaluated on server startup.\n        \"\"\"\n        if not self.has_default():\n            return []\n\n        value = self.default\n        if isinstance(value, (datetime.datetime, datetime.date)):\n            return self._check_if_value_fixed(value)\n        # No explicit date / datetime value -- no checks necessary.\n        return []\n\n    def get_internal_type(self):\n        return \"DateTimeField\"\n\n    def to_python(self, va",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 55475,
+                "end_index": 56691,
+                "start_line": 1149,
+                "end_line": 2741,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\n    Store timedelta objects.\n\n    Use interval on PostgreSQL, INTERVAL DAY TO SECOND on Oracle, and bigint\n    of microseconds on other databases.\n    \"\"\"\n\n    empty_strings_allowed = False\n    default_error_messages = {\n        \"invalid\": _(\n            \"\u201c%(value)s\u201d value has an invalid format. It must be in \"\n            \"[DD] [[HH:]MM:]ss[.uuuuuu] format.\"\n        )\n    }\n    description = _(\"Duration\")\n\n    def get_internal_type(self):\n        return \"DurationField\"\n\n    def to_python(self, value):\n        if value is None:\n            return value\n        if isinstance(value, datetime.timedelta):\n            return value\n        try:\n            parsed = parse_duration(value)\n        except ValueError:\n            pass\n        else:\n            if parsed is not None:\n                return parsed\n\n        raise exceptions.ValidationError(\n            self.error_messages[\"invalid\"],\n            code=\"invalid\",\n            params={\"value\": value},\n        )\n\n    def get_db_prep_value(self, value, connection, prepared=False):\n        if connection.features.has_native_duration_field:\n            return value\n        if value is None:\n            return None\n        return duration_microseconds(value)\n\n    def get_db_converters(self, connection):\n        converters = []\n        if not connection.features.has_native_duration_field:\n            converters.append(connection.ops.convert_durationfield_value)\n        return converters + super().get_db_converters(connection)\n\n    def value_to_string(self, obj):\n        val = self.value_from_object(obj)\n        return \"\" if val is None else duration_string(val)\n\n    def formfield(self, **kwargs):\n        return super().formfield(\n            **{\n                \"form_class\": forms.DurationField,\n                **kwargs,\n            }\n        )\n\n\nclass EmailField(CharField):\n    default_validators = [validators.validate_email]\n    description = _(\"Email address\")\n\n    def __init__(self, *args, **kwargs):\n        # max_length=254 to be compliant with RFCs 3696 and 5321\n        kwargs.setdefault(\"max_length\", 254)\n        super().__init__(*args, **kwargs)\n\n    def deconstruct(self):\n        name, path, args, kwargs = super().deconstruct()\n        # We do not exclude max_length if it matches default as we want to change\n        # the default in future.\n        return name, path, args, kwargs\n\n    def formfield(self, **kwargs):\n        # As with CharField, this will cause email validation to be performed\n        # twice.\n        return super().formfield(\n            **{\n                \"form_class\": forms.EmailField,\n                **kwargs,\n            }\n        )\n\n\nclass FilePathField(Field):\n    d",
+                "filename": "django/db/models/fields/__init__.py",
+                "start_index": 65299,
+                "end_index": 67990,
+                "start_line": 115,
+                "end_line": 2868,
+                "max_line": 2869,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "# This file is distributed under the same license as the Django package.\n#\n# The *_FORMAT strings use the Django date format syntax,\n# see https://docs.djangoproject.com/en/dev/ref/templates/builtins/#date\nDATE_FORMAT = r\"Y. \\g\\a\\d\\a j. F\"\nTIME_FORMAT = \"H:i\"\nDATETIME_FORMAT = r\"Y. \\g\\a\\d\\a j. F, H:i\"\nYEAR_MONTH_FORMAT = r\"Y. \\g. F\"\nMONTH_DAY_FORMAT = \"j. F\"\nSHORT_DATE_FORMAT = r\"j.m.Y\"\nSHORT_DATETIME_FORMAT = \"j.m.Y H:i\"\nFIRST_DAY_OF_WEEK = 1  # Monday\n\n# The *_INPUT_FORMATS strings use the Python strftime format syntax,\n# see https://docs.python.org/library/datetime.html#strftime-strptime-behavior\n# Kept ISO formats as they are in first position\nDATE_INPUT_FORMATS = [\n    \"%Y-%m-%d\",  # '2006-10-25'\n    \"%d.%m.%Y\",  # '25.10.2006'\n    \"%d.%m.%y\",  # '25.10.06'\n]\nTIME_INPUT_FORMATS = [\n    \"%H:%M:%S\",  # '14:30:59'\n    \"%H:%M:%S.%f\",  # '14:30:59.000200'\n    \"%H:%M\",  # '14:30'\n    \"%H.%M.%S\",  # '14.30.59'\n    \"%H.%M.%S.%f\",  # '14.30.59.000200'\n    \"%H.%M\",  # '14.30'\n]\nDATETIME_INPUT_FORMATS = [\n    \"%Y-%m-%d %H:%M:%S\",  # '2006-10-25 14:30:59'\n    \"%Y-%m-%d %H:%M:%S.%f\",  # '2006-10-25 14:30:59.000200'\n    \"%Y-%m-%d %H:%M\",  # '2006-10-25 14:30'\n    \"%d.%m.%Y %H:%M:%S\",  # '25.10.2006 14:30:59'\n    \"%d.%m.%Y %H:%M:%S.%f\",  # '25.10.2006 14:30:59.000200'\n    \"%d.%m.%Y %H:%M\",  # '25.10.2006 14:30'\n    \"%d.%m.%y %H:%M:%S\",  # '25.10.06 14:30:59'\n    \"%d.%m.%y %H:%M:%S.%f\",  # '25.10.06 14:30:59.000200'\n    \"%d.%m.%y %H:%M\",  # '25.10.06 14:30'\n    \"%d.%m.%y %H.%M.%S\",  # '25.10.06 14.30.59'\n    \"%d.%m.%y %H.%M.%S.%f\",  # '25.10.06 14.30.59.000200'\n    \"%d.%m.%y %H.%M\",  # '25.10.06 14.30'\n]\nDECIMAL_SEPARATOR = \",\"\nTHOUSAND_SEPARATOR = \"\u00a0\"  # Non-breaking space\nNUMBER_GROUPING = 3",
+                "filename": "django/conf/locale/lv/formats.py",
+                "start_index": 0,
+                "end_index": 1711,
+                "start_line": 1,
+                "end_line": 46,
+                "max_line": 46,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "# This file is distributed under the same license as the Django package.\n#\n# The *_FORMAT strings use the Django date format syntax,\n# see https://docs.djangoproject.com/en/dev/ref/templates/builtins/#date\n\n# Formatting for date objects.\nDATE_FORMAT = \"N j, Y\"\n# Formatting for time objects.\nTIME_FORMAT = \"P\"\n# Formatting for datetime objects.\nDATETIME_FORMAT = \"N j, Y, P\"\n# Formatting for date objects when only the year and month are relevant.\nYEAR_MONTH_FORMAT = \"F Y\"\n# Formatting for date objects when only the month and day are relevant.\nMONTH_DAY_FORMAT = \"F j\"\n# Short formatting for date objects.\nSHORT_DATE_FORMAT = \"m/d/Y\"\n# Short formatting for datetime objects.\nSHORT_DATETIME_FORMAT = \"m/d/Y P\"\n# First day of week, to be used on calendars.\n# 0 means Sunday, 1 means Monday...\nFIRST_DAY_OF_WEEK = 0\n\n# Formats to be used when parsing dates from input boxes, in order.\n# The *_INPUT_FORMATS strings use the Python strftime format syntax,\n# see https://docs.python.org/library/datetime.html#strftime-strptime-behavior\n# Note that these format strings are different from the ones to display dates.\n# Kept ISO formats as they are in first position\nDATE_INPUT_FORMATS = [\n    \"%Y-%m-%d\",  # '2006-10-25'\n    \"%m/%d/%Y\",  # '10/25/2006'\n    \"%m/%d/%y\",  # '10/25/06'\n    \"%b %d %Y\",  # 'Oct 25 2006'\n    \"%b %d, %Y\",  # 'Oct 25, 2006'\n    \"%d %b %Y\",  # '25 Oct 2006'\n    \"%d %b, %Y\",  # '25 Oct, 2006'\n    \"%B %d %Y\",  # 'October 25 2006'\n    \"%B %d, %Y\",  # 'October 25, 2006'\n    \"%d %B %Y\",  # '25 October 2006'\n    \"%d %B, %Y\",  # '25 October, 2006'\n]\nDATETIME_INPUT_FORMATS = [\n    \"%Y-%m-%d %H:%M:%S\",  # '2006-10-25 14:30:59'\n    \"%Y-%m-%d %H:%M:%S.%f\",  # '2006-10-25 14:30:59.000200'\n    \"%Y-%m-%d %H:%M\",  # '2006-10-25 14:30'\n    \"%m/%d/%Y %H:%M:%S\",  # '10/25/2006 14:30:59'\n    \"%m/%d/%Y %H:%M:%S.%f\",  # '10/25/2006 14:30:59.000200'\n    \"%m/%d/%Y %H:%M\",  # '10/25/2006 14:30'\n    \"%m/%d/%y %H:%M:%S\",  # '10/25/06 14:30:59'\n    \"%m/%d/%y %H:%M:%S.%f\",  # '10/25/06 14:30:59.000200'\n    \"%m/%d/%y %H:%M\",  # '10/25/06 14:30'\n]\nTIME_INPUT_FORMATS = [\n    \"%H:%M:%S\",  # '14:30:59'\n    \"%H:%M:%S.%f\",  # '14:30:59.000200'\n    \"%H:%M\",  # '14:30'\n]\n\n# Decimal separator symbol.\nDECIMAL_SEPARATOR = \".\"\n# Thousand separator symbol.\nTHOUSAND_SEPARATOR = \",\"\n# Number of digits that will be together, when splitting them by\n# THOUSAND_SEPARATOR. 0 means no grouping, 3 means splitting by thousands.\nNUMBER_GROUPING = 3",
+                "filename": "django/conf/locale/en/formats.py",
+                "start_index": 0,
+                "end_index": 2437,
+                "start_line": 1,
+                "end_line": 65,
+                "max_line": 65,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "# This file is distributed under the same license as the Django package.\n#\nDATE_FORMAT = r\"j \\d\\e F \\d\\e Y\"\nTIME_FORMAT = \"H:i\"\nDATETIME_FORMAT = r\"j \\d\\e F \\d\\e Y \\a \\l\\a\\s H:i\"\nYEAR_MONTH_FORMAT = r\"F \\d\\e Y\"\nMONTH_DAY_FORMAT = r\"j \\d\\e F\"\nSHORT_DATE_FORMAT = \"d/m/Y\"\nSHORT_DATETIME_FORMAT = \"d/m/Y H:i\"\nFIRST_DAY_OF_WEEK = 1  # Monday: ISO 8601\nDATE_INPUT_FORMATS = [\n    \"%d/%m/%Y\",  # '25/10/2006'\n    \"%d/%m/%y\",  # '25/10/06'\n    \"%Y%m%d\",  # '20061025'\n]\nDATETIME_INPUT_FORMATS = [\n    \"%d/%m/%Y %H:%M:%S\",\n    \"%d/%m/%Y %H:%M:%S.%f\",\n    \"%d/%m/%Y %H:%M\",\n    \"%d/%m/%y %H:%M:%S\",\n    \"%d/%m/%y %H:%M:%S.%f\",\n    \"%d/%m/%y %H:%M\",\n]\nDECIMAL_SEPARATOR = \".\"  # ',' is also official (less common): NOM-008-SCFI-2002\nTHOUSAND_SEPARATOR = \",\"\nNUMBER_GROUPING = 3",
+                "filename": "django/conf/locale/es_MX/formats.py",
+                "start_index": 0,
+                "end_index": 767,
+                "start_line": 1,
+                "end_line": 26,
+                "max_line": 26,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "# This file is distributed under the same license as the Django package.\n#\n# The *_FORMAT strings use the Django date format syntax,\n# see https://docs.djangoproject.com/en/dev/ref/templates/builtins/#date\nDATE_FORMAT = r\"j \\d\\e F \\d\\e Y\"\nTIME_FORMAT = \"H:i\"\nDATETIME_FORMAT = r\"j \\d\\e F \\d\\e Y \u00e0\\s H:i\"\nYEAR_MONTH_FORMAT = r\"F \\d\\e Y\"\nMONTH_DAY_FORMAT = r\"j \\d\\e F\"\nSHORT_DATE_FORMAT = \"d/m/Y\"\nSHORT_DATETIME_FORMAT = \"d/m/Y H:i\"\nFIRST_DAY_OF_WEEK = 0  # Sunday\n\n# The *_INPUT_FORMATS strings use the Python strftime format syntax,\n# see https://docs.python.org/library/datetime.html#strftime-strptime-behavior\n# Kept ISO formats as they are in first position\nDATE_INPUT_FORMATS = [\n    \"%Y-%m-%d\",  # '2006-10-25'\n    \"%d/%m/%Y\",  # '25/10/2006'\n    \"%d/%m/%y\",  # '25/10/06'\n    # \"%d de %b de %Y\",  # '25 de Out de 2006'\n    # \"%d de %b, %Y\",  # '25 Out, 2006'\n    # \"%d de %B de %Y\",  # '25 de Outubro de 2006'\n    # \"%d de %B, %Y\",  # '25 de Outubro, 2006'\n]\nDATETIME_INPUT_FORMATS = [\n    \"%Y-%m-%d %H:%M:%S\",  # '2006-10-25 14:30:59'\n    \"%Y-%m-%d %H:%M:%S.%f\",  # '2006-10-25 14:30:59.000200'\n    \"%Y-%m-%d %H:%M\",  # '2006-10-25 14:30'\n    \"%d/%m/%Y %H:%M:%S\",  # '25/10/2006 14:30:59'\n    \"%d/%m/%Y %H:%M:%S.%f\",  # '25/10/2006 14:30:59.000200'\n    \"%d/%m/%Y %H:%M\",  # '25/10/2006 14:30'\n    \"%d/%m/%y %H:%M:%S\",  # '25/10/06 14:30:59'\n    \"%d/%m/%y %H:%M:%S.%f\",  # '25/10/06 14:30:59.000200'\n    \"%d/%m/%y %H:%M\",  # '25/10/06 14:30'\n]\nDECIMAL_SEPARATOR = \",\"\nTHOUSAND_SEPARATOR = \".\"\nNUMBER_GROUPING = 3",
+                "filename": "django/conf/locale/pt/formats.py",
+                "start_index": 0,
+                "end_index": 1518,
+                "start_line": 1,
+                "end_line": 39,
+                "max_line": 39,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.0
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/utils/dateparse.py": [
+                {
+                    "chunk": {
+                        "code": "def parse_time(value):\n    \"\"\"Parse a string and return a datetime.time.\n\n    This function doesn't support time zone offsets.\n\n    Raise ValueError if the input is well formatted but not a valid time.\n    Return None if the input isn't well formatted, in particular if it\n    contains an offset.\n    \"\"\"\n    try:\n        # The fromisoformat() method takes time zone info into account and\n        # returns a time with a tzinfo component, if possible. However, there\n        # are no circumstances where aware datetime.time objects make sense, so\n        # remove the time zone offset.\n        return datetime.time.fromisoformat(value).replace(tzinfo=None)\n    except ValueError:\n        if match := time_re.match(value):\n            kw = match.groupdict()\n            kw[\"microsecond\"] = kw[\"microsecond\"] and kw[\"microsecond\"].ljust(6, \"0\")\n            kw = {k: int(v) for k, v in kw.items() if v is not None}\n            return datetime.time(**kw)\n\n\ndef parse_datetime(value):\n    \"\"\"Parse a string and return a datetime.datetime.\n\n    This function supports time zone offsets. When the input contains one,\n    the output uses a timezone with a fixed offset from UTC.\n\n    Raise ValueError if the input is well formatted but not a valid datetime.\n    Return None if the input isn't well formatted.\n    \"\"\"\n    try:\n        return datetime.datetime.fromisoformat(value)\n    except ValueError:\n        if match := datetime_re.match(value):\n            kw = match.groupdict()\n            kw[\"microsecond\"] = kw[\"microsecond\"] and kw[\"microsecond\"].ljust(6, \"0\")\n            tzinfo = kw.pop(\"tzinfo\")\n            if tzinfo == \"Z\":\n                tzinfo = datetime.timezone.utc\n            elif tzinfo is not None:\n                offset_mins = int(tzinfo[-2:]) if len(tzinfo) > 3 else 0\n                offset = 60 * int(tzinfo[1:3]) + offset_mins\n                if tzinfo[0] == \"-\":\n                    offset = -offset\n                tzinfo = get_fixed_timezone(offset)\n            kw = {k: int(v) for k, v in kw.items() if v is not None}\n            return datetime.datetime(**kw, tzinfo=tzinfo)\n\n\ndef parse_duration(value):\n    \"\"\"Parse a duration string and return a datetime.timedelta.\n\n    The preferred format for durations in Django is '%d %H:%M:%S.%f'.\n\n    Also supports ISO 8601 representation and PostgreSQL's day-time interval\n    format.\n    \"\"\"\n    match = (\n        standard_duration_re.match(value)\n        or iso8601_duration_re.match(value)\n        or postgres_interval_re.match(value)\n    )\n    if match:\n        kw = match.groupdict()\n        sign = -1 if kw.pop(\"sign\", \"+\") == \"-\" else 1\n        if kw.get(\"microseconds\"):\n            kw[\"microseconds\"] = kw[\"microseconds\"].ljust(6, \"0\")\n        kw = {k: float(v.replace(\",\", \".\")) for k, v in kw.items() if v is not None}\n        days = datetime.timedelta(kw.pop(\"days\", 0.0) or 0.0)\n        if match.re == iso8601_duration_re:\n            days *= sign\n        return days + sign * datetime.timedelta(**kw)",
+                        "filename": "django/utils/dateparse.py",
+                        "start_index": 2378,
+                        "end_index": 5362,
+                        "start_line": 81,
+                        "end_line": 154,
+                        "max_line": 154,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the parse_duration function where the issue is likely located, specifically the line mentioned in the issue description."
+                }
+            ],
+            "django/utils/duration.py": [
+                {
+                    "chunk": {
+                        "code": "import datetime\n\n\ndef _get_duration_components(duration):\n    days = duration.days\n    seconds = duration.seconds\n    microseconds = duration.microseconds\n\n    minutes = seconds // 60\n    seconds %= 60\n\n    hours = minutes // 60\n    minutes %= 60\n\n    return days, hours, minutes, seconds, microseconds\n\n\ndef duration_string(duration):\n    \"\"\"Version of str(timedelta) which is not English specific.\"\"\"\n    days, hours, minutes, seconds, microseconds = _get_duration_components(duration)\n\n    string = \"{:02d}:{:02d}:{:02d}\".format(hours, minutes, seconds)\n    if days:\n        string = \"{} \".format(days) + string\n    if microseconds:\n        string += \".{:06d}\".format(microseconds)\n\n    return string\n\n\ndef duration_iso_string(duration):\n    if duration < datetime.timedelta(0):\n        sign = \"-\"\n        duration *= -1\n    else:\n        sign = \"\"\n\n    days, hours, minutes, seconds, microseconds = _get_duration_components(duration)\n    ms = \".{:06d}\".format(microseconds) if microseconds else \"\"\n    return \"{}P{}DT{:02d}H{:02d}M{:02d}{}S\".format(\n        sign, days, hours, minutes, seconds, ms\n    )\n\n\ndef duration_microseconds(delta):\n    return (24 * 60 * 60 * delta.days + delta.seconds) * 1000000 + delta.microseconds",
+                        "filename": "django/utils/duration.py",
+                        "start_index": 0,
+                        "end_index": 1229,
+                        "start_line": 1,
+                        "end_line": 46,
+                        "max_line": 46,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the duration_iso_string function which is used to generate the ISO string that is then parsed by parse_duration, and may be relevant to understand how the sign is included in the string."
+                }
+            ]
+        },
+        "solution_task": "- Review the `parse_duration` function in `django/utils/dateparse.py` to ensure it correctly handles negative durations when the ISO string only contains days.\n- Specifically, check the line where `days` is multiplied by `sign` and ensure that the sign is applied correctly to the `timedelta` object representing days.\n- If the issue is that the sign is not applied when there are no smaller units than days, consider applying the sign to the `days` `timedelta` object regardless of the presence of smaller units.\n- The corrected code should ensure that `parse_duration` returns a negative `timedelta` when the ISO string represents a negative duration with only days specified.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable set of steps to address the bug described in the PROMPT. It correctly identifies the need to review the 'parse_duration' function and the specific line of code where the issue may reside. The RESPONSE also suggests a potential solution by ensuring that the sign is applied correctly to the 'timedelta' object, which is directly related to the problem described. Additionally, the RESPONSE includes links to the relevant code snippets, which is extremely useful for the developer tasked with fixing the bug. The only reason it does not score a 10 is that it does not provide the exact code change needed to fix the issue, but it does give a clear direction for what needs to be done.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711725256.106068,
+        "result": "- Review the `parse_duration` function in `django/utils/dateparse.py` to ensure it correctly handles negative durations when the ISO string only contains days.\n- Specifically, check the line where `days` is multiplied by `sign` and ensure that the sign is applied correctly to the `timedelta` object representing days.\n- If the issue is that the sign is not applied when there are no smaller units than days, consider applying the sign to the `days` `timedelta` object regardless of the presence of smaller units.\n- The corrected code should ensure that `parse_duration` returns a negative `timedelta` when the ISO string represents a negative duration with only days specified.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [utils](https://github.com/testbed/django__django__3.2/tree//django/utils)- [Lines 81 - 154](https://github.com/testbed/django__django__3.2/blob//django/utils/dateparse.py#L81-L154)\n\n This snippet contains the parse_duration function where the issue is likely located, specifically the line mentioned in the issue description.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [utils](https://github.com/testbed/django__django__3.2/tree//django/utils)- [Lines 1 - 46](https://github.com/testbed/django__django__3.2/blob//django/utils/duration.py#L1-L46)\n\n This snippet contains the duration_iso_string function which is used to generate the ISO string that is then parsed by parse_duration, and may be relevant to understand how the sign is included in the string.",
+        "context_relevance": 0.24,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT to get a score of 9 or 10. The RESPONSE that is RELEVANT and answers the entire PROMPT completely should get a score of 10.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT by providing a clear set of instructions to review and potentially correct the behavior of the `parse_duration` function in Django. It specifically references the part of the code where the problem is suspected to be and suggests a method to ensure the negative sign is correctly applied to durations that only contain days. Additionally, the RESPONSE includes relevant code snippets to check, which are directly related to the problem described in the PROMPT. The RESPONSE is comprehensive and fully relevant to the entire PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

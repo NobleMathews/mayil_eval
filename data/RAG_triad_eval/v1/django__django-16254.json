@@ -1,0 +1,206 @@
+{
+    "id": "django__django-16254",
+    "repo_name": "testbed/django__django__4.2",
+    "task_id": 8370280436269753749,
+    "title": "Adding ManyToManyField on SQLite rebuilds table.",
+    "body": "Description\n\t\nHey there,\nWhile updating the \u200bdjango-migration-linter for Django 4.1 (yeah, a bit late to the party, but I was busy eh :P), I bumped into what seems to be a regression.\nOn SQLite, when adding a ManyToManyField to a table, it seems to rebuild the table - whereas it did not in Django 4.0.\nFrom my understanding, rebuilding the table is not necessary in this case. Or perhaps I'm missing something.\nSteps to reproduce:\n1/ Before models:\nclass A(models.Model):\n\tpass\nclass B(models.Model):\n\tpass\n(with it's boring migration)\n2/ After models:\nclass A(models.Model):\n\tpass\nclass B(models.Model):\n\tmany_to_many = models.ManyToManyField(A)\nWhich, expectedly, generates the migration:\nfrom django.db import migrations, models\nclass Migration(migrations.Migration):\n\tdependencies = [(\"app_add_manytomany_field\", \"0001_initial\")]\n\toperations = [\n\t\tmigrations.AddField(\n\t\t\tmodel_name=\"b\",\n\t\t\tname=\"many_to_many\",\n\t\t\tfield=models.ManyToManyField(to=\"app_add_manytomany_field.A\"),\n\t\t)\n\t]\nAll good up until here.\nNow the \"regression\", in Django 4.0, a sqlmigrate generates:\nBEGIN;\n--\n-- Add field many_to_many to b\n--\nCREATE TABLE \"app_add_manytomany_field_b_many_to_many\" (\"id\" integer NOT NULL PRIMARY KEY AUTOINCREMENT, \"b_id\" integer NOT NULL REFERENCES \"app_add_manytomany_field_b\" (\"id\") DEFERRABLE INITIALLY DEFERRED, \"a_id\" integer NOT NULL REFERENCES \"app_add_manytomany_field_a\" (\"id\") DEFERRABLE INITIALLY DEFERRED);\nCREATE UNIQUE INDEX \"app_add_manytomany_field_b_many_to_many_b_id_a_id_3e15251d_uniq\" ON \"app_add_manytomany_field_b_many_to_many\" (\"b_id\", \"a_id\");\nCREATE INDEX \"app_add_manytomany_field_b_many_to_many_b_id_953b185b\" ON \"app_add_manytomany_field_b_many_to_many\" (\"b_id\");\nCREATE INDEX \"app_add_manytomany_field_b_many_to_many_a_id_4b44832a\" ON \"app_add_manytomany_field_b_many_to_many\" (\"a_id\");\nCOMMIT;\nwhereas in Django 4.1:\nBEGIN;\n--\n-- Add field many_to_many to b\n--\nCREATE TABLE \"new__app_add_manytomany_field_b\" (\"id\" integer NOT NULL PRIMARY KEY AUTOINCREMENT, \"x\" integer NOT NULL);\nCREATE TABLE \"app_add_manytomany_field_b_many_to_many\" (\"id\" integer NOT NULL PRIMARY KEY AUTOINCREMENT, \"b_id\" integer NOT NULL REFERENCES \"app_add_manytomany_field_b\" (\"id\") DEFERRABLE INITIALLY DEFERRED, \"a_id\" integer NOT NULL REFERENCES \"app_add_manytomany_field_a\" (\"id\") DEFERRABLE INITIALLY DEFERRED);\nINSERT INTO \"new__app_add_manytomany_field_b\" (\"id\", \"x\") SELECT \"id\", \"x\" FROM \"app_add_manytomany_field_b\";\nDROP TABLE \"app_add_manytomany_field_b\";\nALTER TABLE \"new__app_add_manytomany_field_b\" RENAME TO \"app_add_manytomany_field_b\";\nCREATE UNIQUE INDEX \"app_add_manytomany_field_b_many_to_many_b_id_a_id_3e15251d_uniq\" ON \"app_add_manytomany_field_b_many_to_many\" (\"b_id\", \"a_id\");\nCREATE INDEX \"app_add_manytomany_field_b_many_to_many_b_id_953b185b\" ON \"app_add_manytomany_field_b_many_to_many\" (\"b_id\");\nCREATE INDEX \"app_add_manytomany_field_b_many_to_many_a_id_4b44832a\" ON \"app_add_manytomany_field_b_many_to_many\" (\"a_id\");\nCOMMIT;\nI could bisect it down to this commit 2f73e5406d54cb8945e187eff302a3a3373350be (from #32502 and this \u200bPR).\nIn the diff we see that the # Special-case implicit M2M tables comment and its code were removed.\nThat's potentially a lead for a fix here I guess :)\n(On a side note, this commit introduced another regression #33408. But that's not related to the issue at hand)\nThank you!\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Review the `django/db/backends/base/schema.py` file to identify any changes in the handling of `ManyToManyField` between Django 4.0 and 4.1.\n- Check if the commit `2f73e5406d54cb8945e187eff302a3a3373350be` introduced any changes to the `_alter_many_to_many` method or related methods that could cause the table rebuild behavior.\n- If the commit removed a special-case handling for SQLite that prevented table rebuilds when adding a `ManyToManyField`, consider reintroducing that special-case code with any necessary adjustments for Django 4.1.\n- Ensure that the reintroduced code does not reintroduce the regression mentioned in the related issue #33408.\n- Test the changes locally by creating a new migration for adding a `ManyToManyField` to a model and running `sqlmigrate` to inspect the generated SQL.\n- If the generated SQL matches the expected SQL migration output for Django 4.0, create a pull request with the changes and reference the related PR #32502 and issue in the pull request description.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__4.2/tree//django/db/backends) \u2192 [base](https://github.com/testbed/django__django__4.2/tree//django/db/backends/base)- [Lines 1 - 1954](https://github.com/testbed/django__django__4.2/blob//django/db/backends/base/schema.py#L1-L1954)\n\n This snippet contains logic related to handling ManyToManyField relationships in the database schema, which is directly related to the issue of adding a ManyToManyField causing a table rebuild. \n\n\n   - [Lines 1387 - 1954](https://github.com/testbed/django__django__4.2/blob//django/db/backends/base/schema.py#L1387-L1954)\n\n This snippet includes the '_alter_many_to_many' method, which is likely involved in the process of altering ManyToManyField relationships and may contain the regression causing the unnecessary table rebuild.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00032649999999999997,
+        "snippet_processor": 0.052450000000000004,
+        "issue_star_creation": 0.04127,
+        "issue_star_solver": 0.06528,
+        "bouncer": 0.029540000000000004
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711706688.83059,
+        "relevant_snippets": [
+            {
+                "code": "import logging\nimport operator\nfrom datetime import datetime\n\nfrom django.conf import settings\nfrom django.db.backends.ddl_references import (\n    Columns,\n    Expressions,\n    ForeignKeyName,\n    IndexName,\n    Statement,\n    Table,\n)\nfrom django.db.backends.utils import names_digest, split_identifier, truncate_name\nfrom django.db.models import NOT_PROVIDED, Deferrable, Index\nfrom django.db.models.sql import Query\nfrom django.db.transaction import TransactionManagementError, atomic\nfrom django.utils import timezone\n\nlogger = logging.getLogger(\"django.db.backends.schema\")\n\n\ndef _is_relevant_relation(relation, altered_field):\n    \"\"\"\n    When altering the given field, must constraints on its model from the given\n    relation be temporarily dropped?\n    \"\"\"\n    field = relation.field\n    if field.many_to_many:\n        # M2M reverse field\n        return False\n    if altered_field.primary_key and field.to_fields == [None]:\n        # Foreign key constraint on the primary key, which is being altered.\n        return True\n    # Is the constraint targeting the field being altered?\n    return altered_field.name in field.to_fields\n\n\ndef _all_related_fields(model):\n    # Related fields must be returned in a deterministic order.\n    return sorted(\n        model._meta._get_fields(\n            forward=False,\n            reverse=True,\n            include_hidden=True,\n            include_parents=False,\n        ),\n        key=operator.attrgetter(\"name\"),\n    )\n\n\ndef _related_non_m2m_objects(old_field, new_field):\n    # Filter out m2m objects from reverse relations.\n    # Return (old_relation, new_relation) tuples.\n    related_fields = zip(\n        (\n            obj\n            for obj in _all_related_fields(old_field.model)\n            if _is_relevant_relation(obj, old_field)\n        ),\n        (\n            obj\n            for obj in _all_related_fields(new_field.model)\n            if _is_relevant_relation(obj, new_field)\n        ),\n    )\n    for old_rel, new_rel in related_fields:\n        yield old_rel, new_rel\n        yield from _related_non_m2m_objects(\n            old_rel.remote_field,\n            new_rel.remote_field,\n        )",
+                "filename": "django/db/backends/base/schema.py",
+                "start_index": 0,
+                "end_index": 2153,
+                "start_line": 1,
+                "end_line": 1954,
+                "max_line": 1967,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"sites\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.CreateModel(\n            name=\"FlatPage\",\n            fields=[\n                (\n                    \"id\",\n                    models.AutoField(\n                        verbose_name=\"ID\",\n                        serialize=False,\n                        auto_created=True,\n                        primary_key=True,\n                    ),\n                ),\n                (\n                    \"url\",\n                    models.CharField(max_length=100, verbose_name=\"URL\", db_index=True),\n                ),\n                (\"title\", models.CharField(max_length=200, verbose_name=\"title\")),\n                (\"content\", models.TextField(verbose_name=\"content\", blank=True)),\n                (\n                    \"enable_comments\",\n                    models.BooleanField(default=False, verbose_name=\"enable comments\"),\n                ),\n                (\n                    \"template_name\",\n                    models.CharField(\n                        help_text=(\n                            \"Example: \u201cflatpages/contact_page.html\u201d. If this isn\u2019t \"\n                            \"provided, the system will use \u201cflatpages/default.html\u201d.\"\n                        ),\n                        max_length=70,\n                        verbose_name=\"template name\",\n                        blank=True,\n                    ),\n                ),\n                (\n                    \"registration_required\",\n                    models.BooleanField(\n                        default=False,\n                        help_text=(\n                            \"If this is checked, only logged-in users will be able to \"\n                            \"view the page.\"\n                        ),\n                        verbose_name=\"registration required\",\n                    ),\n                ),\n                (\n                    \"sites\",\n                    models.ManyToManyField(to=\"sites.Site\", verbose_name=\"sites\"),\n                ),\n            ],\n            options={\n                \"ordering\": [\"url\"],\n                \"db_table\": \"django_flatpage\",\n                \"verbose_name\": \"flat page\",\n                \"verbose_name_plural\": \"flat pages\",\n            },\n            bases=(models.Model,),\n        ),\n    ]",
+                "filename": "django/contrib/flatpages/migrations/0001_initial.py",
+                "start_index": 0,
+                "end_index": 2397,
+                "start_line": 1,
+                "end_line": 68,
+                "max_line": 68,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"sites\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.CreateModel(\n            name=\"Redirect\",\n            fields=[\n                (\n                    \"id\",\n                    models.AutoField(\n                        verbose_name=\"ID\",\n                        serialize=False,\n                        auto_created=True,\n                        primary_key=True,\n                    ),\n                ),\n                (\n                    \"site\",\n                    models.ForeignKey(\n                        to=\"sites.Site\",\n                        on_delete=models.CASCADE,\n                        verbose_name=\"site\",\n                    ),\n                ),\n                (\n                    \"old_path\",\n                    models.CharField(\n                        help_text=(\n                            \"This should be an absolute path, excluding the domain \"\n                            \"name. Example: \u201c/events/search/\u201d.\"\n                        ),\n                        max_length=200,\n                        verbose_name=\"redirect from\",\n                        db_index=True,\n                    ),\n                ),\n                (\n                    \"new_path\",\n                    models.CharField(\n                        help_text=(\n                            \"This can be either an absolute path (as above) or a full \"\n                            \"URL starting with \u201chttp://\u201d.\"\n                        ),\n                        max_length=200,\n                        verbose_name=\"redirect to\",\n                        blank=True,\n                    ),\n                ),\n            ],\n            options={\n                \"ordering\": [\"old_path\"],\n                \"unique_together\": {(\"site\", \"old_path\")},\n                \"db_table\": \"django_redirect\",\n                \"verbose_name\": \"redirect\",\n                \"verbose_name_plural\": \"redirects\",\n            },\n            bases=(models.Model,),\n        ),\n    ]",
+                "filename": "django/contrib/redirects/migrations/0001_initial.py",
+                "start_index": 0,
+                "end_index": 2092,
+                "start_line": 1,
+                "end_line": 64,
+                "max_line": 64,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"admin\", \"0002_logentry_remove_auto_add\"),\n    ]\n\n    # No database changes; adds choices to action_flag.\n    operations = [\n        migrations.AlterField(\n            model_name=\"logentry\",\n            name=\"action_flag\",\n            field=models.PositiveSmallIntegerField(\n                choices=[(1, \"Addition\"), (2, \"Change\"), (3, \"Deletion\")],\n                verbose_name=\"action flag\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/admin/migrations/0003_logentry_add_action_flag_choices.py",
+                "start_index": 0,
+                "end_index": 537,
+                "start_line": 1,
+                "end_line": 19,
+                "max_line": 19,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _alter_column_comment_sql(self, model, new_field, new_type, new_db_comment):\n        return (\n            self.sql_alter_column_comment\n            % {\n                \"table\": self.quote_name(model._meta.db_table),\n                \"column\": self.quote_name(new_field.column),\n                \"comment\": self._comment_sql(new_db_comment),\n            },\n            [],\n        )\n\n    def _comment_sql(self, comment):\n        return self.quote_value(comment or \"\")\n\n    def _alter_many_to_many(self, model, old_field, new_field, strict):\n        \"\"\"Alter M2Ms to repoint their to= endpoints.\"\"\"\n        # Rename the through table\n        if (\n            old_field.remote_field.through._meta.db_table\n            != new_field.remote_field.through._meta.db_table\n        ):\n            self.alter_db_table(\n                old_field.remote_field.through,\n                old_field.remote_field.through._meta.db_table,\n                new_field.remote_field.through._meta.db_table,\n            )\n        # Repoint the FK to the other side\n        self.alter_field(\n            new_field.remote_field.through,\n            # The field that points to the target model is needed, so we can\n            # tell alter_field to change it - this is m2m_reverse_field_name()\n            # (as opposed to m2m_field_name(), which points to our model).\n            old_field.remote_field.through._meta.get_field(\n                old_field.m2m_reverse_field_name()\n            ),\n            new_field.remote_field.through._meta.get_field(\n                new_field.m2m_reverse_field_name()\n            ),\n        )\n        self.alter_field(\n            new_field.remote_field.through,\n            # for self-referential models we need to alter field from the other end too\n            old_field.remote_field.through._meta.get_field(old_field.m2m_field_name()),\n            new_field.remote_field.through._meta.get_field(new_field.m2m_field_name()),\n        )",
+                "filename": "django/db/backends/base/schema.py",
+                "start_index": 56966,
+                "end_index": 58913,
+                "start_line": 1387,
+                "end_line": 1954,
+                "max_line": 1967,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"redirects\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"redirect\",\n            name=\"new_path\",\n            field=models.CharField(\n                blank=True,\n                help_text=(\n                    \"This can be either an absolute path (as above) or a full \"\n                    \"URL starting with a scheme such as \u201chttps://\u201d.\"\n                ),\n                max_length=200,\n                verbose_name=\"redirect to\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/redirects/migrations/0002_alter_redirect_new_path_help_text.py",
+                "start_index": 0,
+                "end_index": 630,
+                "start_line": 1,
+                "end_line": 23,
+                "max_line": 23,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import django.contrib.contenttypes.models\nfrom django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = []\n\n    operations = [\n        migrations.CreateModel(\n            name=\"ContentType\",\n            fields=[\n                (\n                    \"id\",\n                    models.AutoField(\n                        verbose_name=\"ID\",\n                        serialize=False,\n                        auto_created=True,\n                        primary_key=True,\n                    ),\n                ),\n                (\"name\", models.CharField(max_length=100)),\n                (\"app_label\", models.CharField(max_length=100)),\n                (\n                    \"model\",\n                    models.CharField(\n                        max_length=100, verbose_name=\"python model class name\"\n                    ),\n                ),\n            ],\n            options={\n                \"ordering\": (\"name\",),\n                \"db_table\": \"django_content_type\",\n                \"verbose_name\": \"content type\",\n                \"verbose_name_plural\": \"content types\",\n            },\n            bases=(models.Model,),\n            managers=[\n                (\"objects\", django.contrib.contenttypes.models.ContentTypeManager()),\n            ],\n        ),\n        migrations.AlterUniqueTogether(\n            name=\"contenttype\",\n            unique_together={(\"app_label\", \"model\")},\n        ),\n    ]",
+                "filename": "django/contrib/contenttypes/migrations/0001_initial.py",
+                "start_index": 0,
+                "end_index": 1433,
+                "start_line": 1,
+                "end_line": 45,
+                "max_line": 45,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _unique_should_be_added(self, old_field, new_field):\n        return (\n            not new_field.primary_key\n            and new_field.unique\n            and (not old_field.unique or old_field.primary_key)\n        )\n\n    def _rename_field_sql(self, table, old_field, new_field, new_type):\n        return self.sql_rename_column % {\n            \"table\": self.quote_name(table),\n            \"old_column\": self.quote_name(old_field.column),\n            \"new_column\": self.quote_name(new_field.column),\n            \"type\": new_type,\n        }\n\n    def _create_fk_sql(self, model, field, suffix):\n        table = Table(model._meta.db_table, self.quote_name)\n        name = self._fk_constraint_name(model, field, suffix)\n        column = Columns(model._meta.db_table, [field.column], self.quote_name)\n        to_table = Table(field.target_field.model._meta.db_table, self.quote_name)\n        to_column = Columns(\n            field.target_field.model._meta.db_table,\n            [field.target_field.column],\n            self.quote_name,\n        )\n        deferrable = self.connection.ops.deferrable_sql()\n        return Statement(\n            self.sql_create_fk,\n            table=table,\n            name=name,\n            column=column,\n            to_table=to_table,\n            to_column=to_column,\n            deferrable=deferrable,\n        )\n\n    def _fk_constraint_name(self, model, field, suffix):\n        def create_fk_name(*args, **kwargs):\n            return self.quote_name(self._create_index_name(*args, **kwargs))\n\n        return ForeignKeyName(\n            model._meta.db_table,\n            [field.column],\n            split_identifier(field.target_field.model._meta.db_table)[1],\n            [field.target_field.column],\n            suffix,\n            create_fk_name,\n        )\n\n    def _delete_fk_sql(self, model, name):\n        return self._delete_constraint_sql(self.sql_delete_fk, model, name)\n\n    def _deferrable_constraint_sql(self, deferrable):\n        if deferrable is None:\n            return \"\"\n        if deferrable == Deferrable.DEFERRED:\n            return \" DEFERRABLE INITIALLY DEFERRED\"\n        if deferrable == Deferrable.IMMEDIATE:\n            return \" DEFERRABLE INITIALLY IMMEDIATE\"\n\n    def _unique_index_nulls_distinct_sql(self, nulls_distinct):\n        if nulls_distinct is False:\n            return \" NULLS NOT DISTINCT\"\n        elif nulls_distinct is True:\n            return \" NULLS DISTINCT\"\n        return \"\"",
+                "filename": "django/db/backends/base/schema.py",
+                "start_index": 66633,
+                "end_index": 69081,
+                "start_line": 1628,
+                "end_line": 1693,
+                "max_line": 1967,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import django.contrib.sessions.models\nfrom django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = []\n\n    operations = [\n        migrations.CreateModel(\n            name=\"Session\",\n            fields=[\n                (\n                    \"session_key\",\n                    models.CharField(\n                        max_length=40,\n                        serialize=False,\n                        verbose_name=\"session key\",\n                        primary_key=True,\n                    ),\n                ),\n                (\"session_data\", models.TextField(verbose_name=\"session data\")),\n                (\n                    \"expire_date\",\n                    models.DateTimeField(verbose_name=\"expire date\", db_index=True),\n                ),\n            ],\n            options={\n                \"abstract\": False,\n                \"db_table\": \"django_session\",\n                \"verbose_name\": \"session\",\n                \"verbose_name_plural\": \"sessions\",\n            },\n            managers=[\n                (\"objects\", django.contrib.sessions.models.SessionManager()),\n            ],\n        ),\n    ]",
+                "filename": "django/contrib/sessions/migrations/0001_initial.py",
+                "start_index": 0,
+                "end_index": 1147,
+                "start_line": 1,
+                "end_line": 37,
+                "max_line": 37,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\ndef add_legacy_name(apps, schema_editor):\n    alias = schema_editor.connection.alias\n    ContentType = apps.get_model(\"contenttypes\", \"ContentType\")\n    for ct in ContentType.objects.using(alias):\n        try:\n            ct.name = apps.get_model(ct.app_label, ct.model)._meta.object_name\n        except LookupError:\n            ct.name = ct.model\n        ct.save()\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"contenttypes\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.AlterModelOptions(\n            name=\"contenttype\",\n            options={\n                \"verbose_name\": \"content type\",\n                \"verbose_name_plural\": \"content types\",\n            },\n        ),\n        migrations.AlterField(\n            model_name=\"contenttype\",\n            name=\"name\",\n            field=models.CharField(max_length=100, null=True),\n        ),\n        migrations.RunPython(\n            migrations.RunPython.noop,\n            add_legacy_name,\n            hints={\"model_name\": \"contenttype\"},\n        ),\n        migrations.RemoveField(\n            model_name=\"contenttype\",\n            name=\"name\",\n        ),\n    ]",
+                "filename": "django/contrib/contenttypes/migrations/0002_remove_content_type_name.py",
+                "start_index": 0,
+                "end_index": 1198,
+                "start_line": 1,
+                "end_line": 42,
+                "max_line": 42,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/backends/base/schema.py": [
+                {
+                    "chunk": {
+                        "code": "import logging\nimport operator\nfrom datetime import datetime\n\nfrom django.conf import settings\nfrom django.db.backends.ddl_references import (\n    Columns,\n    Expressions,\n    ForeignKeyName,\n    IndexName,\n    Statement,\n    Table,\n)\nfrom django.db.backends.utils import names_digest, split_identifier, truncate_name\nfrom django.db.models import NOT_PROVIDED, Deferrable, Index\nfrom django.db.models.sql import Query\nfrom django.db.transaction import TransactionManagementError, atomic\nfrom django.utils import timezone\n\nlogger = logging.getLogger(\"django.db.backends.schema\")\n\n\ndef _is_relevant_relation(relation, altered_field):\n    \"\"\"\n    When altering the given field, must constraints on its model from the given\n    relation be temporarily dropped?\n    \"\"\"\n    field = relation.field\n    if field.many_to_many:\n        # M2M reverse field\n        return False\n    if altered_field.primary_key and field.to_fields == [None]:\n        # Foreign key constraint on the primary key, which is being altered.\n        return True\n    # Is the constraint targeting the field being altered?\n    return altered_field.name in field.to_fields\n\n\ndef _all_related_fields(model):\n    # Related fields must be returned in a deterministic order.\n    return sorted(\n        model._meta._get_fields(\n            forward=False,\n            reverse=True,\n            include_hidden=True,\n            include_parents=False,\n        ),\n        key=operator.attrgetter(\"name\"),\n    )\n\n\ndef _related_non_m2m_objects(old_field, new_field):\n    # Filter out m2m objects from reverse relations.\n    # Return (old_relation, new_relation) tuples.\n    related_fields = zip(\n        (\n            obj\n            for obj in _all_related_fields(old_field.model)\n            if _is_relevant_relation(obj, old_field)\n        ),\n        (\n            obj\n            for obj in _all_related_fields(new_field.model)\n            if _is_relevant_relation(obj, new_field)\n        ),\n    )\n    for old_rel, new_rel in related_fields:\n        yield old_rel, new_rel\n        yield from _related_non_m2m_objects(\n            old_rel.remote_field,\n            new_rel.remote_field,\n        )",
+                        "filename": "django/db/backends/base/schema.py",
+                        "start_index": 0,
+                        "end_index": 2153,
+                        "start_line": 1,
+                        "end_line": 1954,
+                        "max_line": 1967,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains logic related to handling ManyToManyField relationships in the database schema, which is directly related to the issue of adding a ManyToManyField causing a table rebuild."
+                },
+                {
+                    "chunk": {
+                        "code": "def _alter_column_comment_sql(self, model, new_field, new_type, new_db_comment):\n        return (\n            self.sql_alter_column_comment\n            % {\n                \"table\": self.quote_name(model._meta.db_table),\n                \"column\": self.quote_name(new_field.column),\n                \"comment\": self._comment_sql(new_db_comment),\n            },\n            [],\n        )\n\n    def _comment_sql(self, comment):\n        return self.quote_value(comment or \"\")\n\n    def _alter_many_to_many(self, model, old_field, new_field, strict):\n        \"\"\"Alter M2Ms to repoint their to= endpoints.\"\"\"\n        # Rename the through table\n        if (\n            old_field.remote_field.through._meta.db_table\n            != new_field.remote_field.through._meta.db_table\n        ):\n            self.alter_db_table(\n                old_field.remote_field.through,\n                old_field.remote_field.through._meta.db_table,\n                new_field.remote_field.through._meta.db_table,\n            )\n        # Repoint the FK to the other side\n        self.alter_field(\n            new_field.remote_field.through,\n            # The field that points to the target model is needed, so we can\n            # tell alter_field to change it - this is m2m_reverse_field_name()\n            # (as opposed to m2m_field_name(), which points to our model).\n            old_field.remote_field.through._meta.get_field(\n                old_field.m2m_reverse_field_name()\n            ),\n            new_field.remote_field.through._meta.get_field(\n                new_field.m2m_reverse_field_name()\n            ),\n        )\n        self.alter_field(\n            new_field.remote_field.through,\n            # for self-referential models we need to alter field from the other end too\n            old_field.remote_field.through._meta.get_field(old_field.m2m_field_name()),\n            new_field.remote_field.through._meta.get_field(new_field.m2m_field_name()),\n        )",
+                        "filename": "django/db/backends/base/schema.py",
+                        "start_index": 56966,
+                        "end_index": 58913,
+                        "start_line": 1387,
+                        "end_line": 1954,
+                        "max_line": 1967,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the '_alter_many_to_many' method, which is likely involved in the process of altering ManyToManyField relationships and may contain the regression causing the unnecessary table rebuild."
+                }
+            ]
+        },
+        "solution_task": "- Review the `django/db/backends/base/schema.py` file to identify any changes in the handling of `ManyToManyField` between Django 4.0 and 4.1.\n- Check if the commit `2f73e5406d54cb8945e187eff302a3a3373350be` introduced any changes to the `_alter_many_to_many` method or related methods that could cause the table rebuild behavior.\n- If the commit removed a special-case handling for SQLite that prevented table rebuilds when adding a `ManyToManyField`, consider reintroducing that special-case code with any necessary adjustments for Django 4.1.\n- Ensure that the reintroduced code does not reintroduce the regression mentioned in the related issue #33408.\n- Test the changes locally by creating a new migration for adding a `ManyToManyField` to a model and running `sqlmigrate` to inspect the generated SQL.\n- If the generated SQL matches the expected SQL migration output for Django 4.0, create a pull request with the changes and reference the related PR #32502 and issue in the pull request description.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a structured and detailed approach to address the reported issue of the table rebuild behavior when adding a ManyToManyField in Django 4.1. It suggests reviewing the specific file and commit where the regression might have occurred, which is highly relevant to the problem. The RESPONSE also advises reintroducing the special-case code for SQLite with necessary adjustments, ensuring not to reintroduce another regression, and testing the changes locally. This is a comprehensive strategy that covers investigation, code modification, testing, and contribution back to the project. The RESPONSE also includes links to the specific code snippets to check, which is extremely helpful for someone looking to resolve the issue. The only reason it does not score a 10 is that it does not explicitly mention the need to verify that the reintroduced code is compatible with Django 4.1's architecture, which could be an important step to ensure the fix is sustainable.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711706877.816726,
+        "result": "- Review the `django/db/backends/base/schema.py` file to identify any changes in the handling of `ManyToManyField` between Django 4.0 and 4.1.\n- Check if the commit `2f73e5406d54cb8945e187eff302a3a3373350be` introduced any changes to the `_alter_many_to_many` method or related methods that could cause the table rebuild behavior.\n- If the commit removed a special-case handling for SQLite that prevented table rebuilds when adding a `ManyToManyField`, consider reintroducing that special-case code with any necessary adjustments for Django 4.1.\n- Ensure that the reintroduced code does not reintroduce the regression mentioned in the related issue #33408.\n- Test the changes locally by creating a new migration for adding a `ManyToManyField` to a model and running `sqlmigrate` to inspect the generated SQL.\n- If the generated SQL matches the expected SQL migration output for Django 4.0, create a pull request with the changes and reference the related PR #32502 and issue in the pull request description.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db) \u2192 [backends](https://github.com/testbed/django__django__4.2/tree//django/db/backends) \u2192 [base](https://github.com/testbed/django__django__4.2/tree//django/db/backends/base)- [Lines 1 - 1954](https://github.com/testbed/django__django__4.2/blob//django/db/backends/base/schema.py#L1-L1954)\n\n This snippet contains logic related to handling ManyToManyField relationships in the database schema, which is directly related to the issue of adding a ManyToManyField causing a table rebuild. \n\n\n   - [Lines 1387 - 1954](https://github.com/testbed/django__django__4.2/blob//django/db/backends/base/schema.py#L1387-L1954)\n\n This snippet includes the '_alter_many_to_many' method, which is likely involved in the process of altering ManyToManyField relationships and may contain the regression causing the unnecessary table rebuild.",
+        "context_relevance": 0.18,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer it completely.\nSupporting Evidence: The RESPONSE provides a detailed action plan that addresses the issue described in the PROMPT, including reviewing the relevant code, identifying changes between Django versions, and testing for regressions. It also provides a direct link to the code that likely contains the regression, which is highly relevant to the user's concern about the ManyToManyField causing a table rebuild in SQLite. The RESPONSE is comprehensive and directly addresses all aspects of the PROMPT, including the steps to reproduce the issue, the specific commit that may have introduced the regression, and the related PR and issue."
+        },
+        "qa_relevance": 1.0
+    }
+}

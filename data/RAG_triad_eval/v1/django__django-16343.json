@@ -1,0 +1,206 @@
+{
+    "id": "django__django-16343",
+    "repo_name": "testbed/django__django__4.2",
+    "task_id": 2058286160548267786,
+    "title": "Deprecate passing positional arguments to Signer.",
+    "body": "Description\n\t\nWe discovered a vulnerability in one of our applications recently which was caused by an inaccurate instantiation of django.core.signing.Signer. The developer intended to use the user's email address as the salt for the Signing instance but instead caused it to be used as the key. Here's an example code block that demonstrates the problem:\nsigner = Signer(self.context['request'].user.email)\nsigned_data = signer.sign_object(dict(\n\tlicense_number='...',\n\tproduct_id='...',\n\tdevice_count='...'\n))\nIn our case, this signed data was then being used to verify a later request and generate an active license. This meant that an attacker could feasibly generate their own licenses if they realised that their email address was the key. The fix for this was to add salt= in front of the email variable. It occurred to us that this is a relatively easy mistake to make and could be avoided if the signature of Signer.__init__ was changed thusly:\n- def __init__(self, key=None, sep=':', salt=None, algorithm=None):\n+ def __init__(self, *, key=None, sep=':', salt=None, algorithm=None):\nThat is, adding a * after self to force the developer to name the parameters.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Update the `Signer.__init__` method signature in `django/core/signing.py` to enforce keyword-only arguments by adding `*` before `key=None`:\n  ```python\n  def __init__(\n      self, *, key=None, sep=\":\", salt=None, algorithm=None, fallback_keys=None\n  ):\n  ```\n- Replace the incorrect instantiation of `Signer` with the correct usage of `salt` as a keyword argument:\n  ```python\n  signer = Signer(salt=self.context['request'].user.email)\n  ```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__4.2/tree//django/core)- [Lines 179 - 183](https://github.com/testbed/django__django__4.2/blob//django/core/signing.py#L179-L183)\n\n This snippet shows the comment where the change should be made to enforce keyword-only arguments in the Signer class. \n\n\n   - [Lines 181 - 263](https://github.com/testbed/django__django__4.2/blob//django/core/signing.py#L181-L263)\n\n This snippet contains the actual __init__ method of the Signer class where the change to enforce keyword-only arguments needs to be implemented.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0002025,
+        "snippet_processor": 0.058730000000000004,
+        "issue_star_creation": 0.03284,
+        "issue_star_solver": 0.05058000000000001,
+        "bouncer": 0.03025
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711706389.2269151,
+        "relevant_snippets": [
+            {
+                "code": "class Signer:\n    # RemovedInDjango51Warning: When the deprecation ends, replace with:\n    # def __init__(\n    #   self, *, key=None, sep=\":\", salt=None, algorithm=None, fallback_keys=None\n    # ):",
+                "filename": "django/core/signing.py",
+                "start_index": 5061,
+                "end_index": 5258,
+                "start_line": 179,
+                "end_line": 183,
+                "max_line": 302,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "def __init__(\n        self,\n        *args,\n        key=None,\n        sep=\":\",\n        salt=None,\n        algorithm=None,\n        fallback_keys=None,\n    ):\n        self.key = key or settings.SECRET_KEY\n        self.fallback_keys = (\n            fallback_keys\n            if fallback_keys is not None\n            else settings.SECRET_KEY_FALLBACKS\n        )\n        self.sep = sep\n        self.salt = salt or \"%s.%s\" % (\n            self.__class__.__module__,\n            self.__class__.__name__,\n        )\n        self.algorithm = algorithm or \"sha256\"\n        # RemovedInDjango51Warning.\n        if args:\n            warnings.warn(\n                f\"Passing positional arguments to {self.__class__.__name__} is \"\n                f\"deprecated.\",\n                RemovedInDjango51Warning,\n                stacklevel=2,\n            )\n            for arg, attr in zip(\n                args, [\"key\", \"sep\", \"salt\", \"algorithm\", \"fallback_keys\"]\n            ):\n                if arg or attr == \"sep\":\n                    setattr(self, attr, arg)\n        if _SEP_UNSAFE.match(self.sep):\n            raise ValueError(\n                \"Unsafe Signer separator: %r (cannot be empty or consist of \"\n                \"only A-z0-9-_=)\" % sep,\n            )\n\n    def signature(self, value, key=None):\n        key = key or self.key\n        return base64_hmac(self.salt + \"signer\", value, key, algorithm=self.algorithm)\n\n    def sign(self, value):\n        return \"%s%s%s\" % (value, self.sep, self.signature(value))\n\n    def unsign(self, signed_value):\n        if self.sep not in signed_value:\n            raise BadSignature('No \"%s\" found in value' % self.sep)\n        value, sig = signed_value.rsplit(self.sep, 1)\n        for key in [self.key, *self.fallback_keys]:\n            if constant_time_compare(sig, self.signature(value, key)):\n                return value\n        raise BadSignature('Signature \"%s\" does not match' % sig)\n\n    def sign_object(self, obj, serializer=JSONSerializer, compress=False):\n        \"\"\"\n        Return URL-safe, hmac signed base64 compressed JSON string.\n\n        If compress is True (not the default), check if compressing using zlib\n        can save some space. Prepend a '.' to signify compression. This is\n        included in the signature, to protect against zip bombs.\n\n        The serializer is expected to return a bytestring.\n        \"\"\"\n        data = serializer().dumps(obj)\n        # Flag for if it's been compressed or not.\n        is_compressed = False\n\n        if compress:\n            # Avoid zlib dependency unless compress is being used.\n            compressed = zlib.compress(data)\n            if len(compressed) < (len(data) - 1):\n                data = compressed\n                is_compressed = True\n        base64d = b64_encode(data).decode()\n        if is_compressed:\n            base64d = \".\" + base64d\n        return self.sign(base64d)",
+                "filename": "django/core/signing.py",
+                "start_index": 5263,
+                "end_index": 8143,
+                "start_line": 181,
+                "end_line": 263,
+                "max_line": 302,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "class UnsaltedSHA1PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    Very insecure algorithm that you should *never* use; store SHA1 hashes\n    with an empty salt.\n\n    This class is implemented because Django used to accept such password\n    hashes. Some older Django installs still have these values lingering\n    around so we need to handle and upgrade them properly.\n    \"\"\"\n\n    algorithm = \"unsalted_sha1\"\n\n    def __init__(self, *args, **kwargs):\n        warnings.warn(\n            \"django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher is deprecated.\",\n            RemovedInDjango51Warning,\n            stacklevel=2,\n        )\n        super().__init__(*args, **kwargs)\n\n    def salt(self):\n        return \"\"\n\n    def encode(self, password, salt):\n        if salt != \"\":\n            raise ValueError(\"salt must be empty.\")\n        hash = hashlib.sha1(password.encode()).hexdigest()\n        return \"sha1$$%s\" % hash\n\n    def decode(self, encoded):\n        assert encoded.startswith(\"sha1$$\")\n        return {\n            \"algorithm\": self.algorithm,\n            \"hash\": encoded[6:],\n            \"salt\": None,\n        }\n\n    def verify(self, password, encoded):\n        encoded_2 = self.encode(password, \"\")\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def harden_runtime(self, password, encoded):\n        pass\n\n\n# RemovedInDjango51Warning.",
+                "filename": "django/contrib/auth/hashers.py",
+                "start_index": 24661,
+                "end_index": 26226,
+                "start_line": 738,
+                "end_line": 790,
+                "max_line": 842,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _cookie_signer_key(key):\n    # SECRET_KEYS items may be str or bytes.\n    return b\"django.http.cookies\" + force_bytes(key)\n\n\ndef get_cookie_signer(salt=\"django.core.signing.get_cookie_signer\"):\n    Signer = import_string(settings.SIGNING_BACKEND)\n    return Signer(\n        key=_cookie_signer_key(settings.SECRET_KEY),\n        fallback_keys=map(_cookie_signer_key, settings.SECRET_KEY_FALLBACKS),\n        salt=salt,\n    )\n\n\nclass JSONSerializer:\n    \"\"\"\n    Simple wrapper around json to be used in signing.dumps and\n    signing.loads.\n    \"\"\"\n\n    def dumps(self, obj):\n        return json.dumps(obj, separators=(\",\", \":\")).encode(\"latin-1\")\n\n    def loads(self, data):\n        return json.loads(data.decode(\"latin-1\"))\n\n\ndef dumps(\n    obj, key=None, salt=\"django.core.signing\", serializer=JSONSerializer, compress=False\n):\n    \"\"\"\n    Return URL-safe, hmac signed base64 compressed JSON string. If key is\n    None, use settings.SECRET_KEY instead. The hmac algorithm is the default\n    Signer algorithm.\n\n    If compress is True (not the default), check if compressing using zlib can\n    save some space. Prepend a '.' to signify compression. This is included\n    in the signature, to protect against zip bombs.\n\n    Salt can be used to namespace the hash, so that a signed string is\n    only valid for a given namespace. Leaving this at the default\n    value or re-using a salt value across different parts of your\n    application without good cause is a security risk.\n\n    The serializer is expected to return a bytestring.\n    \"\"\"\n    return TimestampSigner(key=key, salt=salt).sign_object(\n        obj, serializer=serializer, compress=compress\n    )\n\n\ndef loads(\n    s,\n    key=None,\n    salt=\"django.core.signing\",\n    serializer=JSONSerializer,\n    max_age=None,\n    fallback_keys=None,\n):\n    \"\"\"\n    Reverse of dumps(), raise BadSignature if signature fails.\n\n    The serializer is expected to accept a bytestring.\n    \"\"\"\n    return TimestampSigner(\n        key=key, salt=salt, fallback_keys=fallback_keys\n    ).unsign_object(\n        s,\n        serializer=serializer,\n        max_age=max_age,\n    )",
+                "filename": "django/core/signing.py",
+                "start_index": 2942,
+                "end_index": 5058,
+                "start_line": 106,
+                "end_line": 222,
+                "max_line": 302,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class UnsaltedMD5PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    Incredibly insecure algorithm that you should *never* use; stores unsalted\n    MD5 hashes without the algorithm prefix, also accepts MD5 hashes with an\n    empty salt.\n\n    This class is implemented because Django used to store passwords this way\n    and to accept such password hashes. Some older Django installs still have\n    these values lingering around so we need to handle and upgrade them\n    properly.\n    \"\"\"\n\n    algorithm = \"unsalted_md5\"\n\n    def __init__(self, *args, **kwargs):\n        warnings.warn(\n            \"django.contrib.auth.hashers.UnsaltedMD5PasswordHasher is deprecated.\",\n            RemovedInDjango51Warning,\n            stacklevel=2,\n        )\n        super().__init__(*args, **kwargs)\n\n    def salt(self):\n        return \"\"\n\n    def encode(self, password, salt):\n        if salt != \"\":\n            raise ValueError(\"salt must be empty.\")\n        return hashlib.md5(password.encode()).hexdigest()\n\n    def decode(self, encoded):\n        return {\n            \"algorithm\": self.algorithm,\n            \"hash\": encoded,\n            \"salt\": None,\n        }\n\n    def verify(self, password, encoded):\n        if len(encoded) == 37:\n            encoded = encoded.removeprefix(\"md5$$\")\n        encoded_2 = self.encode(password, \"\")\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"hash\"): mask_hash(decoded[\"hash\"], show=3),\n        }\n\n    def harden_runtime(self, password, encoded):\n        pass",
+                "filename": "django/contrib/auth/hashers.py",
+                "start_index": 26227,
+                "end_index": 27877,
+                "start_line": 791,
+                "end_line": 842,
+                "max_line": 842,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ScryptPasswordHasher(BasePasswordHasher):\n    \"\"\"\n    Secure password hashing using the Scrypt algorithm.\n    \"\"\"\n\n    algorithm = \"scrypt\"\n    block_size = 8\n    maxmem = 0\n    parallelism = 1\n    work_factor = 2**14\n\n    def encode(self, password, salt, n=None, r=None, p=None):\n        self._check_encode_args(password, salt)\n        n = n or self.work_factor\n        r = r or self.block_size\n        p = p or self.parallelism\n        hash_ = hashlib.scrypt(\n            password.encode(),\n            salt=salt.encode(),\n            n=n,\n            r=r,\n            p=p,\n            maxmem=self.maxmem,\n            dklen=64,\n        )\n        hash_ = base64.b64encode(hash_).decode(\"ascii\").strip()\n        return \"%s$%d$%s$%d$%d$%s\" % (self.algorithm, n, salt, r, p, hash_)\n\n    def decode(self, encoded):\n        algorithm, work_factor, salt, block_size, parallelism, hash_ = encoded.split(\n            \"$\", 6\n        )\n        assert algorithm == self.algorithm\n        return {\n            \"algorithm\": algorithm,\n            \"work_factor\": int(work_factor),\n            \"salt\": salt,\n            \"block_size\": int(block_size),\n            \"parallelism\": int(parallelism),\n            \"hash\": hash_,\n        }\n\n    def verify(self, password, encoded):\n        decoded = self.decode(encoded)\n        encoded_2 = self.encode(\n            password,\n            decoded[\"salt\"],\n            decoded[\"work_factor\"],\n            decoded[\"block_size\"],\n            decoded[\"parallelism\"],\n        )\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"work factor\"): decoded[\"work_factor\"],\n            _(\"block size\"): decoded[\"block_size\"],\n            _(\"parallelism\"): decoded[\"parallelism\"],\n            _(\"salt\"): mask_hash(decoded[\"salt\"]),\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def must_update(self, encoded):\n        decoded = self.decode(encoded)\n        return (\n            decoded[\"work_factor\"] != self.work_factor\n            or decoded[\"block_size\"] != self.block_size\n            or decoded[\"parallelism\"] != self.parallelism\n        )\n\n    def harden_runtime(self, password, encoded):\n        # The runtime for Scrypt is too complicated to implement a sensible\n        # hardening algorithm.\n        pass\n\n\n# RemovedInDjango51Warning.",
+                "filename": "django/contrib/auth/hashers.py",
+                "start_index": 19380,
+                "end_index": 21831,
+                "start_line": 566,
+                "end_line": 790,
+                "max_line": 842,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "from django.contrib.auth import validators\nfrom django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0003_alter_user_email_max_length\"),\n    ]\n\n    # No database changes; modifies validators and error_messages (#13147).\n    operations = [\n        migrations.AlterField(\n            model_name=\"user\",\n            name=\"username\",\n            field=models.CharField(\n                error_messages={\"unique\": \"A user with that username already exists.\"},\n                max_length=30,\n                validators=[validators.UnicodeUsernameValidator()],\n                help_text=(\n                    \"Required. 30 characters or fewer. Letters, digits and @/./+/-/_ \"\n                    \"only.\"\n                ),\n                unique=True,\n                verbose_name=\"username\",\n            ),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0004_alter_user_username_opts.py",
+                "start_index": 0,
+                "end_index": 879,
+                "start_line": 1,
+                "end_line": 27,
+                "max_line": 27,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class SHA1PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    The SHA1 password hashing algorithm (not recommended)\n    \"\"\"\n\n    algorithm = \"sha1\"\n\n    def __init__(self, *args, **kwargs):\n        warnings.warn(\n            \"django.contrib.auth.hashers.SHA1PasswordHasher is deprecated.\",\n            RemovedInDjango51Warning,\n            stacklevel=2,\n        )\n        super().__init__(*args, **kwargs)\n\n    def encode(self, password, salt):\n        self._check_encode_args(password, salt)\n        hash = hashlib.sha1((salt + password).encode()).hexdigest()\n        return \"%s$%s$%s\" % (self.algorithm, salt, hash)\n\n    def decode(self, encoded):\n        algorithm, salt, hash = encoded.split(\"$\", 2)\n        assert algorithm == self.algorithm\n        return {\n            \"algorithm\": algorithm,\n            \"hash\": hash,\n            \"salt\": salt,\n        }\n\n    def verify(self, password, encoded):\n        decoded = self.decode(encoded)\n        encoded_2 = self.encode(password, decoded[\"salt\"])\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"salt\"): mask_hash(decoded[\"salt\"], show=2),\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def must_update(self, encoded):\n        decoded = self.decode(encoded)\n        return must_update_salt(decoded[\"salt\"], self.salt_entropy)\n\n    def harden_runtime(self, password, encoded):\n        pass\n\n\nclass MD5PasswordHasher(BasePasswordHasher):\n    \"\"\"\n    The Salted MD5 password hashing algorithm (not recommended)\n    \"\"\"\n\n    algorithm = \"md5\"\n\n    def encode(self, password, salt):\n        self._check_encode_args(password, salt)\n        hash = hashlib.md5((salt + password).encode()).hexdigest()\n        return \"%s$%s$%s\" % (self.algorithm, salt, hash)\n\n    def decode(self, encoded):\n        algorithm, salt, hash = encoded.split(\"$\", 2)\n        assert algorithm == self.algorithm\n        return {\n            \"algorithm\": algorithm,\n            \"hash\": hash,\n            \"salt\": salt,\n        }\n\n    def verify(self, password, encoded):\n        decoded = self.decode(encoded)\n        encoded_2 = self.encode(password, decoded[\"salt\"])\n        return constant_time_compare(encoded, encoded_2)\n\n    def safe_summary(self, encoded):\n        decoded = self.decode(encoded)\n        return {\n            _(\"algorithm\"): decoded[\"algorithm\"],\n            _(\"salt\"): mask_hash(decoded[\"salt\"], show=2),\n            _(\"hash\"): mask_hash(decoded[\"hash\"]),\n        }\n\n    def must_update(self, encoded):\n        decoded = self.decode(encoded)\n        return must_update_salt(decoded[\"salt\"], self.salt_entropy)\n\n    def harden_runtime(self, password, encoded):\n        pass\n\n\n# RemovedInDjango51Warning.",
+                "filename": "django/contrib/auth/hashers.py",
+                "start_index": 21832,
+                "end_index": 24660,
+                "start_line": 645,
+                "end_line": 790,
+                "max_line": 842,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def get_session_auth_fallback_hash(self):\n        for fallback_secret in settings.SECRET_KEY_FALLBACKS:\n            yield self._get_session_auth_hash(secret=fallback_secret)\n\n    def _get_session_auth_hash(self, secret=None):\n        key_salt = \"django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash\"\n        return salted_hmac(\n            key_salt,\n            self.password,\n            secret=secret,\n            algorithm=\"sha256\",\n        ).hexdigest()\n\n    @classmethod\n    def get_email_field_name(cls):\n        try:\n            return cls.EMAIL_FIELD\n        except AttributeError:\n            return \"email\"\n\n    @classmethod\n    def normalize_username(cls, username):\n        return (\n            unicodedata.normalize(\"NFKC\", username)\n            if isinstance(username, str)\n            else username\n        )",
+                "filename": "django/contrib/auth/base_user.py",
+                "start_index": 4675,
+                "end_index": 5511,
+                "start_line": 153,
+                "end_line": 179,
+                "max_line": 179,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import unicodedata\n\nfrom django import forms\nfrom django.contrib.auth import authenticate, get_user_model, password_validation\nfrom django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX, identify_hasher\nfrom django.contrib.auth.models import User\nfrom django.contrib.auth.tokens import default_token_generator\nfrom django.contrib.sites.shortcuts import get_current_site\nfrom django.core.exceptions import ValidationError\nfrom django.core.mail import EmailMultiAlternatives\nfrom django.template import loader\nfrom django.utils.encoding import force_bytes\nfrom django.utils.http import urlsafe_base64_encode\nfrom django.utils.text import capfirst\nfrom django.utils.translation import gettext\nfrom django.utils.translation import gettext_lazy as _\n\nUserModel = get_user_model()\n\n\ndef _unicode_ci_compare(s1, s2):\n    \"\"\"\n    Perform case-insensitive comparison of two identifiers, using the\n    recommended algorithm from Unicode Technical Report 36, section\n    2.11.2(B)(2).\n    \"\"\"\n    return (\n        unicodedata.normalize(\"NFKC\", s1).casefold()\n        == unicodedata.normalize(\"NFKC\", s2).casefold()\n    )\n\n\nclass ReadOnlyPasswordHashWidget(forms.Widget):\n    template_name = \"auth/widgets/read_only_password_hash.html\"\n    read_only = True\n\n    def get_context(self, name, value, attrs):\n        context = super().get_context(name, value, attrs)\n        summary = []\n        if not value or value.startswith(UNUSABLE_PASSWORD_PREFIX):\n            summary.append({\"label\": gettext(\"No password set.\")})\n        else:\n            try:\n                hasher = identify_hasher(value)\n            except ValueError:\n                summary.append(\n                    {\n                        \"label\": gettext(\n                            \"Invalid password format or unknown hashing algorithm.\"\n                        )\n                    }\n                )\n            else:\n                for key, value_ in hasher.safe_summary(value).items():\n                    summary.append({\"label\": gettext(key), \"value\": value_})\n        context[\"summary\"] = summary\n        return context\n\n    def id_for_label(self, id_):\n        return None\n\n\nclass ReadOnlyPasswordHashField(forms.Field):\n    widget = ReadOnlyPasswordHashWidget\n\n    def __init__(self, *args, **kwargs):\n        kwargs.setdefault(\"required\", False)\n        kwargs.setdefault(\"disabled\", True)\n        super().__init__(*args, **kwargs)\n\n\nclass UsernameField(forms.CharField):\n    def to_python(self, value):\n        return unicodedata.normalize(\"NFKC\", super().to_python(value))\n\n    def widget_attrs(self, widget):\n        return {\n            **super().widget_attrs(widget),\n            \"autocapitalize\": \"none\",\n            \"autocomplete\": \"username\",\n        }",
+                "filename": "django/contrib/auth/forms.py",
+                "start_index": 0,
+                "end_index": 2738,
+                "start_line": 1,
+                "end_line": 367,
+                "max_line": 510,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/core/signing.py": [
+                {
+                    "chunk": {
+                        "code": "class Signer:\n    # RemovedInDjango51Warning: When the deprecation ends, replace with:\n    # def __init__(\n    #   self, *, key=None, sep=\":\", salt=None, algorithm=None, fallback_keys=None\n    # ):",
+                        "filename": "django/core/signing.py",
+                        "start_index": 5061,
+                        "end_index": 5258,
+                        "start_line": 179,
+                        "end_line": 183,
+                        "max_line": 302,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the comment where the change should be made to enforce keyword-only arguments in the Signer class."
+                },
+                {
+                    "chunk": {
+                        "code": "def __init__(\n        self,\n        *args,\n        key=None,\n        sep=\":\",\n        salt=None,\n        algorithm=None,\n        fallback_keys=None,\n    ):\n        self.key = key or settings.SECRET_KEY\n        self.fallback_keys = (\n            fallback_keys\n            if fallback_keys is not None\n            else settings.SECRET_KEY_FALLBACKS\n        )\n        self.sep = sep\n        self.salt = salt or \"%s.%s\" % (\n            self.__class__.__module__,\n            self.__class__.__name__,\n        )\n        self.algorithm = algorithm or \"sha256\"\n        # RemovedInDjango51Warning.\n        if args:\n            warnings.warn(\n                f\"Passing positional arguments to {self.__class__.__name__} is \"\n                f\"deprecated.\",\n                RemovedInDjango51Warning,\n                stacklevel=2,\n            )\n            for arg, attr in zip(\n                args, [\"key\", \"sep\", \"salt\", \"algorithm\", \"fallback_keys\"]\n            ):\n                if arg or attr == \"sep\":\n                    setattr(self, attr, arg)\n        if _SEP_UNSAFE.match(self.sep):\n            raise ValueError(\n                \"Unsafe Signer separator: %r (cannot be empty or consist of \"\n                \"only A-z0-9-_=)\" % sep,\n            )\n\n    def signature(self, value, key=None):\n        key = key or self.key\n        return base64_hmac(self.salt + \"signer\", value, key, algorithm=self.algorithm)\n\n    def sign(self, value):\n        return \"%s%s%s\" % (value, self.sep, self.signature(value))\n\n    def unsign(self, signed_value):\n        if self.sep not in signed_value:\n            raise BadSignature('No \"%s\" found in value' % self.sep)\n        value, sig = signed_value.rsplit(self.sep, 1)\n        for key in [self.key, *self.fallback_keys]:\n            if constant_time_compare(sig, self.signature(value, key)):\n                return value\n        raise BadSignature('Signature \"%s\" does not match' % sig)\n\n    def sign_object(self, obj, serializer=JSONSerializer, compress=False):\n        \"\"\"\n        Return URL-safe, hmac signed base64 compressed JSON string.\n\n        If compress is True (not the default), check if compressing using zlib\n        can save some space. Prepend a '.' to signify compression. This is\n        included in the signature, to protect against zip bombs.\n\n        The serializer is expected to return a bytestring.\n        \"\"\"\n        data = serializer().dumps(obj)\n        # Flag for if it's been compressed or not.\n        is_compressed = False\n\n        if compress:\n            # Avoid zlib dependency unless compress is being used.\n            compressed = zlib.compress(data)\n            if len(compressed) < (len(data) - 1):\n                data = compressed\n                is_compressed = True\n        base64d = b64_encode(data).decode()\n        if is_compressed:\n            base64d = \".\" + base64d\n        return self.sign(base64d)",
+                        "filename": "django/core/signing.py",
+                        "start_index": 5263,
+                        "end_index": 8143,
+                        "start_line": 181,
+                        "end_line": 263,
+                        "max_line": 302,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the actual __init__ method of the Signer class where the change to enforce keyword-only arguments needs to be implemented."
+                }
+            ]
+        },
+        "solution_task": "- Update the `Signer.__init__` method signature in `django/core/signing.py` to enforce keyword-only arguments by adding `*` before `key=None`:\n  ```python\n  def __init__(\n      self, *, key=None, sep=\":\", salt=None, algorithm=None, fallback_keys=None\n  ):\n  ```\n- Replace the incorrect instantiation of `Signer` with the correct usage of `salt` as a keyword argument:\n  ```python\n  signer = Signer(salt=self.context['request'].user.email)\n  ```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT by suggesting an update to the `Signer.__init__` method signature to enforce keyword-only arguments. This directly addresses the issue of developers mistakenly using positional arguments, which led to the vulnerability. The RESPONSE also corrects the instantiation of `Signer` to use the `salt` keyword argument, which is the proper fix for the immediate problem. Additionally, the RESPONSE includes references to the specific code snippets in the Django repository where the changes should be made, which is helpful for developers looking to implement the fix. The only reason it does not score a 10 is that it does not explicitly mention updating documentation or adding tests to ensure the change does not introduce new issues, which would be part of a comprehensive solution.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711706497.3639302,
+        "result": "- Update the `Signer.__init__` method signature in `django/core/signing.py` to enforce keyword-only arguments by adding `*` before `key=None`:\n  ```python\n  def __init__(\n      self, *, key=None, sep=\":\", salt=None, algorithm=None, fallback_keys=None\n  ):\n  ```\n- Replace the incorrect instantiation of `Signer` with the correct usage of `salt` as a keyword argument:\n  ```python\n  signer = Signer(salt=self.context['request'].user.email)\n  ```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__4.2/tree//django/core)- [Lines 179 - 183](https://github.com/testbed/django__django__4.2/blob//django/core/signing.py#L179-L183)\n\n This snippet shows the comment where the change should be made to enforce keyword-only arguments in the Signer class. \n\n\n   - [Lines 181 - 263](https://github.com/testbed/django__django__4.2/blob//django/core/signing.py#L181-L263)\n\n This snippet contains the actual __init__ method of the Signer class where the change to enforce keyword-only arguments needs to be implemented.",
+        "context_relevance": 0.35000000000000003,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer it completely to get a score of 10.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT by providing a solution to enforce keyword-only arguments in the `Signer.__init__` method, which would prevent the misuse of positional arguments that led to the vulnerability. It also corrects the instantiation of `Signer` with the proper use of the `salt` keyword. Additionally, the RESPONSE includes references to the specific code snippets where the changes should be made, which is directly relevant to the PROMPT's request for a change in the signature of `Signer.__init__`. The RESPONSE is comprehensive and fully answers the PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

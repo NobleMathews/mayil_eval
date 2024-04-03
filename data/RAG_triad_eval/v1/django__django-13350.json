@@ -1,0 +1,240 @@
+{
+    "id": "django__django-13350",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 8773819490567908785,
+    "title": "Temporary files do not get deleted on canceled upload request.",
+    "body": "Description\n\t \n\t\t(last modified by Mariusz Felisiak)\n\t \nTemporary files do not get deleted when upload (request) is canceled by client (e.g. browser is closed before upload is finished).\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `handle_file_complete` method in `django/http/multipartparser.py` to include a cleanup routine for temporary files associated with canceled uploads.\n- Add a check in the `except StopUpload as e:` block to determine if the upload was canceled due to a connection reset or client-side cancellation.\n- If the upload was canceled, call a cleanup function to delete the temporary file associated with the upload.\n- Implement the cleanup function to delete the temporary file, which can be similar to the `delete_temporary_file` hypothesized function.\n- Ensure that the cleanup function is called both when an upload is successfully completed and when it is interrupted or canceled.\n- Update the `TemporaryUploadedFile.close` method in `django/core/files/uploadedfile.py` to handle the deletion of the temporary file when the file object is closed, regardless of whether the file was moved or deleted before the tempfile could unlink it.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [http](https://github.com/testbed/django__django__3.2/tree//django/http)- [Lines 348 - 357](https://github.com/testbed/django__django__3.2/blob//django/http/multipartparser.py#L348-L357)\n\n This snippet includes the exception handling for a stopped upload and calls '_close_files', which is likely where the temporary files should be deleted. \n\n\n   - [Lines 365 - 411](https://github.com/testbed/django__django__3.2/blob//django/http/multipartparser.py#L365-L411)\n\n This snippet includes the '_close_files' method, which is called when an upload is stopped and should handle the deletion of temporary files.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [files](https://github.com/testbed/django__django__3.2/tree//django/core/files)- [Lines 1 - 93](https://github.com/testbed/django__django__3.2/blob//django/core/files/uploadedfile.py#L1-L93)\n\n This snippet defines the 'TemporaryUploadedFile' class, including its 'close' method, which is responsible for deleting temporary files.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [files](https://github.com/testbed/django__django__3.2/tree//django/core/files)- [Lines 1 - 189](https://github.com/testbed/django__django__3.2/blob//django/core/files/uploadhandler.py#L1-L189)\n\n This snippet defines the 'StopUpload' exception, which is raised to abort an upload, and may be relevant to ensure temporary files are deleted when this exception is raised.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0002025,
+        "snippet_processor": 0.06689,
+        "issue_star_creation": 0.04074,
+        "issue_star_solver": 0.06449,
+        "bouncer": 0.02736
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711726930.1581812,
+        "relevant_snippets": [
+            {
+                "code": "except StopUpload as e:\n            self._close_files()\n            if not e.connection_reset:\n                exhaust(self._input_data)\n        else:\n            if not uploaded_file:\n                for handler in handlers:\n                    handler.upload_interrupted()\n            # Make sure that the request data is all fed\n            exhaust(self._input_data)",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 14464,
+                "end_index": 14833,
+                "start_line": 348,
+                "end_line": 357,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "elif item_type == FILE:\n                    # Avoid storing more than DATA_UPLOAD_MAX_NUMBER_FILES.",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 9661,
+                "end_index": 9760,
+                "start_line": 253,
+                "end_line": 254,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nClasses representing uploaded files.\n\"\"\"\n\nimport os\nfrom io import BytesIO\n\nfrom django.conf import settings\nfrom django.core.files import temp as tempfile\nfrom django.core.files.base import File\nfrom django.core.files.utils import validate_file_name\n\n__all__ = (\n    \"UploadedFile\",\n    \"TemporaryUploadedFile\",\n    \"InMemoryUploadedFile\",\n    \"SimpleUploadedFile\",\n)\n\n\nclass UploadedFile(File):\n    \"\"\"\n    An abstract uploaded file (``TemporaryUploadedFile`` and\n    ``InMemoryUploadedFile`` are the built-in concrete subclasses).\n\n    An ``UploadedFile`` object behaves somewhat like a file object and\n    represents some file data that the user submitted with a form.\n    \"\"\"\n\n    def __init__(\n        self,\n        file=None,\n        name=None,\n        content_type=None,\n        size=None,\n        charset=None,\n        content_type_extra=None,\n    ):\n        super().__init__(file, name)\n        self.size = size\n        self.content_type = content_type\n        self.charset = charset\n        self.content_type_extra = content_type_extra\n\n    def __repr__(self):\n        return \"<%s: %s (%s)>\" % (self.__class__.__name__, self.name, self.content_type)\n\n    def _get_name(self):\n        return self._name\n\n    def _set_name(self, name):\n        # Sanitize the file name so that it can't be dangerous.\n        if name is not None:\n            # Just use the basename of the file -- anything else is dangerous.\n            name = os.path.basename(name)\n\n            # File names longer than 255 characters can cause problems on older OSes.\n            if len(name) > 255:\n                name, ext = os.path.splitext(name)\n                ext = ext[:255]\n                name = name[: 255 - len(ext)] + ext\n\n            name = validate_file_name(name)\n\n        self._name = name\n\n    name = property(_get_name, _set_name)\n\n\nclass TemporaryUploadedFile(UploadedFile):\n    \"\"\"\n    A file uploaded to a temporary location (i.e. stream-to-disk).\n    \"\"\"\n\n    def __init__(self, name, content_type, size, charset, content_type_extra=None):\n        _, ext = os.path.splitext(name)\n        file = tempfile.NamedTemporaryFile(\n            suffix=\".upload\" + ext, dir=settings.FILE_UPLOAD_TEMP_DIR\n        )\n        super().__init__(file, name, content_type, size, charset, content_type_extra)\n\n    def temporary_file_path(self):\n        \"\"\"Return the full path of this file.\"\"\"\n        return self.file.name\n\n    def close(self):\n        try:\n            return self.file.close()\n        except FileNotFoundError:\n            # The file was moved or deleted before the tempfile could unlink\n            # it. Still sets self.file.close_called and calls\n            # self.file.file.close() before the exception.\n            pass",
+                "filename": "django/core/files/uploadedfile.py",
+                "start_index": 0,
+                "end_index": 2730,
+                "start_line": 1,
+                "end_line": 93,
+                "max_line": 150,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "if ( xhr.onabort !== undefined ) {\n\t\t\t\t\txhr.onabort = errorCallback;\n\t\t\t\t} else {\n\t\t\t\t\txhr.onreadystatechange = function() {\n\n\t\t\t\t\t\t// Check readyState before timeout as it changes\n\t\t\t\t\t\tif ( xhr.readyState === 4 ) {\n\n\t\t\t\t\t\t\t// Allow onerror to be called first,\n\t\t\t\t\t\t\t// but that will not handle a native abort\n\t\t\t\t\t\t\t// Also, save errorCallback to a variable\n\t\t\t\t\t\t\t// as xhr.onerror cannot be accessed\n\t\t\t\t\t\t\twindow.setTimeout( function() {\n\t\t\t\t\t\t\t\tif ( callback ) {\n\t\t\t\t\t\t\t\t\terrorCallback();\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t} );\n\t\t\t\t\t\t}\n\t\t\t\t\t};\n\t\t\t\t}\n\n\t\t\t\t// Create the abort callback\n\t\t\t\tcallback = callback( \"abort\" );\n\n\t\t\t\ttry {\n\n\t\t\t\t\t// Do send the request (this may raise an exception)\n\t\t\t\t\txhr.send( options.hasContent && options.data || null );\n\t\t\t\t} catch ( e ) {\n\n\t\t\t\t\t// trac-14683: Only rethrow if this hasn't been notified as an error yet\n\t\t\t\t\tif ( callback ) {\n\t\t\t\t\t\tthrow e;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}",
+                "filename": "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+                "start_index": 270722,
+                "end_index": 271617,
+                "start_line": 10164,
+                "end_line": 10771,
+                "max_line": 10965,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "if old_field_name:\n                    # We run this at the beginning of the next loop\n                    # since we cannot be sure a file is complete until\n                    # we hit the next boundary/part of the multipart content.\n                    self.handle_file_complete(old_field_name, counters)\n                    old_field_name = None\n                    uploaded_file = True\n\n                if (\n                    item_type in FIELD_TYPES\n                    and settings.DATA_UPLOAD_MAX_NUMBER_FIELDS is not None\n                ):\n                    # Avoid storing more than DATA_UPLOAD_MAX_NUMBER_FIELDS.\n                    num_post_keys += 1\n                    # 2 accounts for empty raw fields before and after the\n                    # last boundary.\n                    if settings.DATA_UPLOAD_MAX_NUMBER_FIELDS + 2 < num_post_keys:\n                        raise TooManyFieldsSent(\n                            \"The number of GET/POST parameters exceeded \"\n                            \"settings.DATA_UPLOAD_MAX_NUMBER_FIELDS.\"\n                        )\n\n                try:\n                    disposition = meta_data[\"content-disposition\"][1]\n                    field_name = disposition[\"name\"].strip()\n                except (KeyError, IndexError, AttributeError):\n                    continue\n\n                transfer_encoding = meta_data.get(\"content-transfer-encoding\")\n                if transfer_encoding is not None:\n                    transfer_encoding = transfer_encoding[0].strip()\n                field_name = force_str(field_name, encoding, errors=\"replace\")",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 6379,
+                "end_index": 7983,
+                "start_line": 186,
+                "end_line": 217,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "try:\n                        for handler in handlers:\n                            try:\n                                handler.new_file(\n                                    field_name,\n                                    file_name,\n                                    content_type,\n                                    content_length,\n                                    charset,\n                                    content_type_extra,\n                                )\n                            except StopFutureHandlers:\n                                break\n\n                        for chunk in field_stream:\n                            if transfer_encoding == \"base64\":\n                                # We only special-case base64 transfer encoding\n                                # We should always decode base64 chunks by\n                                # multiple of 4, ignoring whitespace.\n\n                                stripped_chunk = b\"\".join(chunk.split())\n\n                                remaining = len(stripped_chunk) % 4\n                                while remaining != 0:\n                                    over_chunk = field_stream.read(4 - remaining)\n                                    if not over_chunk:\n                                        break\n                                    stripped_chunk += b\"\".join(over_chunk.split())\n                                    remaining = len(stripped_chunk) % 4\n\n                                try:\n                                    chunk = base64.b64decode(stripped_chunk)\n                                except Exception as exc:\n                                    # Since this is only a chunk, any error is\n                                    # an unfixable error.\n                                    raise MultiPartParserError(\n                                        \"Could not decode base64 data.\"\n                                    ) from exc\n\n                            for i, handler in enumerate(handlers):\n                                chunk_length = len(chunk)\n                                chunk = handler.receive_data_chunk(chunk, counters[i])\n                                counters[i] += chunk_length\n                                if chunk is None:\n                                    # Don't continue if the chunk received by\n                                    # the handler is None.\n                                    break\n\n                    except SkipFile:\n                        self._close_files()\n                        # Just use up the rest of this file...\n                        exhaust(field_stream)\n                    else:\n                        # Handle file upload completions on next iteration.\n                        old_field_name = field_name",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 11170,
+                "end_index": 13944,
+                "start_line": 75,
+                "end_line": 339,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nBase file upload handler classes, and the built-in concrete subclasses\n\"\"\"\nimport os\nfrom io import BytesIO\n\nfrom django.conf import settings\nfrom django.core.files.uploadedfile import InMemoryUploadedFile, TemporaryUploadedFile\nfrom django.utils.module_loading import import_string\n\n__all__ = [\n    \"UploadFileException\",\n    \"StopUpload\",\n    \"SkipFile\",\n    \"FileUploadHandler\",\n    \"TemporaryFileUploadHandler\",\n    \"MemoryFileUploadHandler\",\n    \"load_handler\",\n    \"StopFutureHandlers\",\n]\n\n\nclass UploadFileException(Exception):\n    \"\"\"\n    Any error having to do with uploading files.\n    \"\"\"\n\n    pass\n\n\nclass StopUpload(UploadFileException):\n    \"\"\"\n    This exception is raised when an upload must abort.\n    \"\"\"\n\n    def __init__(self, connection_reset=False):\n        \"\"\"\n        If ``connection_reset`` is ``True``, Django knows will halt the upload\n        without consuming the rest of the upload. This will cause the browser to\n        show a \"connection reset\" error.\n        \"\"\"\n        self.connection_reset = connection_reset\n\n    def __str__(self):\n        if self.connection_reset:\n            return \"StopUpload: Halt current upload.\"\n        else:\n            return \"StopUpload: Consume request data, then halt.\"\n\n\nclass SkipFile(UploadFileException):\n    \"\"\"\n    This exception is raised by an upload handler that wants to skip a given file.\n    \"\"\"\n\n    pass\n\n\nclass StopFutureHandlers(UploadFileException):\n    \"\"\"\n    Upload handlers that have handled a file and do not want future handlers to\n    run should raise this exception instead of returning None.\n    \"\"\"\n\n    pass",
+                "filename": "django/core/files/uploadhandler.py",
+                "start_index": 0,
+                "end_index": 1607,
+                "start_line": 1,
+                "end_line": 189,
+                "max_line": 251,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.9
+            },
+            {
+                "code": "var xhrSuccessStatus = {\n\n\t\t// File protocol always yields status code 0, assume 200\n\t\t0: 200,\n\n\t\t// Support: IE <=9 only\n\t\t// trac-1450: sometimes IE returns 1223 when it should be 204\n\t\t1223: 204\n\t},\n\txhrSupported = jQuery.ajaxSettings.xhr();\n\nsupport.cors = !!xhrSupported && ( \"withCredentials\" in xhrSupported );\nsupport.ajax = xhrSupported = !!xhrSupported;",
+                "filename": "django/contrib/admin/static/admin/js/vendor/jquery/jquery.js",
+                "start_index": 267564,
+                "end_index": 267927,
+                "start_line": 10055,
+                "end_line": 10067,
+                "max_line": 10965,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def handle_file_complete(self, old_field_name, counters):\n        \"\"\"\n        Handle all the signaling that takes place when a file is complete.\n        \"\"\"\n        for i, handler in enumerate(self._upload_handlers):\n            file_obj = handler.file_complete(counters[i])\n            if file_obj:\n                # If it returns a file object, then set the files dict.\n                self._files.appendlist(\n                    force_str(old_field_name, self._encoding, errors=\"replace\"),\n                    file_obj,\n                )\n                break\n\n    def sanitize_file_name(self, file_name):\n        \"\"\"\n        Sanitize the filename of an upload.\n\n        Remove all possible path separators, even though that might remove more\n        than actually required by the target system. Filenames that could\n        potentially cause problems (current/parent dir) are also discarded.\n\n        It should be noted that this function could still return a \"filepath\"\n        like \"C:some_file.txt\" which is handled later on by the storage layer.\n        So while this function does sanitize filenames to some extent, the\n        resulting filename should still be considered as untrusted user input.\n        \"\"\"\n        file_name = html.unescape(file_name)\n        file_name = file_name.rsplit(\"/\")[-1]\n        file_name = file_name.rsplit(\"\\\\\")[-1]\n        # Remove non-printable characters.\n        file_name = \"\".join([char for char in file_name if char.isprintable()])\n\n        if file_name in {\"\", \".\", \"..\"}:\n            return None\n        return file_name\n\n    IE_sanitize = sanitize_file_name\n\n    def _close_files(self):\n        # Free up all file handles.\n        # FIXME: this currently assumes that upload handlers store the file as 'file'\n        # We should document that...\n        # (Maybe add handler.free_file to complement new_file)\n        for handler in self._upload_handlers:\n            if hasattr(handler, \"file\"):\n                handler.file.close()",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 15106,
+                "end_index": 17090,
+                "start_line": 365,
+                "end_line": 411,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "num_files += 1\n                    if (\n                        settings.DATA_UPLOAD_MAX_NUMBER_FILES is not None\n                        and num_files > settings.DATA_UPLOAD_MAX_NUMBER_FILES\n                    ):\n                        raise TooManyFilesSent(\n                            \"The number of files exceeded \"\n                            \"settings.DATA_UPLOAD_MAX_NUMBER_FILES.\"\n                        )\n                    # This is a file, use the handler...\n                    file_name = disposition.get(\"filename\")\n                    if file_name:\n                        file_name = force_str(file_name, encoding, errors=\"replace\")\n                        file_name = self.sanitize_file_name(file_name)\n                    if not file_name:\n                        continue\n\n                    content_type, content_type_extra = meta_data.get(\n                        \"content-type\", (\"\", {})\n                    )\n                    content_type = content_type.strip()\n                    charset = content_type_extra.get(\"charset\")\n\n                    try:\n                        content_length = int(meta_data.get(\"content-length\")[0])\n                    except (IndexError, TypeError, ValueError):\n                        content_length = None\n\n                    counters = [0] * len(handlers)\n                    uploaded_file = False",
+                "filename": "django/http/multipartparser.py",
+                "start_index": 9781,
+                "end_index": 11149,
+                "start_line": 255,
+                "end_line": 284,
+                "max_line": 743,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/http/multipartparser.py": [
+                {
+                    "chunk": {
+                        "code": "except StopUpload as e:\n            self._close_files()\n            if not e.connection_reset:\n                exhaust(self._input_data)\n        else:\n            if not uploaded_file:\n                for handler in handlers:\n                    handler.upload_interrupted()\n            # Make sure that the request data is all fed\n            exhaust(self._input_data)",
+                        "filename": "django/http/multipartparser.py",
+                        "start_index": 14464,
+                        "end_index": 14833,
+                        "start_line": 348,
+                        "end_line": 357,
+                        "max_line": 743,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the exception handling for a stopped upload and calls '_close_files', which is likely where the temporary files should be deleted."
+                },
+                {
+                    "chunk": {
+                        "code": "def handle_file_complete(self, old_field_name, counters):\n        \"\"\"\n        Handle all the signaling that takes place when a file is complete.\n        \"\"\"\n        for i, handler in enumerate(self._upload_handlers):\n            file_obj = handler.file_complete(counters[i])\n            if file_obj:\n                # If it returns a file object, then set the files dict.\n                self._files.appendlist(\n                    force_str(old_field_name, self._encoding, errors=\"replace\"),\n                    file_obj,\n                )\n                break\n\n    def sanitize_file_name(self, file_name):\n        \"\"\"\n        Sanitize the filename of an upload.\n\n        Remove all possible path separators, even though that might remove more\n        than actually required by the target system. Filenames that could\n        potentially cause problems (current/parent dir) are also discarded.\n\n        It should be noted that this function could still return a \"filepath\"\n        like \"C:some_file.txt\" which is handled later on by the storage layer.\n        So while this function does sanitize filenames to some extent, the\n        resulting filename should still be considered as untrusted user input.\n        \"\"\"\n        file_name = html.unescape(file_name)\n        file_name = file_name.rsplit(\"/\")[-1]\n        file_name = file_name.rsplit(\"\\\\\")[-1]\n        # Remove non-printable characters.\n        file_name = \"\".join([char for char in file_name if char.isprintable()])\n\n        if file_name in {\"\", \".\", \"..\"}:\n            return None\n        return file_name\n\n    IE_sanitize = sanitize_file_name\n\n    def _close_files(self):\n        # Free up all file handles.\n        # FIXME: this currently assumes that upload handlers store the file as 'file'\n        # We should document that...\n        # (Maybe add handler.free_file to complement new_file)\n        for handler in self._upload_handlers:\n            if hasattr(handler, \"file\"):\n                handler.file.close()",
+                        "filename": "django/http/multipartparser.py",
+                        "start_index": 15106,
+                        "end_index": 17090,
+                        "start_line": 365,
+                        "end_line": 411,
+                        "max_line": 743,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the '_close_files' method, which is called when an upload is stopped and should handle the deletion of temporary files."
+                }
+            ],
+            "django/core/files/uploadedfile.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nClasses representing uploaded files.\n\"\"\"\n\nimport os\nfrom io import BytesIO\n\nfrom django.conf import settings\nfrom django.core.files import temp as tempfile\nfrom django.core.files.base import File\nfrom django.core.files.utils import validate_file_name\n\n__all__ = (\n    \"UploadedFile\",\n    \"TemporaryUploadedFile\",\n    \"InMemoryUploadedFile\",\n    \"SimpleUploadedFile\",\n)\n\n\nclass UploadedFile(File):\n    \"\"\"\n    An abstract uploaded file (``TemporaryUploadedFile`` and\n    ``InMemoryUploadedFile`` are the built-in concrete subclasses).\n\n    An ``UploadedFile`` object behaves somewhat like a file object and\n    represents some file data that the user submitted with a form.\n    \"\"\"\n\n    def __init__(\n        self,\n        file=None,\n        name=None,\n        content_type=None,\n        size=None,\n        charset=None,\n        content_type_extra=None,\n    ):\n        super().__init__(file, name)\n        self.size = size\n        self.content_type = content_type\n        self.charset = charset\n        self.content_type_extra = content_type_extra\n\n    def __repr__(self):\n        return \"<%s: %s (%s)>\" % (self.__class__.__name__, self.name, self.content_type)\n\n    def _get_name(self):\n        return self._name\n\n    def _set_name(self, name):\n        # Sanitize the file name so that it can't be dangerous.\n        if name is not None:\n            # Just use the basename of the file -- anything else is dangerous.\n            name = os.path.basename(name)\n\n            # File names longer than 255 characters can cause problems on older OSes.\n            if len(name) > 255:\n                name, ext = os.path.splitext(name)\n                ext = ext[:255]\n                name = name[: 255 - len(ext)] + ext\n\n            name = validate_file_name(name)\n\n        self._name = name\n\n    name = property(_get_name, _set_name)\n\n\nclass TemporaryUploadedFile(UploadedFile):\n    \"\"\"\n    A file uploaded to a temporary location (i.e. stream-to-disk).\n    \"\"\"\n\n    def __init__(self, name, content_type, size, charset, content_type_extra=None):\n        _, ext = os.path.splitext(name)\n        file = tempfile.NamedTemporaryFile(\n            suffix=\".upload\" + ext, dir=settings.FILE_UPLOAD_TEMP_DIR\n        )\n        super().__init__(file, name, content_type, size, charset, content_type_extra)\n\n    def temporary_file_path(self):\n        \"\"\"Return the full path of this file.\"\"\"\n        return self.file.name\n\n    def close(self):\n        try:\n            return self.file.close()\n        except FileNotFoundError:\n            # The file was moved or deleted before the tempfile could unlink\n            # it. Still sets self.file.close_called and calls\n            # self.file.file.close() before the exception.\n            pass",
+                        "filename": "django/core/files/uploadedfile.py",
+                        "start_index": 0,
+                        "end_index": 2730,
+                        "start_line": 1,
+                        "end_line": 93,
+                        "max_line": 150,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the 'TemporaryUploadedFile' class, including its 'close' method, which is responsible for deleting temporary files."
+                }
+            ],
+            "django/core/files/uploadhandler.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nBase file upload handler classes, and the built-in concrete subclasses\n\"\"\"\nimport os\nfrom io import BytesIO\n\nfrom django.conf import settings\nfrom django.core.files.uploadedfile import InMemoryUploadedFile, TemporaryUploadedFile\nfrom django.utils.module_loading import import_string\n\n__all__ = [\n    \"UploadFileException\",\n    \"StopUpload\",\n    \"SkipFile\",\n    \"FileUploadHandler\",\n    \"TemporaryFileUploadHandler\",\n    \"MemoryFileUploadHandler\",\n    \"load_handler\",\n    \"StopFutureHandlers\",\n]\n\n\nclass UploadFileException(Exception):\n    \"\"\"\n    Any error having to do with uploading files.\n    \"\"\"\n\n    pass\n\n\nclass StopUpload(UploadFileException):\n    \"\"\"\n    This exception is raised when an upload must abort.\n    \"\"\"\n\n    def __init__(self, connection_reset=False):\n        \"\"\"\n        If ``connection_reset`` is ``True``, Django knows will halt the upload\n        without consuming the rest of the upload. This will cause the browser to\n        show a \"connection reset\" error.\n        \"\"\"\n        self.connection_reset = connection_reset\n\n    def __str__(self):\n        if self.connection_reset:\n            return \"StopUpload: Halt current upload.\"\n        else:\n            return \"StopUpload: Consume request data, then halt.\"\n\n\nclass SkipFile(UploadFileException):\n    \"\"\"\n    This exception is raised by an upload handler that wants to skip a given file.\n    \"\"\"\n\n    pass\n\n\nclass StopFutureHandlers(UploadFileException):\n    \"\"\"\n    Upload handlers that have handled a file and do not want future handlers to\n    run should raise this exception instead of returning None.\n    \"\"\"\n\n    pass",
+                        "filename": "django/core/files/uploadhandler.py",
+                        "start_index": 0,
+                        "end_index": 1607,
+                        "start_line": 1,
+                        "end_line": 189,
+                        "max_line": 251,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the 'StopUpload' exception, which is raised to abort an upload, and may be relevant to ensure temporary files are deleted when this exception is raised."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `handle_file_complete` method in `django/http/multipartparser.py` to include a cleanup routine for temporary files associated with canceled uploads.\n- Add a check in the `except StopUpload as e:` block to determine if the upload was canceled due to a connection reset or client-side cancellation.\n- If the upload was canceled, call a cleanup function to delete the temporary file associated with the upload.\n- Implement the cleanup function to delete the temporary file, which can be similar to the `delete_temporary_file` hypothesized function.\n- Ensure that the cleanup function is called both when an upload is successfully completed and when it is interrupted or canceled.\n- Update the `TemporaryUploadedFile.close` method in `django/core/files/uploadedfile.py` to handle the deletion of the temporary file when the file object is closed, regardless of whether the file was moved or deleted before the tempfile could unlink it.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable plan to address the issue of temporary files not being deleted on canceled upload requests in Django. It suggests modifying the 'handle_file_complete' method to include a cleanup routine, adding a check in the 'except StopUpload as e:' block to determine if the upload was canceled, and implementing a cleanup function to delete the temporary file. Additionally, it advises updating the 'TemporaryUploadedFile.close' method to handle deletion of the temporary file. The RESPONSE also includes references to specific code snippets in the Django repository that are relevant to the issue, which can guide the developer to the exact locations in the codebase where changes need to be made. This level of detail and specificity makes the RESPONSE highly valuable for resolving the bug.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711727007.4995542,
+        "result": "- Modify the `handle_file_complete` method in `django/http/multipartparser.py` to include a cleanup routine for temporary files associated with canceled uploads.\n- Add a check in the `except StopUpload as e:` block to determine if the upload was canceled due to a connection reset or client-side cancellation.\n- If the upload was canceled, call a cleanup function to delete the temporary file associated with the upload.\n- Implement the cleanup function to delete the temporary file, which can be similar to the `delete_temporary_file` hypothesized function.\n- Ensure that the cleanup function is called both when an upload is successfully completed and when it is interrupted or canceled.\n- Update the `TemporaryUploadedFile.close` method in `django/core/files/uploadedfile.py` to handle the deletion of the temporary file when the file object is closed, regardless of whether the file was moved or deleted before the tempfile could unlink it.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [http](https://github.com/testbed/django__django__3.2/tree//django/http)- [Lines 348 - 357](https://github.com/testbed/django__django__3.2/blob//django/http/multipartparser.py#L348-L357)\n\n This snippet includes the exception handling for a stopped upload and calls '_close_files', which is likely where the temporary files should be deleted. \n\n\n   - [Lines 365 - 411](https://github.com/testbed/django__django__3.2/blob//django/http/multipartparser.py#L365-L411)\n\n This snippet includes the '_close_files' method, which is called when an upload is stopped and should handle the deletion of temporary files.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [files](https://github.com/testbed/django__django__3.2/tree//django/core/files)- [Lines 1 - 93](https://github.com/testbed/django__django__3.2/blob//django/core/files/uploadedfile.py#L1-L93)\n\n This snippet defines the 'TemporaryUploadedFile' class, including its 'close' method, which is responsible for deleting temporary files.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [core](https://github.com/testbed/django__django__3.2/tree//django/core) \u2192 [files](https://github.com/testbed/django__django__3.2/tree//django/core/files)- [Lines 1 - 189](https://github.com/testbed/django__django__3.2/blob//django/core/files/uploadhandler.py#L1-L189)\n\n This snippet defines the 'StopUpload' exception, which is raised to abort an upload, and may be relevant to ensure temporary files are deleted when this exception is raised.",
+        "context_relevance": 0.47000000000000003,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer it completely to get a score of 10.\nSupporting Evidence: The RESPONSE provides a detailed solution to the problem described in the PROMPT, which is the non-deletion of temporary files on canceled upload requests. It addresses the issue by suggesting modifications to specific methods within Django's codebase, adding checks for canceled uploads, and implementing a cleanup function. The RESPONSE also references the relevant code snippets that need to be checked, directly tying back to the PROMPT's request for a solution to the temporary file deletion issue. The RESPONSE is comprehensive, directly relevant to the entire PROMPT, and provides a complete answer, thus meeting the criteria for a score of 10."
+        },
+        "qa_relevance": 1.0
+    }
+}

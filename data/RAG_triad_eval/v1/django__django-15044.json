@@ -1,0 +1,221 @@
+{
+    "id": "django__django-15044",
+    "repo_name": "testbed/django__django__4.1",
+    "task_id": 7894627895024322045,
+    "title": "CacheMiddleware and FetchFromCacheMiddleware are not thread safe.",
+    "body": "Description\n\t\nCacheMiddleware persist self.cache = caches[cache_alias] on startup and it is not thread safe. \u200bhttps://github.com/django/django/blob/main/django/middleware/cache.py#L186\nI found that after some production errors with pylibmc and uwsgi threaded. Created a small project to reproduce it. Nothing fancy, just pylibmc cache and a @cache_page cached view. It fails even with development server, with concurrent requests.\nTraceback (most recent call last):\n File \"versions/pylibmcbug/lib/python3.9/site-packages/django/core/handlers/exception.py\", line 47, in inner\n\tresponse = get_response(request)\n File \"versions/pylibmcbug/lib/python3.9/site-packages/django/core/handlers/base.py\", line 181, in _get_response\n\tresponse = wrapped_callback(request, *callback_args, **callback_kwargs)\n File \"versions/pylibmcbug/lib/python3.9/site-packages/django/utils/decorators.py\", line 122, in _wrapped_view\n\tresult = middleware.process_request(request)\n File \"versions/pylibmcbug/lib/python3.9/site-packages/django/middleware/cache.py\", line 145, in process_request\n\tcache_key = get_cache_key(request, self.key_prefix, 'GET', cache=self.cache)\n File \"versions/pylibmcbug/lib/python3.9/site-packages/django/utils/cache.py\", line 362, in get_cache_key\n\theaderlist = cache.get(cache_key)\n File \"versions/pylibmcbug/lib/python3.9/site-packages/django/core/cache/backends/memcached.py\", line 77, in get\n\treturn self._cache.get(key, default)\npylibmc.ConnectionError: error 3 from memcached_get(:1:views.decorators.cache.cache_): (0x7f290400bd60) FAILURE, poll() returned a value that was not dealt with, host: localhost:11211 -> libmemcached/io.cc:254\nLooking for git history, it is this way since 2010. \u200bhttps://github.com/django/django/commit/673e6fc7fb243ed44841b9969d26a161c25733b3\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.1.git",
+    "requested_commit": "",
+    "mayil_response": "Based on the provided information, the issue seems to be related to thread safety when using `CacheMiddleware` and `FetchFromCacheMiddleware` with `pylibmc` in a `uwsgi` threaded environment. The error `poll() returned a value that was not dealt with` suggests that there might be concurrent access issues with the cache backend.\n\nTo address the issue:\n\n- Ensure that `pylibmc` is configured for thread safety. This can be done by setting `pylibmc` to use a thread-aware connection pool if it supports one.\n- If `pylibmc` does not support a thread-aware connection pool, consider using a different caching backend that is known to be thread-safe with Django, such as `python-memcached`.\n- Alternatively, wrap the cache access in `CacheMiddleware` and `FetchFromCacheMiddleware` with thread synchronization primitives such as locks. However, this might have performance implications.\n- If using locks, ensure that they are used in a way that prevents potential deadlocks and minimizes contention. For example, use a `threading.Lock` or `threading.RLock` in the `CacheMiddleware` and `FetchFromCacheMiddleware` classes to wrap the `cache.get(cache_key)` calls.\n- If the issue persists, consider disabling the cache middleware when running under a multi-threaded server or switch to a process-based server model with `uwsgi` if that is an acceptable solution for your deployment scenario.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [middleware](https://github.com/testbed/django__django__4.1/tree//django/middleware)- [Lines 1 - 55](https://github.com/testbed/django__django__4.1/blob//django/middleware/cache.py#L1-L55)\n\n This snippet contains the definition of CacheMiddleware and FetchFromCacheMiddleware, which are mentioned in the issue as not being thread safe. \n\n\n   - [Lines 130 - 176](https://github.com/testbed/django__django__4.1/blob//django/middleware/cache.py#L130-L176)\n\n This snippet shows the implementation of FetchFromCacheMiddleware, which is directly related to the issue of thread safety. \n\n\n   - [Lines 179 - 211](https://github.com/testbed/django__django__4.1/blob//django/middleware/cache.py#L179-L211)\n\n This snippet shows the initialization of CacheMiddleware, which is relevant to the issue as it involves the setup that may need to be made thread safe.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003045,
+        "snippet_processor": 0.047810000000000005,
+        "issue_star_creation": 0.030010000000000002,
+        "issue_star_solver": 0.0493,
+        "bouncer": 0.023870000000000002
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711720542.34109,
+        "relevant_snippets": [
+            {
+                "code": "\"Thread-safe in-memory cache backend.\"\nimport pickle\nimport time\nfrom collections import OrderedDict\nfrom threading import Lock\n\nfrom django.core.cache.backends.base import DEFAULT_TIMEOUT, BaseCache\n\n# Global in-memory store of cache data. Keyed by name, to provide\n# multiple named local memory caches.\n_caches = {}\n_expire_info = {}\n_locks = {}",
+                "filename": "django/core/cache/backends/locmem.py",
+                "start_index": 0,
+                "end_index": 347,
+                "start_line": 1,
+                "end_line": 13,
+                "max_line": 117,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nCache middleware. If enabled, each Django-powered page will be cached based on\nURL. The canonical way to enable cache middleware is to set\n``UpdateCacheMiddleware`` as your first piece of middleware, and\n``FetchFromCacheMiddleware`` as the last::\n\n    MIDDLEWARE = [\n        'django.middleware.cache.UpdateCacheMiddleware',\n        ...\n        'django.middleware.cache.FetchFromCacheMiddleware'\n    ]\n\nThis is counter-intuitive, but correct: ``UpdateCacheMiddleware`` needs to run\nlast during the response phase, which processes middleware bottom-up;\n``FetchFromCacheMiddleware`` needs to run last during the request phase, which\nprocesses middleware top-down.\n\nThe single-class ``CacheMiddleware`` can be used for some simple sites.\nHowever, if any other piece of middleware needs to affect the cache key, you'll\nneed to use the two-part ``UpdateCacheMiddleware`` and\n``FetchFromCacheMiddleware``. This'll most often happen when you're using\nDjango's ``LocaleMiddleware``.\n\nMore details about how the caching works:\n\n* Only GET or HEAD-requests with status code 200 are cached.\n\n* The number of seconds each page is stored for is set by the \"max-age\" section\n  of the response's \"Cache-Control\" header, falling back to the\n  CACHE_MIDDLEWARE_SECONDS setting if the section was not found.\n\n* This middleware expects that a HEAD request is answered with the same response\n  headers exactly like the corresponding GET request.\n\n* When a hit occurs, a shallow copy of the original response object is returned\n  from process_request.\n\n* Pages will be cached based on the contents of the request headers listed in\n  the response's \"Vary\" header.\n\n* This middleware also sets ETag, Last-Modified, Expires and Cache-Control\n  headers on the response object.\n\n\"\"\"\n\nfrom django.conf import settings\nfrom django.core.cache import DEFAULT_CACHE_ALIAS, caches\nfrom django.utils.cache import (\n    get_cache_key,\n    get_max_age,\n    has_vary_header,\n    learn_cache_key,\n    patch_response_headers,\n)\nfrom django.utils.deprecation import MiddlewareMixin",
+                "filename": "django/middleware/cache.py",
+                "start_index": 0,
+                "end_index": 2045,
+                "start_line": 1,
+                "end_line": 55,
+                "max_line": 211,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "from functools import wraps\n\nfrom asgiref.sync import iscoroutinefunction\n\nfrom django.middleware.cache import CacheMiddleware\nfrom django.utils.cache import add_never_cache_headers, patch_cache_control\nfrom django.utils.decorators import decorator_from_middleware_with_args\n\n\ndef cache_page(timeout, *, cache=None, key_prefix=None):\n    \"\"\"\n    Decorator for views that tries getting the page from the cache and\n    populates the cache if the page isn't in the cache yet.\n\n    The cache is keyed by the URL and some data from the headers.\n    Additionally there is the key prefix that is used to distinguish different\n    cache areas in a multi-site setup. You could use the\n    get_current_site().domain, for example, as that is unique across a Django\n    project.\n\n    Additionally, all headers from the response's Vary header will be taken\n    into account on caching -- just like the middleware does.\n    \"\"\"\n    return decorator_from_middleware_with_args(CacheMiddleware)(\n        page_timeout=timeout,\n        cache_alias=cache,\n        key_prefix=key_prefix,\n    )\n\n\ndef _check_request(request, decorator_name):\n    # Ensure argument looks like a request.\n    if not hasattr(request, \"META\"):\n        raise TypeError(\n            f\"{decorator_name} didn't receive an HttpRequest. If you are \"\n            \"decorating a classmethod, be sure to use @method_decorator.\"\n        )\n\n\ndef cache_control(**kwargs):\n    def _cache_controller(viewfunc):\n        if iscoroutinefunction(viewfunc):\n\n            async def _view_wrapper(request, *args, **kw):\n                _check_request(request, \"cache_control\")\n                response = await viewfunc(request, *args, **kw)\n                patch_cache_control(response, **kwargs)\n                return response\n\n        else:\n\n            def _view_wrapper(request, *args, **kw):\n                _check_request(request, \"cache_control\")\n                response = viewfunc(request, *args, **kw)\n                patch_cache_control(response, **kwargs)\n                return response\n\n        return wraps(viewfunc)(_view_wrapper)\n\n    return _cache_controller\n\n\ndef never_cache(view_func):\n    \"\"\"\n    Decorator that adds headers to a response so that it will never be cached.\n    \"\"\"\n\n    if iscoroutinefunction(view_func):\n\n        async def _view_wrapper(request, *args, **kwargs):\n            _check_request(request, \"never_cache\")\n            response = await view_func(request, *args, **kwargs)\n            add_never_cache_headers(response)\n            return response\n\n    else:\n\n        def _view_wrapper(request, *args, **kwargs):\n            _check_request(request, \"never_cache\")\n            response = view_func(request, *args, **kwargs)\n            add_never_cache_headers(response)\n            return response\n\n    return wraps(view_func)(_view_wrapper)",
+                "filename": "django/views/decorators/cache.py",
+                "start_index": 0,
+                "end_index": 2820,
+                "start_line": 1,
+                "end_line": 84,
+                "max_line": 84,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "class FetchFromCacheMiddleware(MiddlewareMixin):\n    \"\"\"\n    Request-phase cache middleware that fetches a page from the cache.\n\n    Must be used as part of the two-part update/fetch cache middleware.\n    FetchFromCacheMiddleware must be the last piece of middleware in MIDDLEWARE\n    so that it'll get called last during the request phase.\n    \"\"\"\n\n    def __init__(self, get_response):\n        super().__init__(get_response)\n        self.key_prefix = settings.CACHE_MIDDLEWARE_KEY_PREFIX\n        self.cache_alias = settings.CACHE_MIDDLEWARE_ALIAS\n\n    @property\n    def cache(self):\n        return caches[self.cache_alias]\n\n    def process_request(self, request):\n        \"\"\"\n        Check whether the page is already cached and return the cached\n        version if available.\n        \"\"\"\n        if request.method not in (\"GET\", \"HEAD\"):\n            request._cache_update_cache = False\n            return None  # Don't bother checking the cache.\n\n        # try and get the cached GET response\n        cache_key = get_cache_key(request, self.key_prefix, \"GET\", cache=self.cache)\n        if cache_key is None:\n            request._cache_update_cache = True\n            return None  # No cache information available, need to rebuild.\n        response = self.cache.get(cache_key)\n        # if it wasn't found and we are looking for a HEAD, try looking just for that\n        if response is None and request.method == \"HEAD\":\n            cache_key = get_cache_key(\n                request, self.key_prefix, \"HEAD\", cache=self.cache\n            )\n            response = self.cache.get(cache_key)\n\n        if response is None:\n            request._cache_update_cache = True\n            return None  # No cache information available, need to rebuild.\n\n        # hit, return cached response\n        request._cache_update_cache = False\n        return response",
+                "filename": "django/middleware/cache.py",
+                "start_index": 4838,
+                "end_index": 6689,
+                "start_line": 130,
+                "end_line": 176,
+                "max_line": 211,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.9
+            },
+            {
+                "code": "class CacheMiddleware(UpdateCacheMiddleware, FetchFromCacheMiddleware):\n    \"\"\"\n    Cache middleware that provides basic behavior for many simple sites.\n\n    Also used as the hook point for the cache decorator, which is generated\n    using the decorator-from-middleware utility.\n    \"\"\"\n\n    def __init__(self, get_response, cache_timeout=None, page_timeout=None, **kwargs):\n        super().__init__(get_response)\n        # We need to differentiate between \"provided, but using default value\",\n        # and \"not provided\". If the value is provided using a default, then\n        # we fall back to system defaults. If it is not provided at all,\n        # we need to use middleware defaults.\n\n        try:\n            key_prefix = kwargs[\"key_prefix\"]\n            if key_prefix is None:\n                key_prefix = \"\"\n            self.key_prefix = key_prefix\n        except KeyError:\n            pass\n        try:\n            cache_alias = kwargs[\"cache_alias\"]\n            if cache_alias is None:\n                cache_alias = DEFAULT_CACHE_ALIAS\n            self.cache_alias = cache_alias\n        except KeyError:\n            pass\n\n        if cache_timeout is not None:\n            self.cache_timeout = cache_timeout\n        self.page_timeout = page_timeout",
+                "filename": "django/middleware/cache.py",
+                "start_index": 6692,
+                "end_index": 7950,
+                "start_line": 179,
+                "end_line": 211,
+                "max_line": 211,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import pathlib\n\nfrom django.conf import settings\nfrom django.core.cache import DEFAULT_CACHE_ALIAS, caches\nfrom django.core.cache.backends.filebased import FileBasedCache\n\nfrom . import Error, Tags, Warning, register\n\nE001 = Error(\n    \"You must define a '%s' cache in your CACHES setting.\" % DEFAULT_CACHE_ALIAS,\n    id=\"caches.E001\",\n)\n\n\n@register(Tags.caches)\ndef check_default_cache_is_configured(app_configs, **kwargs):\n    if DEFAULT_CACHE_ALIAS not in settings.CACHES:\n        return [E001]\n    return []\n\n\n@register(Tags.caches, deploy=True)\ndef check_cache_location_not_exposed(app_configs, **kwargs):\n    errors = []\n    for name in (\"MEDIA_ROOT\", \"STATIC_ROOT\", \"STATICFILES_DIRS\"):\n        setting = getattr(settings, name, None)\n        if not setting:\n            continue\n        if name == \"STATICFILES_DIRS\":\n            paths = set()\n            for staticfiles_dir in setting:\n                if isinstance(staticfiles_dir, (list, tuple)):\n                    _, staticfiles_dir = staticfiles_dir\n                paths.add(pathlib.Path(staticfiles_dir).resolve())\n        else:\n            paths = {pathlib.Path(setting).resolve()}\n        for alias in settings.CACHES:\n            cache = caches[alias]\n            if not isinstance(cache, FileBasedCache):\n                continue\n            cache_path = pathlib.Path(cache._dir).resolve()\n            if any(path == cache_path for path in paths):\n                relation = \"matches\"\n            elif any(path in cache_path.parents for path in paths):\n                relation = \"is inside\"\n            elif any(cache_path in path.parents for path in paths):\n                relation = \"contains\"\n            else:\n                continue\n            errors.append(\n                Warning(\n                    f\"Your '{alias}' cache configuration might expose your cache \"\n                    f\"or lead to corruption of your data because its LOCATION \"\n                    f\"{relation} {name}.\",\n                    id=\"caches.W002\",\n                )\n            )\n    return errors\n\n\n@register(Tags.caches)\ndef check_file_based_cache_is_absolute(app_configs, **kwargs):\n    errors = []\n    for alias, config in settings.CACHES.items():\n        cache = caches[alias]\n        if not isinstance(cache, FileBasedCache):\n            continue\n        if not pathlib.Path(config[\"LOCATION\"]).is_absolute():\n            errors.append(\n                Warning(\n                    f\"Your '{alias}' cache LOCATION path is relative. Use an \"\n                    f\"absolute path instead.\",\n                    id=\"caches.W003\",\n                )\n            )\n    return errors",
+                "filename": "django/core/checks/caches.py",
+                "start_index": 0,
+                "end_index": 2642,
+                "start_line": 1,
+                "end_line": 76,
+                "max_line": 76,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import _thread\nimport copy\nimport datetime\nimport logging\nimport threading\nimport time\nimport warnings\nimport zoneinfo\nfrom collections import deque\nfrom contextlib import contextmanager\n\nfrom django.conf import settings\nfrom django.core.exceptions import ImproperlyConfigured\nfrom django.db import DEFAULT_DB_ALIAS, DatabaseError, NotSupportedError\nfrom django.db.backends import utils\nfrom django.db.backends.base.validation import BaseDatabaseValidation\nfrom django.db.backends.signals import connection_created\nfrom django.db.backends.utils import debug_transaction\nfrom django.db.transaction import TransactionManagementError\nfrom django.db.utils import DatabaseErrorWrapper\nfrom django.utils.asyncio import async_unsafe\nfrom django.utils.functional import cached_property\n\nNO_DB_ALIAS = \"__no_db__\"\nRAN_DB_VERSION_CHECK = set()\n\nlogger = logging.getLogger(\"django.db.backends.base\")",
+                "filename": "django/db/backends/base/base.py",
+                "start_index": 0,
+                "end_index": 888,
+                "start_line": 1,
+                "end_line": 27,
+                "max_line": 788,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nCaching framework.\n\nThis package defines set of cache backends that all conform to a simple API.\nIn a nutshell, a cache is a set of values -- which can be any object that\nmay be pickled -- identified by string keys.  For the complete API, see\nthe abstract BaseCache class in django.core.cache.backends.base.\n\nClient code should use the `cache` variable defined here to access the default\ncache backend and look up non-default cache backends in the `caches` dict-like\nobject.\n\nSee docs/topics/cache.txt for information on the public API.\n\"\"\"\nfrom django.core import signals\nfrom django.core.cache.backends.base import (\n    BaseCache,\n    CacheKeyWarning,\n    InvalidCacheBackendError,\n    InvalidCacheKey,\n)\nfrom django.utils.connection import BaseConnectionHandler, ConnectionProxy\nfrom django.utils.module_loading import import_string\n\n__all__ = [\n    \"cache\",\n    \"caches\",\n    \"DEFAULT_CACHE_ALIAS\",\n    \"InvalidCacheBackendError\",\n    \"CacheKeyWarning\",\n    \"BaseCache\",\n    \"InvalidCacheKey\",\n]\n\nDEFAULT_CACHE_ALIAS = \"default\"\n\n\nclass CacheHandler(BaseConnectionHandler):\n    settings_name = \"CACHES\"\n    exception_class = InvalidCacheBackendError\n\n    def create_connection(self, alias):\n        params = self.settings[alias].copy()\n        backend = params.pop(\"BACKEND\")\n        location = params.pop(\"LOCATION\", \"\")\n        try:\n            backend_cls = import_string(backend)\n        except ImportError as e:\n            raise InvalidCacheBackendError(\n                \"Could not find backend '%s': %s\" % (backend, e)\n            ) from e\n        return backend_cls(location, params)\n\n\ncaches = CacheHandler()\n\ncache = ConnectionProxy(caches, DEFAULT_CACHE_ALIAS)\n\n\ndef close_caches(**kwargs):\n    # Some caches need to do a cleanup at the end of a request cycle. If not\n    # implemented in a particular backend cache.close() is a no-op.\n    caches.close_all()\n\n\nsignals.request_finished.connect(close_caches)",
+                "filename": "django/core/cache/__init__.py",
+                "start_index": 0,
+                "end_index": 1927,
+                "start_line": 1,
+                "end_line": 66,
+                "max_line": 66,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "_view_middleware = None\n    _template_response_middleware = None\n    _exception_middleware = None\n    _middleware_chain = None",
+                "filename": "django/core/handlers/base.py",
+                "start_index": 595,
+                "end_index": 721,
+                "start_line": 21,
+                "end_line": 24,
+                "max_line": 373,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.utils.cache import cc_delim_re, get_conditional_response, set_response_etag\nfrom django.utils.deprecation import MiddlewareMixin\nfrom django.utils.http import parse_http_date_safe\n\n\nclass ConditionalGetMiddleware(MiddlewareMixin):\n    \"\"\"\n    Handle conditional GET operations. If the response has an ETag or\n    Last-Modified header and the request has If-None-Match or If-Modified-Since,\n    replace the response with HttpNotModified. Add an ETag header if needed.\n    \"\"\"\n\n    def process_response(self, request, response):\n        # It's too late to prevent an unsafe request with a 412 response, and\n        # for a HEAD request, the response body is always empty so computing\n        # an accurate ETag isn't possible.\n        if request.method != \"GET\":\n            return response\n\n        if self.needs_etag(response) and not response.has_header(\"ETag\"):\n            set_response_etag(response)\n\n        etag = response.get(\"ETag\")\n        last_modified = response.get(\"Last-Modified\")\n        last_modified = last_modified and parse_http_date_safe(last_modified)\n\n        if etag or last_modified:\n            return get_conditional_response(\n                request,\n                etag=etag,\n                last_modified=last_modified,\n                response=response,\n            )\n\n        return response\n\n    def needs_etag(self, response):\n        \"\"\"Return True if an ETag header should be added to response.\"\"\"\n        cache_control_headers = cc_delim_re.split(response.get(\"Cache-Control\", \"\"))\n        return all(header.lower() != \"no-store\" for header in cache_control_headers)",
+                "filename": "django/middleware/http.py",
+                "start_index": 0,
+                "end_index": 1615,
+                "start_line": 1,
+                "end_line": 40,
+                "max_line": 40,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/middleware/cache.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nCache middleware. If enabled, each Django-powered page will be cached based on\nURL. The canonical way to enable cache middleware is to set\n``UpdateCacheMiddleware`` as your first piece of middleware, and\n``FetchFromCacheMiddleware`` as the last::\n\n    MIDDLEWARE = [\n        'django.middleware.cache.UpdateCacheMiddleware',\n        ...\n        'django.middleware.cache.FetchFromCacheMiddleware'\n    ]\n\nThis is counter-intuitive, but correct: ``UpdateCacheMiddleware`` needs to run\nlast during the response phase, which processes middleware bottom-up;\n``FetchFromCacheMiddleware`` needs to run last during the request phase, which\nprocesses middleware top-down.\n\nThe single-class ``CacheMiddleware`` can be used for some simple sites.\nHowever, if any other piece of middleware needs to affect the cache key, you'll\nneed to use the two-part ``UpdateCacheMiddleware`` and\n``FetchFromCacheMiddleware``. This'll most often happen when you're using\nDjango's ``LocaleMiddleware``.\n\nMore details about how the caching works:\n\n* Only GET or HEAD-requests with status code 200 are cached.\n\n* The number of seconds each page is stored for is set by the \"max-age\" section\n  of the response's \"Cache-Control\" header, falling back to the\n  CACHE_MIDDLEWARE_SECONDS setting if the section was not found.\n\n* This middleware expects that a HEAD request is answered with the same response\n  headers exactly like the corresponding GET request.\n\n* When a hit occurs, a shallow copy of the original response object is returned\n  from process_request.\n\n* Pages will be cached based on the contents of the request headers listed in\n  the response's \"Vary\" header.\n\n* This middleware also sets ETag, Last-Modified, Expires and Cache-Control\n  headers on the response object.\n\n\"\"\"\n\nfrom django.conf import settings\nfrom django.core.cache import DEFAULT_CACHE_ALIAS, caches\nfrom django.utils.cache import (\n    get_cache_key,\n    get_max_age,\n    has_vary_header,\n    learn_cache_key,\n    patch_response_headers,\n)\nfrom django.utils.deprecation import MiddlewareMixin",
+                        "filename": "django/middleware/cache.py",
+                        "start_index": 0,
+                        "end_index": 2045,
+                        "start_line": 1,
+                        "end_line": 55,
+                        "max_line": 211,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the definition of CacheMiddleware and FetchFromCacheMiddleware, which are mentioned in the issue as not being thread safe."
+                },
+                {
+                    "chunk": {
+                        "code": "class FetchFromCacheMiddleware(MiddlewareMixin):\n    \"\"\"\n    Request-phase cache middleware that fetches a page from the cache.\n\n    Must be used as part of the two-part update/fetch cache middleware.\n    FetchFromCacheMiddleware must be the last piece of middleware in MIDDLEWARE\n    so that it'll get called last during the request phase.\n    \"\"\"\n\n    def __init__(self, get_response):\n        super().__init__(get_response)\n        self.key_prefix = settings.CACHE_MIDDLEWARE_KEY_PREFIX\n        self.cache_alias = settings.CACHE_MIDDLEWARE_ALIAS\n\n    @property\n    def cache(self):\n        return caches[self.cache_alias]\n\n    def process_request(self, request):\n        \"\"\"\n        Check whether the page is already cached and return the cached\n        version if available.\n        \"\"\"\n        if request.method not in (\"GET\", \"HEAD\"):\n            request._cache_update_cache = False\n            return None  # Don't bother checking the cache.\n\n        # try and get the cached GET response\n        cache_key = get_cache_key(request, self.key_prefix, \"GET\", cache=self.cache)\n        if cache_key is None:\n            request._cache_update_cache = True\n            return None  # No cache information available, need to rebuild.\n        response = self.cache.get(cache_key)\n        # if it wasn't found and we are looking for a HEAD, try looking just for that\n        if response is None and request.method == \"HEAD\":\n            cache_key = get_cache_key(\n                request, self.key_prefix, \"HEAD\", cache=self.cache\n            )\n            response = self.cache.get(cache_key)\n\n        if response is None:\n            request._cache_update_cache = True\n            return None  # No cache information available, need to rebuild.\n\n        # hit, return cached response\n        request._cache_update_cache = False\n        return response",
+                        "filename": "django/middleware/cache.py",
+                        "start_index": 4838,
+                        "end_index": 6689,
+                        "start_line": 130,
+                        "end_line": 176,
+                        "max_line": 211,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the implementation of FetchFromCacheMiddleware, which is directly related to the issue of thread safety."
+                },
+                {
+                    "chunk": {
+                        "code": "class CacheMiddleware(UpdateCacheMiddleware, FetchFromCacheMiddleware):\n    \"\"\"\n    Cache middleware that provides basic behavior for many simple sites.\n\n    Also used as the hook point for the cache decorator, which is generated\n    using the decorator-from-middleware utility.\n    \"\"\"\n\n    def __init__(self, get_response, cache_timeout=None, page_timeout=None, **kwargs):\n        super().__init__(get_response)\n        # We need to differentiate between \"provided, but using default value\",\n        # and \"not provided\". If the value is provided using a default, then\n        # we fall back to system defaults. If it is not provided at all,\n        # we need to use middleware defaults.\n\n        try:\n            key_prefix = kwargs[\"key_prefix\"]\n            if key_prefix is None:\n                key_prefix = \"\"\n            self.key_prefix = key_prefix\n        except KeyError:\n            pass\n        try:\n            cache_alias = kwargs[\"cache_alias\"]\n            if cache_alias is None:\n                cache_alias = DEFAULT_CACHE_ALIAS\n            self.cache_alias = cache_alias\n        except KeyError:\n            pass\n\n        if cache_timeout is not None:\n            self.cache_timeout = cache_timeout\n        self.page_timeout = page_timeout",
+                        "filename": "django/middleware/cache.py",
+                        "start_index": 6692,
+                        "end_index": 7950,
+                        "start_line": 179,
+                        "end_line": 211,
+                        "max_line": 211,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the initialization of CacheMiddleware, which is relevant to the issue as it involves the setup that may need to be made thread safe."
+                }
+            ]
+        },
+        "solution_task": "Based on the provided information, the issue seems to be related to thread safety when using `CacheMiddleware` and `FetchFromCacheMiddleware` with `pylibmc` in a `uwsgi` threaded environment. The error `poll() returned a value that was not dealt with` suggests that there might be concurrent access issues with the cache backend.\n\nTo address the issue:\n\n- Ensure that `pylibmc` is configured for thread safety. This can be done by setting `pylibmc` to use a thread-aware connection pool if it supports one.\n- If `pylibmc` does not support a thread-aware connection pool, consider using a different caching backend that is known to be thread-safe with Django, such as `python-memcached`.\n- Alternatively, wrap the cache access in `CacheMiddleware` and `FetchFromCacheMiddleware` with thread synchronization primitives such as locks. However, this might have performance implications.\n- If using locks, ensure that they are used in a way that prevents potential deadlocks and minimizes contention. For example, use a `threading.Lock` or `threading.RLock` in the `CacheMiddleware` and `FetchFromCacheMiddleware` classes to wrap the `cache.get(cache_key)` calls.\n- If the issue persists, consider disabling the cache middleware when running under a multi-threaded server or switch to a process-based server model with `uwsgi` if that is an acceptable solution for your deployment scenario.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a series of actionable steps to address the thread safety issue with CacheMiddleware and FetchFromCacheMiddleware when using pylibmc in a uwsgi threaded environment. It suggests ensuring pylibmc is configured for thread safety, using a different caching backend if necessary, implementing thread synchronization primitives, and considering the server model. These suggestions are relevant and could lead to resolving the issue. The RESPONSE also provides links to code snippets that could be useful for further investigation. However, it does not address the specific traceback error in detail or provide a direct solution to the 'poll() returned a value that was not dealt with' error, which is a key part of the PROMPT.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711721359.27326,
+        "result": "Based on the provided information, the issue seems to be related to thread safety when using `CacheMiddleware` and `FetchFromCacheMiddleware` with `pylibmc` in a `uwsgi` threaded environment. The error `poll() returned a value that was not dealt with` suggests that there might be concurrent access issues with the cache backend.\n\nTo address the issue:\n\n- Ensure that `pylibmc` is configured for thread safety. This can be done by setting `pylibmc` to use a thread-aware connection pool if it supports one.\n- If `pylibmc` does not support a thread-aware connection pool, consider using a different caching backend that is known to be thread-safe with Django, such as `python-memcached`.\n- Alternatively, wrap the cache access in `CacheMiddleware` and `FetchFromCacheMiddleware` with thread synchronization primitives such as locks. However, this might have performance implications.\n- If using locks, ensure that they are used in a way that prevents potential deadlocks and minimizes contention. For example, use a `threading.Lock` or `threading.RLock` in the `CacheMiddleware` and `FetchFromCacheMiddleware` classes to wrap the `cache.get(cache_key)` calls.\n- If the issue persists, consider disabling the cache middleware when running under a multi-threaded server or switch to a process-based server model with `uwsgi` if that is an acceptable solution for your deployment scenario.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [middleware](https://github.com/testbed/django__django__4.1/tree//django/middleware)- [Lines 1 - 55](https://github.com/testbed/django__django__4.1/blob//django/middleware/cache.py#L1-L55)\n\n This snippet contains the definition of CacheMiddleware and FetchFromCacheMiddleware, which are mentioned in the issue as not being thread safe. \n\n\n   - [Lines 130 - 176](https://github.com/testbed/django__django__4.1/blob//django/middleware/cache.py#L130-L176)\n\n This snippet shows the implementation of FetchFromCacheMiddleware, which is directly related to the issue of thread safety. \n\n\n   - [Lines 179 - 211](https://github.com/testbed/django__django__4.1/blob//django/middleware/cache.py#L179-L211)\n\n This snippet shows the initialization of CacheMiddleware, which is relevant to the issue as it involves the setup that may need to be made thread safe.",
+        "context_relevance": 0.37,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT to get a score of 9 or 10.\nSupporting Evidence: The RESPONSE addresses the issue of thread safety with `CacheMiddleware` and `FetchFromCacheMiddleware` when used with `pylibmc` and `uwsgi` threaded environment, which is the core of the PROMPT. It provides a detailed explanation of the problem, potential solutions, and even includes code snippets for further investigation, which are directly related to the issue described. The RESPONSE is highly relevant to the entire PROMPT but does not explicitly mention the historical aspect of the issue being present since 2010, which prevents a perfect score of 10."
+        },
+        "qa_relevance": 0.9
+    }
+}

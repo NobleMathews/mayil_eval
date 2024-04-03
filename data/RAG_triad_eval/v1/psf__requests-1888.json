@@ -1,0 +1,240 @@
+{
+    "id": "psf__requests-1888",
+    "repo_name": "testbed/psf__requests__2.2",
+    "task_id": 3516084794910398610,
+    "title": "301 redirect broken with latest pyopenssl/SNI",
+    "body": "With the latest pyopenssl on Windows 64bit:\n\n```\ncryptography==0.2.dev1\nndg-httpsclient==0.3.2\npyOpenSSL==0.13\npyasn1==0.1.7\n```\n\nI get an exception raised when `GET`ing a `301` response to a HTTPS request. I see that after the redirect is received the returned URL is [decoded to a Unicode string](https://github.com/kennethreitz/requests/blob/master/requests/adapters.py#L181). Then requests passes the response to `resolve_redirects` which uses the url to make a new request. This leads to a Unicode string being passed to urllib3 and eventually pyopenssl. And because in pyopenssl they now check that the data is of type bytes, an exception is thrown. \n\nI Wrote this test:\n\n```\n    def test_pyopenssl_redirect(self):\n        requests.get('https://httpbin.org/status/301')\n```\n\nand this is the result of py.test:\n\n```\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n\nself = <OpenSSL.SSL.Connection object at 0x000000000345CC50>\nbuf = u'GET /redirect/1 HTTP/1.1\\r\\nHost: httpbin.org\\r\\nAccept-Encoding: gzip, defl...cept: */*\\r\\nUser-Agent: python-r\nequests/2.2.1 CPython/2.7.6 Windows/8\\r\\n\\r\\n'\nflags = 0\n\n    def sendall(self, buf, flags=0):\n        \"\"\"\n            Send \"all\" data on the connection. This calls send() repeatedly until\n            all data is sent. If an error occurs, it's impossible to tell how much\n            data has been sent.\n\n            :param buf: The string to send\n            :param flags: (optional) Included for compatibility with the socket\n                          API, the value is ignored\n            :return: The number of bytes written\n            \"\"\"\n        if isinstance(buf, _memoryview):\n            buf = buf.tobytes()\n        if not isinstance(buf, bytes):\n>           raise TypeError(\"buf must be a byte string\")\nE           TypeError: buf must be a byte string\n\n..\\testreq\\lib\\site-packages\\OpenSSL\\SSL.py:968: TypeError\n=================================== 117 tests deselected by '-kpyopenssl_redirect' ====================================\n====================================== 1 failed, 117 deselected in 4.47 seconds =======================================\n```\n\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/psf__requests__2.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Update the `requests` and `urllib3` libraries to the latest versions that are compatible with each other and with the other dependencies.\n- Ensure that the `pyOpenSSL` library is updated to a version that properly handles byte strings, as the error message suggests an issue with handling Unicode strings.\n- If the issue persists after updating, inspect the `sendall` method implementation in the `pyopenssl` module to ensure it is converting input to byte strings before sending.\n- If necessary, modify the `resolve_redirects` function in the `requests` library to ensure that the URL is converted to a byte string before being passed to `urllib3` and `pyopenssl`.\n- Since the issue is related to a `301` redirect, ensure that the `get_redirect_target` function in `requests/sessions.py` is properly handling the encoding of the `location` header. If the `location` header is a Unicode string, it should be encoded to a byte string before being used.\n- Check the compatibility of the `cryptography`, `ndg-httpsclient`, and `pyasn1` libraries with the updated `requests` and `urllib3` libraries, and update them if necessary.\n\n### Code snippets to check\n\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 586 - 674](https://github.com/testbed/psf__requests__2.2/blob//requests/utils.py#L586-L674)\n\n This snippet contains the 'requote_uri' function which is likely where the URL is being re-encoded and may be the place to ensure the URL is converted to bytes before being passed to urllib3 and pyopenssl.\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 107 - 157](https://github.com/testbed/psf__requests__2.2/blob//requests/sessions.py#L107-L157)\n\n This snippet includes the 'get_redirect_target' function which handles the redirect response and encodes the location header. It may be relevant to ensure the encoding process results in a byte string compatible with pyopenssl. \n\n\n   - [Lines 334 - 354](https://github.com/testbed/psf__requests__2.2/blob//requests/sessions.py#L334-L354)\n\n This snippet contains the 'rebuild_method' function which is called after a redirect response is received. It may be necessary to review this to ensure the method change on redirect does not contribute to the issue.\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 47 - 180](https://github.com/testbed/psf__requests__2.2/blob//requests/__init__.py#L47-L180)\n\n This snippet includes code that attempts to enable urllib3's SNI support and checks the cryptography version. It may be relevant to the issue since the problem is related to SNI in pyopenssl.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0004255,
+        "snippet_processor": 0.06504,
+        "issue_star_creation": 0.03109,
+        "issue_star_solver": 0.06328,
+        "bouncer": 0.02698
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711761660.0341032,
+        "relevant_snippets": [
+            {
+                "code": "#   __\n#  /__)  _  _     _   _ _/   _\n# / (   (- (/ (/ (- _)  /  _)\n#          /\n\n\"\"\"\nRequests HTTP Library\n~~~~~~~~~~~~~~~~~~~~~\n\nRequests is an HTTP library, written in Python, for human beings.\nBasic GET usage:\n\n   >>> import requests\n   >>> r = requests.get('https://www.python.org')\n   >>> r.status_code\n   200\n   >>> b'Python is a programming language' in r.content\n   True\n\n... or POST:\n\n   >>> payload = dict(key1='value1', key2='value2')\n   >>> r = requests.post('https://httpbin.org/post', data=payload)\n   >>> print(r.text)\n   {\n     ...\n     \"form\": {\n       \"key1\": \"value1\",\n       \"key2\": \"value2\"\n     },\n     ...\n   }\n\nThe other HTTP methods are supported - see `requests.api`. Full documentation\nis at <https://requests.readthedocs.io>.\n\n:copyright: (c) 2017 by Kenneth Reitz.\n:license: Apache 2.0, see LICENSE for more details.\n\"\"\"\n\nimport warnings\n\nimport urllib3\n\nfrom .exceptions import RequestsDependencyWarning\n\ntry:\n    from charset_normalizer import __version__ as charset_normalizer_version\nexcept ImportError:\n    charset_normalizer_version = None\n\ntry:\n    from chardet import __version__ as chardet_version\nexcept ImportError:\n    chardet_version = None\n\n\ndef check_compatibility(urllib3_version, chardet_version, charset_normalizer_version):\n    urllib3_version = urllib3_version.split(\".\")\n    assert urllib3_version != [\"dev\"]  # Verify urllib3 isn't installed from git.\n\n    # Sometimes, urllib3 only reports its version as 16.1.\n    if len(urllib3_version) == 2:\n        urllib3_version.append(\"0\")\n\n    # Check urllib3 for compatibility.\n    major, minor, patch = urllib3_version  # noqa: F811\n    major, minor, patch = int(major), int(minor), int(patch)\n    # urllib3 >= 1.21.1\n    assert major >= 1\n    if major == 1:\n        assert minor >= 21\n\n    # Check charset_normalizer for compatibility.\n    if chardet_version:\n        major, minor, patch = chardet_version.split(\".\")[:3]\n        major, minor, patch = int(major), int(minor), int(patch)\n        # chardet_version >= 3.0.2, < 6.0.0\n        assert (3, 0, 2) <= (major, minor, patch) < (6, 0, 0)\n    elif charset_normalizer_version:\n        major, minor, patch = charset_normalizer_version.split(\".\")[:3]\n        major, minor, patch = int(major), int(minor), int(patch)\n        # charset_normalizer >= 2.0.0 < 4.0.0\n        assert (2, 0, 0) <= (major, minor, patch) < (4, 0, 0)\n    else:\n        raise Exception(\"You need either charset_normalizer or chardet installed\")\n\n\ndef _check_cryptography(cryptography_version):\n    # cryptography < 1.3.4\n    try:\n        cryptography_version = list(map(int, cryptography_version.split(\".\")))\n    except ValueError:\n        return\n\n    if cryptography_version < [1, 3, 4]:\n        warning = \"Old version of cryptography ({}) may cause slowdown.\".format(\n            cryptography_version\n        )\n        warnings.warn(warning, RequestsDependencyWarning)\n\n\n# Check imported dependencies for compatibility.",
+                "filename": "requests/__init__.py",
+                "start_index": 0,
+                "end_index": 2941,
+                "start_line": 1,
+                "end_line": 103,
+                "max_line": 180,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "try:\n    check_compatibility(\n        urllib3.__version__, chardet_version, charset_normalizer_version\n    )\nexcept (AssertionError, ValueError):\n    warnings.warn(\n        \"urllib3 ({}) or chardet ({})/charset_normalizer ({}) doesn't match a supported \"\n        \"version!\".format(\n            urllib3.__version__, chardet_version, charset_normalizer_version\n        ),\n        RequestsDependencyWarning,\n    )\n\n# Attempt to enable urllib3's fallback for SNI support\n# if the standard library doesn't support SNI or the\n# 'ssl' library isn't available.\ntry:\n    try:\n        import ssl\n    except ImportError:\n        ssl = None\n\n    if not getattr(ssl, \"HAS_SNI\", False):\n        from urllib3.contrib import pyopenssl\n\n        pyopenssl.inject_into_urllib3()\n\n        # Check cryptography version\n        from cryptography import __version__ as cryptography_version\n\n        _check_cryptography(cryptography_version)\nexcept ImportError:\n    pass\n\n# urllib3's DependencyWarnings should be silenced.\nfrom urllib3.exceptions import DependencyWarning\n\nwarnings.simplefilter(\"ignore\", DependencyWarning)\n\n# Set default logging handler to avoid \"No handler found\" warnings.\nimport logging\nfrom logging import NullHandler\n\nfrom . import packages, utils\nfrom .__version__ import (\n    __author__,\n    __author_email__,\n    __build__,\n    __cake__,\n    __copyright__,\n    __description__,\n    __license__,\n    __title__,\n    __url__,\n    __version__,\n)\nfrom .api import delete, get, head, options, patch, post, put, request\nfrom .exceptions import (\n    ConnectionError,\n    ConnectTimeout,\n    FileModeWarning,\n    HTTPError,\n    JSONDecodeError,\n    ReadTimeout,\n    RequestException,\n    Timeout,\n    TooManyRedirects,\n    URLRequired,\n)\nfrom .models import PreparedRequest, Request, Response\nfrom .sessions import Session, session\nfrom .status_codes import codes\n\nlogging.getLogger(__name__).addHandler(NullHandler())\n\n# FileModeWarnings go off per the default.\nwarnings.simplefilter(\"default\", FileModeWarning, append=True)",
+                "filename": "requests/__init__.py",
+                "start_index": 2942,
+                "end_index": 4962,
+                "start_line": 47,
+                "end_line": 180,
+                "max_line": 180,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def rebuild_method(self, prepared_request, response):\n        \"\"\"When being redirected we may want to change the method of the request\n        based on certain specs or browser behavior.\n        \"\"\"\n        method = prepared_request.method\n\n        # https://tools.ietf.org/html/rfc7231#section-6.4.4\n        if response.status_code == codes.see_other and method != \"HEAD\":\n            method = \"GET\"\n\n        # Do what the browsers do, despite standards...\n        # First, turn 302s into GETs.\n        if response.status_code == codes.found and method != \"HEAD\":\n            method = \"GET\"\n\n        # Second, if a POST is responded to with a 301, turn it into a GET.\n        # This bizarre behaviour is explained in Issue 1704.\n        if response.status_code == codes.moved and method == \"POST\":\n            method = \"GET\"\n\n        prepared_request.method = method",
+                "filename": "requests/sessions.py",
+                "start_index": 12385,
+                "end_index": 13252,
+                "start_line": 334,
+                "end_line": 354,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "#!/usr/bin/env python\nimport os\nimport sys\nfrom codecs import open\n\nfrom setuptools import setup\nfrom setuptools.command.test import test as TestCommand\n\nCURRENT_PYTHON = sys.version_info[:2]\nREQUIRED_PYTHON = (3, 7)\n\nif CURRENT_PYTHON < REQUIRED_PYTHON:\n    sys.stderr.write(\n        \"\"\"\n==========================\nUnsupported Python version\n==========================\nThis version of Requests requires at least Python {}.{}, but\nyou're trying to install it on Python {}.{}. To resolve this,\nconsider upgrading to a supported Python version.\n\nIf you can't upgrade your Python version, you'll need to\npin to an older version of Requests (<2.28).\n\"\"\".format(\n            *(REQUIRED_PYTHON + CURRENT_PYTHON)\n        )\n    )\n    sys.exit(1)\n\n\nclass PyTest(TestCommand):\n    user_options = [(\"pytest-args=\", \"a\", \"Arguments to pass into py.test\")]\n\n    def initialize_options(self):\n        TestCommand.initialize_options(self)\n        try:\n            from multiprocessing import cpu_count\n\n            self.pytest_args = [\"-n\", str(cpu_count()), \"--boxed\"]\n        except (ImportError, NotImplementedError):\n            self.pytest_args = [\"-n\", \"1\", \"--boxed\"]\n\n    def finalize_options(self):\n        TestCommand.finalize_options(self)\n        self.test_args = []\n        self.test_suite = True\n\n    def run_tests(self):\n        import pytest\n\n        errno = pytest.main(self.pytest_args)\n        sys.exit(errno)\n\n\n# 'setup.py publish' shortcut.\nif sys.argv[-1] == \"publish\":\n    os.system(\"python setup.py sdist bdist_wheel\")\n    os.system(\"twine upload dist/*\")\n    sys.exit()\n\nrequires = [\n    \"charset_normalizer>=2,<4\",\n    \"idna>=2.5,<4\",\n    \"urllib3>=1.21.1,<3\",\n    \"certifi>=2017.4.17\",\n]\ntest_requirements = [\n    \"pytest-httpbin==2.0.0\",\n    \"pytest-cov\",\n    \"pytest-mock\",\n    \"pytest-xdist\",\n    \"PySocks>=1.5.6, !=1.5.7\",\n    \"pytest>=3\",\n]\n\nabout = {}\nhere = os.path.abspath(os.path.dirname(__file__))\nwith open(os.path.join(here, \"requests\", \"__version__.py\"), \"r\", \"utf-8\") as f:\n    exec(f.read(), about)\n\nwith open(\"README.md\", \"r\", \"utf-8\") as f:\n    readme = f.read()",
+                "filename": "setup.py",
+                "start_index": 0,
+                "end_index": 2091,
+                "start_line": 1,
+                "end_line": 82,
+                "max_line": 132,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def get_unicode_from_response(r):\n    \"\"\"Returns the requested content back in unicode.\n\n    :param r: Response object to get unicode content from.\n\n    Tried:\n\n    1. charset from content-type\n    2. fall back and replace all unicode characters\n\n    :rtype: str\n    \"\"\"\n    warnings.warn(\n        (\n            \"In requests 3.0, get_unicode_from_response will be removed. For \"\n            \"more information, please see the discussion on issue #2266. (This\"\n            \" warning should only appear once.)\"\n        ),\n        DeprecationWarning,\n    )\n\n    tried_encodings = []\n\n    # Try charset from content-type\n    encoding = get_encoding_from_headers(r.headers)\n\n    if encoding:\n        try:\n            return str(r.content, encoding)\n        except UnicodeError:\n            tried_encodings.append(encoding)\n\n    # Fall back:\n    try:\n        return str(r.content, encoding, errors=\"replace\")\n    except TypeError:\n        return r.content\n\n\n# The unreserved URI characters (RFC 3986)\nUNRESERVED_SET = frozenset(\n    \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\" + \"0123456789-._~\"\n)\n\n\ndef unquote_unreserved(uri):\n    \"\"\"Un-escape any percent-escape sequences in a URI that are unreserved\n    characters. This leaves all reserved, illegal and non-ASCII bytes encoded.\n\n    :rtype: str\n    \"\"\"\n    parts = uri.split(\"%\")\n    for i in range(1, len(parts)):\n        h = parts[i][0:2]\n        if len(h) == 2 and h.isalnum():\n            try:\n                c = chr(int(h, 16))\n            except ValueError:\n                raise InvalidURL(f\"Invalid percent-escape sequence: '{h}'\")\n\n            if c in UNRESERVED_SET:\n                parts[i] = c + parts[i][2:]\n            else:\n                parts[i] = f\"%{parts[i]}\"\n        else:\n            parts[i] = f\"%{parts[i]}\"\n    return \"\".join(parts)\n\n\ndef requote_uri(uri):\n    \"\"\"Re-quote the given URI.\n\n    This function passes the given URI through an unquote/quote cycle to\n    ensure that it is fully and consistently quoted.\n\n    :rtype: str\n    \"\"\"\n    safe_with_percent = \"!#$%&'()*+,/:;=?@[]~\"\n    safe_without_percent = \"!#$&'()*+,/:;=?@[]~\"\n    try:\n        # Unquote only the unreserved characters\n        # Then quote only illegal characters (do not quote reserved,\n        # unreserved, or '%')\n        return quote(unquote_unreserved(uri), safe=safe_with_percent)\n    except InvalidURL:\n        # We couldn't unquote the given URI, so let's try quoting it, but\n        # there may be unquoted '%'s in the URI. We need to make sure they're\n        # properly quoted so they do not cause issues elsewhere.\n        return quote(uri, safe=safe_without_percent)",
+                "filename": "requests/utils.py",
+                "start_index": 18382,
+                "end_index": 21023,
+                "start_line": 586,
+                "end_line": 674,
+                "max_line": 1090,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import sys\n\ntry:\n    import chardet\nexcept ImportError:\n    import warnings\n\n    import charset_normalizer as chardet\n\n    warnings.filterwarnings(\"ignore\", \"Trying to detect\", module=\"charset_normalizer\")\n\n# This code exists for backwards compatibility reasons.\n# I don't like it either. Just look the other way. :)\n\nfor package in (\"urllib3\", \"idna\"):\n    locals()[package] = __import__(package)\n    # This traversal is apparently necessary such that the identities are\n    # preserved (requests.packages.urllib3.* is urllib3.*)\n    for mod in list(sys.modules):\n        if mod == package or mod.startswith(f\"{package}.\"):\n            sys.modules[f\"requests.packages.{mod}\"] = sys.modules[mod]\n\ntarget = chardet.__name__\nfor mod in list(sys.modules):\n    if mod == target or mod.startswith(f\"{target}.\"):\n        target = target.replace(target, \"chardet\")\n        sys.modules[f\"requests.packages.{target}\"] = sys.modules[mod]\n# Kinda cool, though, right?",
+                "filename": "requests/packages.py",
+                "start_index": 0,
+                "end_index": 956,
+                "start_line": 1,
+                "end_line": 28,
+                "max_line": 28,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "# .-. .-. .-. . . .-. .-. .-. .-.\n# |(  |-  |.| | | |-  `-.  |  `-.\n# ' ' `-' `-`.`-' `-' `-'  '  `-'\n\n__title__ = \"requests\"\n__description__ = \"Python HTTP for Humans.\"\n__url__ = \"https://requests.readthedocs.io\"\n__version__ = \"2.31.0\"\n__build__ = 0x023100\n__author__ = \"Kenneth Reitz\"\n__author_email__ = \"me@kennethreitz.org\"\n__license__ = \"Apache 2.0\"\n__copyright__ = \"Copyright Kenneth Reitz\"\n__cake__ = \"\\u2728 \\U0001f370 \\u2728\"",
+                "filename": "requests/__version__.py",
+                "start_index": 0,
+                "end_index": 434,
+                "start_line": 1,
+                "end_line": 14,
+                "max_line": 14,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ChunkedEncodingError(RequestException):\n    \"\"\"The server declared chunked encoding but sent an invalid chunk.\"\"\"\n\n\nclass ContentDecodingError(RequestException, BaseHTTPError):\n    \"\"\"Failed to decode response content.\"\"\"\n\n\nclass StreamConsumedError(RequestException, TypeError):\n    \"\"\"The content for this response was already consumed.\"\"\"\n\n\nclass RetryError(RequestException):\n    \"\"\"Custom retries logic failed\"\"\"\n\n\nclass UnrewindableBodyError(RequestException):\n    \"\"\"Requests encountered an error when trying to rewind a body.\"\"\"\n\n\n# Warnings\n\n\nclass RequestsWarning(Warning):\n    \"\"\"Base warning for Requests.\"\"\"\n\n\nclass FileModeWarning(RequestsWarning, DeprecationWarning):\n    \"\"\"A file was opened in text mode, but Requests determined its binary length.\"\"\"\n\n\nclass RequestsDependencyWarning(RequestsWarning):\n    \"\"\"An imported dependency doesn't match the expected version range.\"\"\"",
+                "filename": "requests/exceptions.py",
+                "start_index": 2910,
+                "end_index": 3810,
+                "start_line": 109,
+                "end_line": 141,
+                "max_line": 141,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def get_redirect_target(self, resp):\n        \"\"\"Receives a Response. Returns a redirect URI or ``None``\"\"\"\n        # Due to the nature of how requests processes redirects this method will\n        # be called at least once upon the original response and at least twice\n        # on each subsequent redirect response (if any).\n        # If a custom mixin is used to handle this logic, it may be advantageous\n        # to cache the redirect location onto the response object as a private\n        # attribute.\n        if resp.is_redirect:\n            location = resp.headers[\"location\"]\n            # Currently the underlying http module on py3 decode headers\n            # in latin1, but empirical evidence suggests that latin1 is very\n            # rarely used with non-ASCII characters in HTTP headers.\n            # It is more likely to get UTF8 header rather than latin1.\n            # This causes incorrect handling of UTF8 encoded location headers.\n            # To solve this, we re-encode the location in latin1.\n            location = location.encode(\"latin1\")\n            return to_native_string(location, \"utf8\")\n        return None\n\n    def should_strip_auth(self, old_url, new_url):\n        \"\"\"Decide whether Authorization header should be removed when redirecting\"\"\"\n        old_parsed = urlparse(old_url)\n        new_parsed = urlparse(new_url)\n        if old_parsed.hostname != new_parsed.hostname:\n            return True\n        # Special case: allow http -> https redirect when using the standard\n        # ports. This isn't specified by RFC 7235, but is kept to avoid\n        # breaking backwards compatibility with older versions of requests\n        # that allowed any redirects on the same host.\n        if (\n            old_parsed.scheme == \"http\"\n            and old_parsed.port in (80, None)\n            and new_parsed.scheme == \"https\"\n            and new_parsed.port in (443, None)\n        ):\n            return False\n\n        # Handle default port usage corresponding to scheme.\n        changed_port = old_parsed.port != new_parsed.port\n        changed_scheme = old_parsed.scheme != new_parsed.scheme\n        default_port = (DEFAULT_PORTS.get(old_parsed.scheme, None), None)\n        if (\n            not changed_scheme\n            and old_parsed.port in default_port\n            and new_parsed.port in default_port\n        ):\n            return False\n\n        # Standard case: root URI must match\n        return changed_port or changed_scheme",
+                "filename": "requests/sessions.py",
+                "start_index": 2997,
+                "end_index": 5463,
+                "start_line": 107,
+                "end_line": 157,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "{\n    # Informational.\n    100: (\"continue\",),\n    101: (\"switching_protocols\",),\n    102: (\"processing\",),\n    103: (\"checkpoint\",),\n    122: (\"uri_too_long\", \"request_uri_too_long\"),\n    200: (\"ok\", \"okay\", \"all_ok\", \"all_okay\", \"all_good\", \"\\\\o/\", \"\u2713\"),\n    201: (\"created\",),\n    202: (\"accepted\",),\n    203: (\"non_authoritative_info\", \"non_authoritative_information\"),\n    204: (\"no_content\",),\n    205: (\"reset_content\", \"reset\"),\n    206: (\"partial_content\", \"partial\"),\n    207: (\"multi_status\", \"multiple_status\", \"multi_stati\", \"multiple_stati\"),\n    208: (\"already_reported\",),\n    226: (\"im_used\",),\n    # Redirection.\n    300: (\"multiple_choices\",),\n    301: (\"moved_permanently\", \"moved\", \"\\\\o-\"),\n    302: (\"found\",),\n    303: (\"see_other\", \"other\"),\n    304: (\"not_modified\",),\n    305: (\"use_proxy\",),\n    306: (\"switch_proxy\",),\n    307: (\"temporary_redirect\", \"temporary_moved\", \"temporary\"),\n    308: (\n        \"permanent_redirect\",\n        \"resume_incomplete\",\n        \"resume\",\n    ),  # \"resume\" and \"resume_incomplete\" to be removed in 3.0\n    # Client Error.\n    400: (\"bad_request\", \"bad\"),\n    401: (\"unauthorized\",),\n    402: (\"payment_required\", \"payment\"),\n    403: (\"forbidden\",),\n    404: (\"not_found\", \"-o-\"),\n    405: (\"method_not_allowed\", \"not_allowed\"),\n    406: (\"not_acceptable\",),\n    407: (\"proxy_authentication_required\", \"proxy_auth\", \"proxy_authentication\"),\n    408: (\"request_timeout\", \"timeout\"),\n    409: (\"conflict\",),\n    410: (\"gone\",),\n    411: (\"length_required\",),\n    412: (\"precondition_failed\", \"precondition\"),\n    413: (\"request_entity_too_large\",),\n    414: (\"request_uri_too_large\",),\n    415: (\"unsupported_media_type\", \"unsupported_media\", \"media_type\"),\n    416: (\n        \"requested_range_not_satisfiable\",\n        \"requested_range\",\n        \"range_not_satisfiable\",\n    ),\n    417: (\"expectation_failed\",),\n    418: (\"im_a_teapot\", \"teapot\", \"i_am_a_teapot\"),\n    421: (\"misdirected_request\",),\n    422: (\"unprocessable_entity\", \"unprocessable\"),\n    423: (\"locked\",),\n    424: (\"failed_dependency\", \"dependency\"),\n    425: (\"unordered_collection\", \"unordered\"),\n    426: (\"upgrade_required\", \"upgrade\"),\n    428: (\"precondition_required\", \"precondition\"),\n    429: (\"too_many_requests\", \"too_many\"),\n    431: (\"header_fields_too_large\", \"fields_too_large\"),\n    444: (\"no_response\", \"none\"),\n    449: (\"retry_with\", \"retry\"),\n    450: (\"blocked_by_windows_parental_controls\", \"parental_controls\"),\n    451: (\"unavailable_for_legal_reasons\", \"legal_reasons\"),\n    499: (\"client_closed_request\",),\n    # Server Error.\n    500: (\"internal_server_error\", \"server_error\", \"/o\\\\\", \"\u2717\"),\n    501: (\"not_implemented\",),\n    502: (\"bad_gateway\",),\n    503: (\"service_unavailable\", \"unavailable\"),\n    504: (\"gateway_timeout\",),\n    505: (\"http_version_not_supported\", \"http_version\"),\n    506: (\"variant_also_negotiates\",),\n    507: (\"insufficient_storage\",),\n    509: (\"bandwidth_limit_exceeded\", \"bandwidth\"),\n    510: (\"not_extended\",),",
+                "filename": "requests/status_codes.py",
+                "start_index": 580,
+                "end_index": 3577,
+                "start_line": 23,
+                "end_line": 102,
+                "max_line": 128,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.2",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "requests/utils.py": [
+                {
+                    "chunk": {
+                        "code": "def get_unicode_from_response(r):\n    \"\"\"Returns the requested content back in unicode.\n\n    :param r: Response object to get unicode content from.\n\n    Tried:\n\n    1. charset from content-type\n    2. fall back and replace all unicode characters\n\n    :rtype: str\n    \"\"\"\n    warnings.warn(\n        (\n            \"In requests 3.0, get_unicode_from_response will be removed. For \"\n            \"more information, please see the discussion on issue #2266. (This\"\n            \" warning should only appear once.)\"\n        ),\n        DeprecationWarning,\n    )\n\n    tried_encodings = []\n\n    # Try charset from content-type\n    encoding = get_encoding_from_headers(r.headers)\n\n    if encoding:\n        try:\n            return str(r.content, encoding)\n        except UnicodeError:\n            tried_encodings.append(encoding)\n\n    # Fall back:\n    try:\n        return str(r.content, encoding, errors=\"replace\")\n    except TypeError:\n        return r.content\n\n\n# The unreserved URI characters (RFC 3986)\nUNRESERVED_SET = frozenset(\n    \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\" + \"0123456789-._~\"\n)\n\n\ndef unquote_unreserved(uri):\n    \"\"\"Un-escape any percent-escape sequences in a URI that are unreserved\n    characters. This leaves all reserved, illegal and non-ASCII bytes encoded.\n\n    :rtype: str\n    \"\"\"\n    parts = uri.split(\"%\")\n    for i in range(1, len(parts)):\n        h = parts[i][0:2]\n        if len(h) == 2 and h.isalnum():\n            try:\n                c = chr(int(h, 16))\n            except ValueError:\n                raise InvalidURL(f\"Invalid percent-escape sequence: '{h}'\")\n\n            if c in UNRESERVED_SET:\n                parts[i] = c + parts[i][2:]\n            else:\n                parts[i] = f\"%{parts[i]}\"\n        else:\n            parts[i] = f\"%{parts[i]}\"\n    return \"\".join(parts)\n\n\ndef requote_uri(uri):\n    \"\"\"Re-quote the given URI.\n\n    This function passes the given URI through an unquote/quote cycle to\n    ensure that it is fully and consistently quoted.\n\n    :rtype: str\n    \"\"\"\n    safe_with_percent = \"!#$%&'()*+,/:;=?@[]~\"\n    safe_without_percent = \"!#$&'()*+,/:;=?@[]~\"\n    try:\n        # Unquote only the unreserved characters\n        # Then quote only illegal characters (do not quote reserved,\n        # unreserved, or '%')\n        return quote(unquote_unreserved(uri), safe=safe_with_percent)\n    except InvalidURL:\n        # We couldn't unquote the given URI, so let's try quoting it, but\n        # there may be unquoted '%'s in the URI. We need to make sure they're\n        # properly quoted so they do not cause issues elsewhere.\n        return quote(uri, safe=safe_without_percent)",
+                        "filename": "requests/utils.py",
+                        "start_index": 18382,
+                        "end_index": 21023,
+                        "start_line": 586,
+                        "end_line": 674,
+                        "max_line": 1090,
+                        "git_instance": "github",
+                        "repo_name": "testbed/psf__requests__2.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'requote_uri' function which is likely where the URL is being re-encoded and may be the place to ensure the URL is converted to bytes before being passed to urllib3 and pyopenssl."
+                }
+            ],
+            "requests/sessions.py": [
+                {
+                    "chunk": {
+                        "code": "def get_redirect_target(self, resp):\n        \"\"\"Receives a Response. Returns a redirect URI or ``None``\"\"\"\n        # Due to the nature of how requests processes redirects this method will\n        # be called at least once upon the original response and at least twice\n        # on each subsequent redirect response (if any).\n        # If a custom mixin is used to handle this logic, it may be advantageous\n        # to cache the redirect location onto the response object as a private\n        # attribute.\n        if resp.is_redirect:\n            location = resp.headers[\"location\"]\n            # Currently the underlying http module on py3 decode headers\n            # in latin1, but empirical evidence suggests that latin1 is very\n            # rarely used with non-ASCII characters in HTTP headers.\n            # It is more likely to get UTF8 header rather than latin1.\n            # This causes incorrect handling of UTF8 encoded location headers.\n            # To solve this, we re-encode the location in latin1.\n            location = location.encode(\"latin1\")\n            return to_native_string(location, \"utf8\")\n        return None\n\n    def should_strip_auth(self, old_url, new_url):\n        \"\"\"Decide whether Authorization header should be removed when redirecting\"\"\"\n        old_parsed = urlparse(old_url)\n        new_parsed = urlparse(new_url)\n        if old_parsed.hostname != new_parsed.hostname:\n            return True\n        # Special case: allow http -> https redirect when using the standard\n        # ports. This isn't specified by RFC 7235, but is kept to avoid\n        # breaking backwards compatibility with older versions of requests\n        # that allowed any redirects on the same host.\n        if (\n            old_parsed.scheme == \"http\"\n            and old_parsed.port in (80, None)\n            and new_parsed.scheme == \"https\"\n            and new_parsed.port in (443, None)\n        ):\n            return False\n\n        # Handle default port usage corresponding to scheme.\n        changed_port = old_parsed.port != new_parsed.port\n        changed_scheme = old_parsed.scheme != new_parsed.scheme\n        default_port = (DEFAULT_PORTS.get(old_parsed.scheme, None), None)\n        if (\n            not changed_scheme\n            and old_parsed.port in default_port\n            and new_parsed.port in default_port\n        ):\n            return False\n\n        # Standard case: root URI must match\n        return changed_port or changed_scheme",
+                        "filename": "requests/sessions.py",
+                        "start_index": 2997,
+                        "end_index": 5463,
+                        "start_line": 107,
+                        "end_line": 157,
+                        "max_line": 835,
+                        "git_instance": "github",
+                        "repo_name": "testbed/psf__requests__2.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the 'get_redirect_target' function which handles the redirect response and encodes the location header. It may be relevant to ensure the encoding process results in a byte string compatible with pyopenssl."
+                },
+                {
+                    "chunk": {
+                        "code": "def rebuild_method(self, prepared_request, response):\n        \"\"\"When being redirected we may want to change the method of the request\n        based on certain specs or browser behavior.\n        \"\"\"\n        method = prepared_request.method\n\n        # https://tools.ietf.org/html/rfc7231#section-6.4.4\n        if response.status_code == codes.see_other and method != \"HEAD\":\n            method = \"GET\"\n\n        # Do what the browsers do, despite standards...\n        # First, turn 302s into GETs.\n        if response.status_code == codes.found and method != \"HEAD\":\n            method = \"GET\"\n\n        # Second, if a POST is responded to with a 301, turn it into a GET.\n        # This bizarre behaviour is explained in Issue 1704.\n        if response.status_code == codes.moved and method == \"POST\":\n            method = \"GET\"\n\n        prepared_request.method = method",
+                        "filename": "requests/sessions.py",
+                        "start_index": 12385,
+                        "end_index": 13252,
+                        "start_line": 334,
+                        "end_line": 354,
+                        "max_line": 835,
+                        "git_instance": "github",
+                        "repo_name": "testbed/psf__requests__2.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'rebuild_method' function which is called after a redirect response is received. It may be necessary to review this to ensure the method change on redirect does not contribute to the issue."
+                }
+            ],
+            "requests/__init__.py": [
+                {
+                    "chunk": {
+                        "code": "try:\n    check_compatibility(\n        urllib3.__version__, chardet_version, charset_normalizer_version\n    )\nexcept (AssertionError, ValueError):\n    warnings.warn(\n        \"urllib3 ({}) or chardet ({})/charset_normalizer ({}) doesn't match a supported \"\n        \"version!\".format(\n            urllib3.__version__, chardet_version, charset_normalizer_version\n        ),\n        RequestsDependencyWarning,\n    )\n\n# Attempt to enable urllib3's fallback for SNI support\n# if the standard library doesn't support SNI or the\n# 'ssl' library isn't available.\ntry:\n    try:\n        import ssl\n    except ImportError:\n        ssl = None\n\n    if not getattr(ssl, \"HAS_SNI\", False):\n        from urllib3.contrib import pyopenssl\n\n        pyopenssl.inject_into_urllib3()\n\n        # Check cryptography version\n        from cryptography import __version__ as cryptography_version\n\n        _check_cryptography(cryptography_version)\nexcept ImportError:\n    pass\n\n# urllib3's DependencyWarnings should be silenced.\nfrom urllib3.exceptions import DependencyWarning\n\nwarnings.simplefilter(\"ignore\", DependencyWarning)\n\n# Set default logging handler to avoid \"No handler found\" warnings.\nimport logging\nfrom logging import NullHandler\n\nfrom . import packages, utils\nfrom .__version__ import (\n    __author__,\n    __author_email__,\n    __build__,\n    __cake__,\n    __copyright__,\n    __description__,\n    __license__,\n    __title__,\n    __url__,\n    __version__,\n)\nfrom .api import delete, get, head, options, patch, post, put, request\nfrom .exceptions import (\n    ConnectionError,\n    ConnectTimeout,\n    FileModeWarning,\n    HTTPError,\n    JSONDecodeError,\n    ReadTimeout,\n    RequestException,\n    Timeout,\n    TooManyRedirects,\n    URLRequired,\n)\nfrom .models import PreparedRequest, Request, Response\nfrom .sessions import Session, session\nfrom .status_codes import codes\n\nlogging.getLogger(__name__).addHandler(NullHandler())\n\n# FileModeWarnings go off per the default.\nwarnings.simplefilter(\"default\", FileModeWarning, append=True)",
+                        "filename": "requests/__init__.py",
+                        "start_index": 2942,
+                        "end_index": 4962,
+                        "start_line": 47,
+                        "end_line": 180,
+                        "max_line": 180,
+                        "git_instance": "github",
+                        "repo_name": "testbed/psf__requests__2.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes code that attempts to enable urllib3's SNI support and checks the cryptography version. It may be relevant to the issue since the problem is related to SNI in pyopenssl."
+                }
+            ]
+        },
+        "solution_task": "- Update the `requests` and `urllib3` libraries to the latest versions that are compatible with each other and with the other dependencies.\n- Ensure that the `pyOpenSSL` library is updated to a version that properly handles byte strings, as the error message suggests an issue with handling Unicode strings.\n- If the issue persists after updating, inspect the `sendall` method implementation in the `pyopenssl` module to ensure it is converting input to byte strings before sending.\n- If necessary, modify the `resolve_redirects` function in the `requests` library to ensure that the URL is converted to a byte string before being passed to `urllib3` and `pyopenssl`.\n- Since the issue is related to a `301` redirect, ensure that the `get_redirect_target` function in `requests/sessions.py` is properly handling the encoding of the `location` header. If the `location` header is a Unicode string, it should be encoded to a byte string before being used.\n- Check the compatibility of the `cryptography`, `ndg-httpsclient`, and `pyasn1` libraries with the updated `requests` and `urllib3` libraries, and update them if necessary.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "The RESPONSE delivers clear, actionable, and relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a structured approach to troubleshooting the issue with the 301 redirect and pyopenssl/SNI. It suggests updating the libraries involved, which is a common first step in resolving dependency-related issues. The RESPONSE also correctly identifies the need to ensure that the data passed to pyopenssl is of type bytes, as indicated by the error message. It further suggests inspecting and potentially modifying the 'sendall' method in pyopenssl and the 'resolve_redirects' function in the requests library, which are directly related to the error encountered. Additionally, the RESPONSE advises checking the 'get_redirect_target' function for proper handling of the 'location' header encoding, which is a relevant aspect of the redirect process. The inclusion of specific code snippets to check provides actionable guidance for where to look in the codebase to address the problem.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711761751.00335,
+        "result": "- Update the `requests` and `urllib3` libraries to the latest versions that are compatible with each other and with the other dependencies.\n- Ensure that the `pyOpenSSL` library is updated to a version that properly handles byte strings, as the error message suggests an issue with handling Unicode strings.\n- If the issue persists after updating, inspect the `sendall` method implementation in the `pyopenssl` module to ensure it is converting input to byte strings before sending.\n- If necessary, modify the `resolve_redirects` function in the `requests` library to ensure that the URL is converted to a byte string before being passed to `urllib3` and `pyopenssl`.\n- Since the issue is related to a `301` redirect, ensure that the `get_redirect_target` function in `requests/sessions.py` is properly handling the encoding of the `location` header. If the `location` header is a Unicode string, it should be encoded to a byte string before being used.\n- Check the compatibility of the `cryptography`, `ndg-httpsclient`, and `pyasn1` libraries with the updated `requests` and `urllib3` libraries, and update them if necessary.\n\n### Code snippets to check\n\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 586 - 674](https://github.com/testbed/psf__requests__2.2/blob//requests/utils.py#L586-L674)\n\n This snippet contains the 'requote_uri' function which is likely where the URL is being re-encoded and may be the place to ensure the URL is converted to bytes before being passed to urllib3 and pyopenssl.\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 107 - 157](https://github.com/testbed/psf__requests__2.2/blob//requests/sessions.py#L107-L157)\n\n This snippet includes the 'get_redirect_target' function which handles the redirect response and encodes the location header. It may be relevant to ensure the encoding process results in a byte string compatible with pyopenssl. \n\n\n   - [Lines 334 - 354](https://github.com/testbed/psf__requests__2.2/blob//requests/sessions.py#L334-L354)\n\n This snippet contains the 'rebuild_method' function which is called after a redirect response is received. It may be necessary to review this to ensure the method change on redirect does not contribute to the issue.\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.2/tree//requests)- [Lines 47 - 180](https://github.com/testbed/psf__requests__2.2/blob//requests/__init__.py#L47-L180)\n\n This snippet includes code that attempts to enable urllib3's SNI support and checks the cryptography version. It may be relevant to the issue since the problem is related to SNI in pyopenssl.",
+        "context_relevance": 0.25,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant and answers the entire PROMPT completely.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT by suggesting a series of troubleshooting steps that are specific to the problem of a `301` redirect causing an exception in the context of the `pyopenssl` library. It provides a detailed approach to resolving the issue, including updating libraries, checking method implementations, and ensuring compatibility. The RESPONSE also includes relevant code snippets to check, which are directly related to the problem at hand. The RESPONSE is comprehensive and fully relevant to the entire PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

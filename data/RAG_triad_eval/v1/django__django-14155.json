@@ -1,0 +1,223 @@
+{
+    "id": "django__django-14155",
+    "repo_name": "testbed/django__django__4.0",
+    "task_id": 3357951623224739181,
+    "title": "ResolverMatch.__repr__() doesn't handle functools.partial() nicely.",
+    "body": "Description\n\t \n\t\t(last modified by Nick Pope)\n\t \nWhen a partial function is passed as the view, the __repr__ shows the func argument as functools.partial which isn't very helpful, especially as it doesn't reveal the underlying function or arguments provided.\nBecause a partial function also has arguments provided up front, we need to handle those specially so that they are accessible in __repr__.\nISTM that we can simply unwrap functools.partial objects in ResolverMatch.__init__().\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.0.git",
+    "requested_commit": "",
+    "mayil_response": "- Update `ResolverMatch.__init__` to unwrap `functools.partial` objects and store the unwrapped function and its arguments.\n- Modify `ResolverMatch.__repr__` to display the unwrapped function and its arguments when `self.func` is a `functools.partial` object.\n\n```python\nclass ResolverMatch:\n    def __init__(\n        self,\n        func,\n        args,\n        kwargs,\n        url_name=None,\n        app_names=None,\n        namespaces=None,\n        route=None,\n        tried=None,\n        captured_kwargs=None,\n        extra_kwargs=None,\n    ):\n        # Unwrap functools.partial\n        if isinstance(func, functools.partial):\n            self._partial_func = func.func\n            self._partial_args = func.args\n            self._partial_kwargs = func.keywords\n            func = func.func\n        else:\n            self._partial_func = None\n            self._partial_args = ()\n            self._partial_kwargs = {}\n\n        # Existing initialization code...\n        self.func = func\n        # ...\n\n    def __repr__(self):\n        if self._partial_func:\n            func_path = self._partial_func.__module__ + \".\" + self._partial_func.__name__\n            return (\n                f\"ResolverMatch(func={func_path}, args={self._partial_args}, \"\n                f\"kwargs={self._partial_kwargs}, url_name={self.url_name!r}, \"\n                f\"app_names={self.app_names!r}, namespaces={self.namespaces!r}, \"\n                f\"route={self.route!r}, captured_kwargs={self.captured_kwargs!r}, \"\n                f\"extra_kwargs={self.extra_kwargs!r})\"\n            )\n        else:\n            return (\n                f\"ResolverMatch(func={self._func_path}, args={self.args!r}, \"\n                f\"kwargs={self.kwargs!r}, url_name={self.url_name!r}, \"\n                f\"app_names={self.app_names!r}, namespaces={self.namespaces!r}, \"\n                f\"route={self.route!r}, captured_kwargs={self.captured_kwargs!r}, \"\n                f\"extra_kwargs={self.extra_kwargs!r})\"\n            )\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [urls](https://github.com/testbed/django__django__4.0/tree//django/urls)- [Lines 33 - 113](https://github.com/testbed/django__django__4.0/blob//django/urls/resolvers.py#L33-L113)\n\n This snippet contains the __repr__ method of ResolverMatch, which is directly related to the issue of handling functools.partial objects.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [urls](https://github.com/testbed/django__django__4.0/tree//django/urls)- [Lines 61 - 95](https://github.com/testbed/django__django__4.0/blob//django/urls/conf.py#L61-L95)\n\n This snippet shows the use of functools.partial in defining the path and re_path functions, which may be relevant when considering how partial functions are passed to ResolverMatch. \n\n\n   - [Lines 1 - 58](https://github.com/testbed/django__django__4.0/blob//django/urls/conf.py#L1-L58)\n\n This snippet imports functools.partial and may be relevant for understanding how partial functions are used throughout the django/urls/conf.py file.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00023349999999999998,
+        "snippet_processor": 0.050140000000000004,
+        "issue_star_creation": 0.02036,
+        "issue_star_solver": 0.056830000000000006,
+        "bouncer": 0.02819
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711724138.5443048,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"Functions for use in URLsconfs.\"\"\"\nfrom functools import partial\nfrom importlib import import_module\n\nfrom django.core.exceptions import ImproperlyConfigured\n\nfrom .resolvers import (\n    LocalePrefixPattern,\n    RegexPattern,\n    RoutePattern,\n    URLPattern,\n    URLResolver,\n)\n\n\ndef include(arg, namespace=None):\n    app_name = None\n    if isinstance(arg, tuple):\n        # Callable returning a namespace hint.\n        try:\n            urlconf_module, app_name = arg\n        except ValueError:\n            if namespace:\n                raise ImproperlyConfigured(\n                    \"Cannot override the namespace for a dynamic module that \"\n                    \"provides a namespace.\"\n                )\n            raise ImproperlyConfigured(\n                \"Passing a %d-tuple to include() is not supported. Pass a \"\n                \"2-tuple containing the list of patterns and app_name, and \"\n                \"provide the namespace argument to include() instead.\" % len(arg)\n            )\n    else:\n        # No namespace hint - use manually provided namespace.\n        urlconf_module = arg\n\n    if isinstance(urlconf_module, str):\n        urlconf_module = import_module(urlconf_module)\n    patterns = getattr(urlconf_module, \"urlpatterns\", urlconf_module)\n    app_name = getattr(urlconf_module, \"app_name\", app_name)\n    if namespace and not app_name:\n        raise ImproperlyConfigured(\n            \"Specifying a namespace in include() without providing an app_name \"\n            \"is not supported. Set the app_name attribute in the included \"\n            \"module, or pass a 2-tuple containing the list of patterns and \"\n            \"app_name instead.\",\n        )\n    namespace = namespace or app_name\n    # Make sure the patterns can be iterated through (without this, some\n    # testcases will break).\n    if isinstance(patterns, (list, tuple)):\n        for url_pattern in patterns:\n            pattern = getattr(url_pattern, \"pattern\", None)\n            if isinstance(pattern, LocalePrefixPattern):\n                raise ImproperlyConfigured(\n                    \"Using i18n_patterns in an included URLconf is not allowed.\"\n                )\n    return (urlconf_module, app_name, namespace)",
+                "filename": "django/urls/conf.py",
+                "start_index": 0,
+                "end_index": 2206,
+                "start_line": 1,
+                "end_line": 58,
+                "max_line": 95,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _path(route, view, kwargs=None, name=None, Pattern=None):\n    from django.views import View\n\n    if kwargs is not None and not isinstance(kwargs, dict):\n        raise TypeError(\n            f\"kwargs argument must be a dict, but got {kwargs.__class__.__name__}.\"\n        )\n    if isinstance(view, (list, tuple)):\n        # For include(...) processing.\n        pattern = Pattern(route, is_endpoint=False)\n        urlconf_module, app_name, namespace = view\n        return URLResolver(\n            pattern,\n            urlconf_module,\n            kwargs,\n            app_name=app_name,\n            namespace=namespace,\n        )\n    elif callable(view):\n        pattern = Pattern(route, name=name, is_endpoint=True)\n        return URLPattern(pattern, view, kwargs, name)\n    elif isinstance(view, View):\n        view_cls_name = view.__class__.__name__\n        raise TypeError(\n            f\"view must be a callable, pass {view_cls_name}.as_view(), not \"\n            f\"{view_cls_name}().\"\n        )\n    else:\n        raise TypeError(\n            \"view must be a callable or a list/tuple in the case of include().\"\n        )\n\n\npath = partial(_path, Pattern=RoutePattern)\nre_path = partial(_path, Pattern=RegexPattern)",
+                "filename": "django/urls/conf.py",
+                "start_index": 2209,
+                "end_index": 3424,
+                "start_line": 61,
+                "end_line": 95,
+                "max_line": 95,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@functools.cache\ndef get_ns_resolver(ns_pattern, resolver, converters):\n    # Build a namespaced resolver for the given parent URLconf pattern.\n    # This makes it possible to have captured parameters in the parent\n    # URLconf pattern.\n    pattern = RegexPattern(ns_pattern)\n    pattern.converters = dict(converters)\n    ns_resolver = URLResolver(pattern, resolver.url_patterns)\n    return URLResolver(RegexPattern(r\"^/\"), [ns_resolver])\n\n\nclass LocaleRegexDescriptor:\n    def __init__(self, attr):\n        self.attr = attr\n\n    def __get__(self, instance, cls=None):\n        \"\"\"\n        Return a compiled regular expression based on the active language.\n        \"\"\"\n        if instance is None:\n            return self\n        # As a performance optimization, if the given regex string is a regular\n        # string (not a lazily-translated string proxy), compile it once and\n        # avoid per-language compilation.\n        pattern = getattr(instance, self.attr)\n        if isinstance(pattern, str):\n            instance.__dict__[\"regex\"] = instance._compile(pattern)\n            return instance.__dict__[\"regex\"]\n        language_code = get_language()\n        if language_code not in instance._regex_dict:\n            instance._regex_dict[language_code] = instance._compile(str(pattern))\n        return instance._regex_dict[language_code]\n\n\nclass CheckURLMixin:\n    def describe(self):\n        \"\"\"\n        Format the URL pattern for display in warning messages.\n        \"\"\"\n        description = \"'{}'\".format(self)\n        if self.name:\n            description += \" [name='{}']\".format(self.name)\n        return description\n\n    def _check_pattern_startswith_slash(self):\n        \"\"\"\n        Check that the pattern does not begin with a forward slash.\n        \"\"\"\n        regex_pattern = self.regex.pattern\n        if not settings.APPEND_SLASH:\n            # Skip check as it can be useful to start a URL pattern with a slash\n            # when APPEND_SLASH=False.\n            return []\n        if regex_pattern.startswith((\"/\", \"^/\", \"^\\\\/\")) and not regex_pattern.endswith(\n            \"/\"\n        ):\n            warning = Warning(\n                \"Your URL pattern {} has a route beginning with a '/'. Remove this \"\n                \"slash as it is unnecessary. If this pattern is targeted in an \"\n                \"include(), ensure the include() pattern has a trailing '/'.\".format(\n                    self.describe()\n                ),\n                id=\"urls.W002\",\n            )\n            return [warning]\n        else:\n            return []",
+                "filename": "django/urls/resolvers.py",
+                "start_index": 3656,
+                "end_index": 6214,
+                "start_line": 111,
+                "end_line": 425,
+                "max_line": 848,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nThis module converts requested URLs to callback view functions.\n\nURLResolver is the main class here. Its resolve() method takes a URL (as\na string) and returns a ResolverMatch object which provides access to all\nattributes of the resolved URL match.\n\"\"\"\nimport functools\nimport inspect\nimport re\nimport string\nfrom importlib import import_module\nfrom pickle import PicklingError\nfrom urllib.parse import quote\n\nfrom asgiref.local import Local\n\nfrom django.conf import settings\nfrom django.core.checks import Error, Warning\nfrom django.core.checks.urls import check_resolver\nfrom django.core.exceptions import ImproperlyConfigured, ViewDoesNotExist\nfrom django.utils.datastructures import MultiValueDict\nfrom django.utils.functional import cached_property\nfrom django.utils.http import RFC3986_SUBDELIMS, escape_leading_slashes\nfrom django.utils.regex_helper import _lazy_re_compile, normalize\nfrom django.utils.translation import get_language\n\nfrom .converters import get_converter\nfrom .exceptions import NoReverseMatch, Resolver404\nfrom .utils import get_callable",
+                "filename": "django/urls/resolvers.py",
+                "start_index": 0,
+                "end_index": 1069,
+                "start_line": 1,
+                "end_line": 30,
+                "max_line": 848,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "class ResolverMatch:\n    def __init__(\n        self,\n        func,\n        args,\n        kwargs,\n        url_name=None,\n        app_names=None,\n        namespaces=None,\n        route=None,\n        tried=None,\n        captured_kwargs=None,\n        extra_kwargs=None,\n    ):\n        self.func = func\n        self.args = args\n        self.kwargs = kwargs\n        self.url_name = url_name\n        self.route = route\n        self.tried = tried\n        self.captured_kwargs = captured_kwargs\n        self.extra_kwargs = extra_kwargs\n\n        # If a URLRegexResolver doesn't have a namespace or app_name, it passes\n        # in an empty value.\n        self.app_names = [x for x in app_names if x] if app_names else []\n        self.app_name = \":\".join(self.app_names)\n        self.namespaces = [x for x in namespaces if x] if namespaces else []\n        self.namespace = \":\".join(self.namespaces)\n\n        if hasattr(func, \"view_class\"):\n            func = func.view_class\n        if not hasattr(func, \"__name__\"):\n            # A class-based view\n            self._func_path = func.__class__.__module__ + \".\" + func.__class__.__name__\n        else:\n            # A function-based view\n            self._func_path = func.__module__ + \".\" + func.__name__\n\n        view_path = url_name or self._func_path\n        self.view_name = \":\".join(self.namespaces + [view_path])\n\n    def __getitem__(self, index):\n        return (self.func, self.args, self.kwargs)[index]\n\n    def __repr__(self):\n        if isinstance(self.func, functools.partial):\n            func = repr(self.func)\n        else:\n            func = self._func_path\n        return (\n            \"ResolverMatch(func=%s, args=%r, kwargs=%r, url_name=%r, \"\n            \"app_names=%r, namespaces=%r, route=%r%s%s)\"\n            % (\n                func,\n                self.args,\n                self.kwargs,\n                self.url_name,\n                self.app_names,\n                self.namespaces,\n                self.route,\n                f\", captured_kwargs={self.captured_kwargs!r}\"\n                if self.captured_kwargs\n                else \"\",\n                f\", extra_kwargs={self.extra_kwargs!r}\" if self.extra_kwargs else \"\",\n            )\n        )\n\n    def __reduce_ex__(self, protocol):\n        raise PicklingError(f\"Cannot pickle {self.__class__.__qualname__}.\")\n\n\ndef get_resolver(urlconf=None):\n    if urlconf is None:\n        urlconf = settings.ROOT_URLCONF\n    return _get_cached_resolver(urlconf)\n\n\n@functools.cache\ndef _get_cached_resolver(urlconf=None):\n    return URLResolver(RegexPattern(r\"^/\"), urlconf)",
+                "filename": "django/urls/resolvers.py",
+                "start_index": 1072,
+                "end_index": 3653,
+                "start_line": 33,
+                "end_line": 113,
+                "max_line": 848,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.9
+            },
+            {
+                "code": "import functools\nimport inspect\nimport warnings\nfrom functools import partial\n\nfrom django import forms\nfrom django.apps import apps\nfrom django.conf import SettingsReference, settings\nfrom django.core import checks, exceptions\nfrom django.db import connection, router\nfrom django.db.backends import utils\nfrom django.db.models import Q\nfrom django.db.models.constants import LOOKUP_SEP\nfrom django.db.models.deletion import CASCADE, SET_DEFAULT, SET_NULL\nfrom django.db.models.query_utils import PathInfo\nfrom django.db.models.utils import make_model_tuple\nfrom django.utils.deprecation import RemovedInDjango60Warning\nfrom django.utils.functional import cached_property\nfrom django.utils.translation import gettext_lazy as _\n\nfrom . import Field\nfrom .mixins import FieldCacheMixin\nfrom .related_descriptors import (\n    ForeignKeyDeferredAttribute,\n    ForwardManyToOneDescriptor,\n    ForwardOneToOneDescriptor,\n    ManyToManyDescriptor,\n    ReverseManyToOneDescriptor,\n    ReverseOneToOneDescriptor,\n)\nfrom .related_lookups import (\n    RelatedExact,\n    RelatedGreaterThan,\n    RelatedGreaterThanOrEqual,\n    RelatedIn,\n    RelatedIsNull,\n    RelatedLessThan,\n    RelatedLessThanOrEqual,\n)\nfrom .reverse_related import ForeignObjectRel, ManyToManyRel, ManyToOneRel, OneToOneRel\n\nRECURSIVE_RELATIONSHIP_CONSTANT = \"self\"\n\n\ndef resolve_relation(scope_model, relation):\n    \"\"\"\n    Transform relation into a model or fully-qualified model string of the form\n    \"app_label.ModelName\", relative to scope_model.\n\n    The relation argument can be:\n      * RECURSIVE_RELATIONSHIP_CONSTANT, i.e. the string \"self\", in which case\n        the model argument will be returned.\n      * A bare model name without an app_label, in which case scope_model's\n        app_label will be prepended.\n      * An \"app_label.ModelName\" string.\n      * A model class, which will be returned unchanged.\n    \"\"\"\n    # Check for recursive relations\n    if relation == RECURSIVE_RELATIONSHIP_CONSTANT:\n        relation = scope_model\n\n    # Look for an \"app.Model\" relation\n    if isinstance(relation, str):\n        if \".\" not in relation:\n            relation = \"%s.%s\" % (scope_model._meta.app_label, relation)\n\n    return relation",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 0,
+                "end_index": 2208,
+                "start_line": 1,
+                "end_line": 67,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.http import Http404\n\n\nclass Resolver404(Http404):\n    pass\n\n\nclass NoReverseMatch(Exception):\n    pass",
+                "filename": "django/urls/exceptions.py",
+                "start_index": 0,
+                "end_index": 114,
+                "start_line": 1,
+                "end_line": 9,
+                "max_line": 9,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "# Add wrappers for all methods from resultclasses which haven't been\n    # wrapped explicitly above.\n    for resultclass in resultclasses:\n        for type_ in resultclass.mro():\n            for method_name in type_.__dict__:\n                # All __promise__ return the same wrapper method, they look up\n                # the correct implementation when called.\n                if hasattr(__proxy__, method_name):\n                    continue\n\n                # Builds a wrapper around some method. Pass method_name to\n                # avoid issues due to late binding.\n                def __wrapper__(self, *args, __method_name=method_name, **kw):\n                    # Automatically triggers the evaluation of a lazy value and\n                    # applies the given method of the result type.\n                    result = func(*self._args, **self._kw)\n                    return getattr(result, __method_name)(*args, **kw)\n\n                setattr(__proxy__, method_name, __wrapper__)\n\n    @wraps(func)\n    def __wrapper__(*args, **kw):\n        # Creates the proxy object, instead of the actual value.\n        return __proxy__(args, kw)\n\n    return __wrapper__",
+                "filename": "django/utils/functional.py",
+                "start_index": 5008,
+                "end_index": 6173,
+                "start_line": 172,
+                "end_line": 197,
+                "max_line": 451,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from functools import wraps\n\nfrom asgiref.sync import iscoroutinefunction\n\n\ndef no_append_slash(view_func):\n    \"\"\"\n    Mark a view function as excluded from CommonMiddleware's APPEND_SLASH\n    redirection.\n    \"\"\"\n\n    # view_func.should_append_slash = False would also work, but decorators are\n    # nicer if they don't have side effects, so return a new function.\n\n    if iscoroutinefunction(view_func):\n\n        async def _view_wrapper(request, *args, **kwargs):\n            return await view_func(request, *args, **kwargs)\n\n    else:\n\n        def _view_wrapper(request, *args, **kwargs):\n            return view_func(request, *args, **kwargs)\n\n    _view_wrapper.should_append_slash = False\n\n    return wraps(view_func)(_view_wrapper)",
+                "filename": "django/views/decorators/common.py",
+                "start_index": 0,
+                "end_index": 738,
+                "start_line": 1,
+                "end_line": 27,
+                "max_line": 27,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@cached_property\n    def url_patterns(self):\n        # urlconf_module might be a valid set of patterns, so we default to it\n        patterns = getattr(self.urlconf_module, \"urlpatterns\", self.urlconf_module)\n        try:\n            iter(patterns)\n        except TypeError as e:\n            msg = (\n                \"The included URLconf '{name}' does not appear to have \"\n                \"any patterns in it. If you see the 'urlpatterns' variable \"\n                \"with valid patterns in the file then the issue is probably \"\n                \"caused by a circular import.\"\n            )\n            raise ImproperlyConfigured(msg.format(name=self.urlconf_name)) from e\n        return patterns\n\n    def resolve_error_handler(self, view_type):\n        callback = getattr(self.urlconf_module, \"handler%s\" % view_type, None)\n        if not callback:\n            # No handler specified in file; use lazy import, since\n            # django.conf.urls imports this file.\n            from django.conf import urls\n\n            callback = getattr(urls, \"handler%s\" % view_type)\n        return get_callable(callback)\n\n    def reverse(self, lookup_view, *args, **kwargs):\n        return self._reverse_with_prefix(lookup_view, \"\", *args, **kwargs)",
+                "filename": "django/urls/resolvers.py",
+                "start_index": 27435,
+                "end_index": 28669,
+                "start_line": 462,
+                "end_line": 759,
+                "max_line": 848,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/urls/resolvers.py": [
+                {
+                    "chunk": {
+                        "code": "class ResolverMatch:\n    def __init__(\n        self,\n        func,\n        args,\n        kwargs,\n        url_name=None,\n        app_names=None,\n        namespaces=None,\n        route=None,\n        tried=None,\n        captured_kwargs=None,\n        extra_kwargs=None,\n    ):\n        self.func = func\n        self.args = args\n        self.kwargs = kwargs\n        self.url_name = url_name\n        self.route = route\n        self.tried = tried\n        self.captured_kwargs = captured_kwargs\n        self.extra_kwargs = extra_kwargs\n\n        # If a URLRegexResolver doesn't have a namespace or app_name, it passes\n        # in an empty value.\n        self.app_names = [x for x in app_names if x] if app_names else []\n        self.app_name = \":\".join(self.app_names)\n        self.namespaces = [x for x in namespaces if x] if namespaces else []\n        self.namespace = \":\".join(self.namespaces)\n\n        if hasattr(func, \"view_class\"):\n            func = func.view_class\n        if not hasattr(func, \"__name__\"):\n            # A class-based view\n            self._func_path = func.__class__.__module__ + \".\" + func.__class__.__name__\n        else:\n            # A function-based view\n            self._func_path = func.__module__ + \".\" + func.__name__\n\n        view_path = url_name or self._func_path\n        self.view_name = \":\".join(self.namespaces + [view_path])\n\n    def __getitem__(self, index):\n        return (self.func, self.args, self.kwargs)[index]\n\n    def __repr__(self):\n        if isinstance(self.func, functools.partial):\n            func = repr(self.func)\n        else:\n            func = self._func_path\n        return (\n            \"ResolverMatch(func=%s, args=%r, kwargs=%r, url_name=%r, \"\n            \"app_names=%r, namespaces=%r, route=%r%s%s)\"\n            % (\n                func,\n                self.args,\n                self.kwargs,\n                self.url_name,\n                self.app_names,\n                self.namespaces,\n                self.route,\n                f\", captured_kwargs={self.captured_kwargs!r}\"\n                if self.captured_kwargs\n                else \"\",\n                f\", extra_kwargs={self.extra_kwargs!r}\" if self.extra_kwargs else \"\",\n            )\n        )\n\n    def __reduce_ex__(self, protocol):\n        raise PicklingError(f\"Cannot pickle {self.__class__.__qualname__}.\")\n\n\ndef get_resolver(urlconf=None):\n    if urlconf is None:\n        urlconf = settings.ROOT_URLCONF\n    return _get_cached_resolver(urlconf)\n\n\n@functools.cache\ndef _get_cached_resolver(urlconf=None):\n    return URLResolver(RegexPattern(r\"^/\"), urlconf)",
+                        "filename": "django/urls/resolvers.py",
+                        "start_index": 1072,
+                        "end_index": 3653,
+                        "start_line": 33,
+                        "end_line": 113,
+                        "max_line": 848,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the __repr__ method of ResolverMatch, which is directly related to the issue of handling functools.partial objects."
+                }
+            ],
+            "django/urls/conf.py": [
+                {
+                    "chunk": {
+                        "code": "def _path(route, view, kwargs=None, name=None, Pattern=None):\n    from django.views import View\n\n    if kwargs is not None and not isinstance(kwargs, dict):\n        raise TypeError(\n            f\"kwargs argument must be a dict, but got {kwargs.__class__.__name__}.\"\n        )\n    if isinstance(view, (list, tuple)):\n        # For include(...) processing.\n        pattern = Pattern(route, is_endpoint=False)\n        urlconf_module, app_name, namespace = view\n        return URLResolver(\n            pattern,\n            urlconf_module,\n            kwargs,\n            app_name=app_name,\n            namespace=namespace,\n        )\n    elif callable(view):\n        pattern = Pattern(route, name=name, is_endpoint=True)\n        return URLPattern(pattern, view, kwargs, name)\n    elif isinstance(view, View):\n        view_cls_name = view.__class__.__name__\n        raise TypeError(\n            f\"view must be a callable, pass {view_cls_name}.as_view(), not \"\n            f\"{view_cls_name}().\"\n        )\n    else:\n        raise TypeError(\n            \"view must be a callable or a list/tuple in the case of include().\"\n        )\n\n\npath = partial(_path, Pattern=RoutePattern)\nre_path = partial(_path, Pattern=RegexPattern)",
+                        "filename": "django/urls/conf.py",
+                        "start_index": 2209,
+                        "end_index": 3424,
+                        "start_line": 61,
+                        "end_line": 95,
+                        "max_line": 95,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the use of functools.partial in defining the path and re_path functions, which may be relevant when considering how partial functions are passed to ResolverMatch."
+                },
+                {
+                    "chunk": {
+                        "code": "\"\"\"Functions for use in URLsconfs.\"\"\"\nfrom functools import partial\nfrom importlib import import_module\n\nfrom django.core.exceptions import ImproperlyConfigured\n\nfrom .resolvers import (\n    LocalePrefixPattern,\n    RegexPattern,\n    RoutePattern,\n    URLPattern,\n    URLResolver,\n)\n\n\ndef include(arg, namespace=None):\n    app_name = None\n    if isinstance(arg, tuple):\n        # Callable returning a namespace hint.\n        try:\n            urlconf_module, app_name = arg\n        except ValueError:\n            if namespace:\n                raise ImproperlyConfigured(\n                    \"Cannot override the namespace for a dynamic module that \"\n                    \"provides a namespace.\"\n                )\n            raise ImproperlyConfigured(\n                \"Passing a %d-tuple to include() is not supported. Pass a \"\n                \"2-tuple containing the list of patterns and app_name, and \"\n                \"provide the namespace argument to include() instead.\" % len(arg)\n            )\n    else:\n        # No namespace hint - use manually provided namespace.\n        urlconf_module = arg\n\n    if isinstance(urlconf_module, str):\n        urlconf_module = import_module(urlconf_module)\n    patterns = getattr(urlconf_module, \"urlpatterns\", urlconf_module)\n    app_name = getattr(urlconf_module, \"app_name\", app_name)\n    if namespace and not app_name:\n        raise ImproperlyConfigured(\n            \"Specifying a namespace in include() without providing an app_name \"\n            \"is not supported. Set the app_name attribute in the included \"\n            \"module, or pass a 2-tuple containing the list of patterns and \"\n            \"app_name instead.\",\n        )\n    namespace = namespace or app_name\n    # Make sure the patterns can be iterated through (without this, some\n    # testcases will break).\n    if isinstance(patterns, (list, tuple)):\n        for url_pattern in patterns:\n            pattern = getattr(url_pattern, \"pattern\", None)\n            if isinstance(pattern, LocalePrefixPattern):\n                raise ImproperlyConfigured(\n                    \"Using i18n_patterns in an included URLconf is not allowed.\"\n                )\n    return (urlconf_module, app_name, namespace)",
+                        "filename": "django/urls/conf.py",
+                        "start_index": 0,
+                        "end_index": 2206,
+                        "start_line": 1,
+                        "end_line": 58,
+                        "max_line": 95,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet imports functools.partial and may be relevant for understanding how partial functions are used throughout the django/urls/conf.py file."
+                }
+            ]
+        },
+        "solution_task": "- Update `ResolverMatch.__init__` to unwrap `functools.partial` objects and store the unwrapped function and its arguments.\n- Modify `ResolverMatch.__repr__` to display the unwrapped function and its arguments when `self.func` is a `functools.partial` object.\n\n```python\nclass ResolverMatch:\n    def __init__(\n        self,\n        func,\n        args,\n        kwargs,\n        url_name=None,\n        app_names=None,\n        namespaces=None,\n        route=None,\n        tried=None,\n        captured_kwargs=None,\n        extra_kwargs=None,\n    ):\n        # Unwrap functools.partial\n        if isinstance(func, functools.partial):\n            self._partial_func = func.func\n            self._partial_args = func.args\n            self._partial_kwargs = func.keywords\n            func = func.func\n        else:\n            self._partial_func = None\n            self._partial_args = ()\n            self._partial_kwargs = {}\n\n        # Existing initialization code...\n        self.func = func\n        # ...\n\n    def __repr__(self):\n        if self._partial_func:\n            func_path = self._partial_func.__module__ + \".\" + self._partial_func.__name__\n            return (\n                f\"ResolverMatch(func={func_path}, args={self._partial_args}, \"\n                f\"kwargs={self._partial_kwargs}, url_name={self.url_name!r}, \"\n                f\"app_names={self.app_names!r}, namespaces={self.namespaces!r}, \"\n                f\"route={self.route!r}, captured_kwargs={self.captured_kwargs!r}, \"\n                f\"extra_kwargs={self.extra_kwargs!r})\"\n            )\n        else:\n            return (\n                f\"ResolverMatch(func={self._func_path}, args={self.args!r}, \"\n                f\"kwargs={self.kwargs!r}, url_name={self.url_name!r}, \"\n                f\"app_names={self.app_names!r}, namespaces={self.namespaces!r}, \"\n                f\"route={self.route!r}, captured_kwargs={self.captured_kwargs!r}, \"\n                f\"extra_kwargs={self.extra_kwargs!r})\"\n            )\n```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT. It suggests updating the `ResolverMatch.__init__` method to unwrap `functools.partial` objects and store the unwrapped function and its arguments, which directly addresses the issue of `__repr__` not showing useful information for partial functions. Additionally, the RESPONSE modifies `ResolverMatch.__repr__` to display the unwrapped function and its arguments, which is exactly what is needed to make the `__repr__` output more informative. The provided code is relevant and appears to be syntactically correct, which would likely resolve the issue if implemented. The RESPONSE also takes into account the existing structure of the `ResolverMatch` class and integrates the new functionality in a way that is consistent with Python's object-oriented design principles.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711724346.237663,
+        "result": "- Update `ResolverMatch.__init__` to unwrap `functools.partial` objects and store the unwrapped function and its arguments.\n- Modify `ResolverMatch.__repr__` to display the unwrapped function and its arguments when `self.func` is a `functools.partial` object.\n\n```python\nclass ResolverMatch:\n    def __init__(\n        self,\n        func,\n        args,\n        kwargs,\n        url_name=None,\n        app_names=None,\n        namespaces=None,\n        route=None,\n        tried=None,\n        captured_kwargs=None,\n        extra_kwargs=None,\n    ):\n        # Unwrap functools.partial\n        if isinstance(func, functools.partial):\n            self._partial_func = func.func\n            self._partial_args = func.args\n            self._partial_kwargs = func.keywords\n            func = func.func\n        else:\n            self._partial_func = None\n            self._partial_args = ()\n            self._partial_kwargs = {}\n\n        # Existing initialization code...\n        self.func = func\n        # ...\n\n    def __repr__(self):\n        if self._partial_func:\n            func_path = self._partial_func.__module__ + \".\" + self._partial_func.__name__\n            return (\n                f\"ResolverMatch(func={func_path}, args={self._partial_args}, \"\n                f\"kwargs={self._partial_kwargs}, url_name={self.url_name!r}, \"\n                f\"app_names={self.app_names!r}, namespaces={self.namespaces!r}, \"\n                f\"route={self.route!r}, captured_kwargs={self.captured_kwargs!r}, \"\n                f\"extra_kwargs={self.extra_kwargs!r})\"\n            )\n        else:\n            return (\n                f\"ResolverMatch(func={self._func_path}, args={self.args!r}, \"\n                f\"kwargs={self.kwargs!r}, url_name={self.url_name!r}, \"\n                f\"app_names={self.app_names!r}, namespaces={self.namespaces!r}, \"\n                f\"route={self.route!r}, captured_kwargs={self.captured_kwargs!r}, \"\n                f\"extra_kwargs={self.extra_kwargs!r})\"\n            )\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [urls](https://github.com/testbed/django__django__4.0/tree//django/urls)- [Lines 33 - 113](https://github.com/testbed/django__django__4.0/blob//django/urls/resolvers.py#L33-L113)\n\n This snippet contains the __repr__ method of ResolverMatch, which is directly related to the issue of handling functools.partial objects.\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [urls](https://github.com/testbed/django__django__4.0/tree//django/urls)- [Lines 61 - 95](https://github.com/testbed/django__django__4.0/blob//django/urls/conf.py#L61-L95)\n\n This snippet shows the use of functools.partial in defining the path and re_path functions, which may be relevant when considering how partial functions are passed to ResolverMatch. \n\n\n   - [Lines 1 - 58](https://github.com/testbed/django__django__4.0/blob//django/urls/conf.py#L1-L58)\n\n This snippet imports functools.partial and may be relevant for understanding how partial functions are used throughout the django/urls/conf.py file.",
+        "context_relevance": 0.3,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer it completely to get a score of 10.\nSupporting Evidence: The RESPONSE provides a detailed solution to the issue described in the PROMPT by suggesting updates to the `ResolverMatch.__init__` and `ResolverMatch.__repr__` methods to handle `functools.partial` objects appropriately. It includes a code snippet that directly addresses the problem of the `__repr__` method not revealing the underlying function or arguments of a partial function. The RESPONSE also acknowledges the relevance of the provided code snippets from the Django repository, which are related to the issue at hand. The RESPONSE is fully relevant to the PROMPT, as it addresses the problem, proposes a solution, and relates to the provided code snippets."
+        },
+        "qa_relevance": 1.0
+    }
+}

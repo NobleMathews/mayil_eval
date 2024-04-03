@@ -1,0 +1,191 @@
+{
+    "id": "django__django-15022",
+    "repo_name": "testbed/django__django__4.1",
+    "task_id": 5029981785762742663,
+    "title": "Unnecessary joins in admin changelist query",
+    "body": "Description\n\t\nDjango 1.2.5\nModels:\nclass Client(models.Model):\n\tname = models.CharField(_('name'), max_length=256)\n\tname2 = models.CharField(_('unofficial or obsolete name'), max_length=256, blank=True, null=True)\n\tcontact_person = models.CharField(_('contact person'), max_length=256, blank=True, null=True)\n\t...\nclass ClientOffice(models.Model):\n\tname = models.CharField(_('name'), max_length=256)\n\tname2 = models.CharField(_('unofficial or obsolete name'), max_length=256, blank=True, null=True)\n\t...\n\tclient = models.ForeignKey(Client, verbose_name=_('client'))\n\t...\nand admin options like these:\nclass ClientAdmin(admin.ModelAdmin):\n\tsearch_fields = ('name', 'name2', 'contact_person', 'clientoffice__name', 'clientoffice__name2')\n\t...\nNumbers:\n>>> Client.objects.count()\n10907\n>>> ClientOffice.objects.count()\n16952\nNow, if we try searching for clients in admin by a search query containig several words (>3), got django/admin stalled.\nThe problem is going to be that each word in the search query leads to additional JOIN in final SQL query beacause of qs = qs.filter(...) pattern. The attached patch is for Django 1.2.5, but adopting for the current SVN trunk is trivial.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.1.git",
+    "requested_commit": "",
+    "mayil_response": "- Optimize the `get_search_results` method in `django/contrib/admin/options.py` to reduce the number of JOINs created for each search term.\n- Replace the pattern of chaining filters for each search term with a single filter that uses `Q` objects combined with `|` (OR) for each search term.\n- Use `icontains` for case-insensitive partial matches without additional JOINs.\n\n```python\nfrom django.db.models import Q\nfrom django.utils.text import smart_split\n\ndef get_search_results(self, request, queryset, search_term):\n    search_fields = self.get_search_fields(request)\n    if search_fields and search_term:\n        # Construct a single Q object for all search terms\n        query = Q()\n        for bit in smart_split(search_term):\n            or_queries = Q()\n            for field_name in search_fields:\n                or_queries |= Q(**{f\"{field_name}__icontains\": bit})\n            query &= or_queries\n        queryset = queryset.filter(query).distinct()\n    return queryset, False\n```\n\n- Ensure that `distinct()` is called on the queryset if the search fields span related models to avoid duplicates.\n- Remove the `may_have_duplicates` logic as it is no longer needed with the new approach.\n- Test the changes to confirm that the performance issue is resolved.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__4.1/tree//django/contrib) \u2192 [admin](https://github.com/testbed/django__django__4.1/tree//django/contrib/admin)- [Lines 1132 - 2516](https://github.com/testbed/django__django__4.1/blob//django/contrib/admin/options.py#L1132-L2516)\n\n This snippet contains the get_search_results method which is responsible for constructing the search query in the admin. It is directly related to the issue of unnecessary joins in the admin changelist query when searching for clients.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003045,
+        "snippet_processor": 0.047810000000000005,
+        "issue_star_creation": 0.030010000000000002,
+        "issue_star_solver": 0.0493,
+        "bouncer": 0.023870000000000002
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711720542.371503,
+        "relevant_snippets": [
+            {
+                "code": "'use strict';\n{\n    const $ = django.jQuery;\n\n    $.fn.djangoAdminSelect2 = function() {\n        $.each(this, function(i, element) {\n            $(element).select2({\n                ajax: {\n                    data: (params) => {\n                        return {\n                            term: params.term,\n                            page: params.page,\n                            app_label: element.dataset.appLabel,\n                            model_name: element.dataset.modelName,\n                            field_name: element.dataset.fieldName\n                        };\n                    }\n                }\n            });\n        });\n        return this;\n    };\n\n    $(function() {\n        // Initialize all autocomplete widgets except the one in the template\n        // form used when a new formset is added.\n        $('.admin-autocomplete').not('[name*=__prefix__]').djangoAdminSelect2();\n    });\n\n    document.addEventListener('formset:added', (event) => {\n        $(event.target).find('.admin-autocomplete').djangoAdminSelect2();\n    });\n}",
+                "filename": "django/contrib/admin/static/admin/js/autocomplete.js",
+                "start_index": 0,
+                "end_index": 1059,
+                "start_line": 1,
+                "end_line": 33,
+                "max_line": 33,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "import warnings\nfrom datetime import datetime, timedelta\n\nfrom django import forms\nfrom django.conf import settings\nfrom django.contrib import messages\nfrom django.contrib.admin import FieldListFilter\nfrom django.contrib.admin.exceptions import (\n    DisallowedModelAdminLookup,\n    DisallowedModelAdminToField,\n)\nfrom django.contrib.admin.options import (\n    IS_FACETS_VAR,\n    IS_POPUP_VAR,\n    TO_FIELD_VAR,\n    IncorrectLookupParameters,\n    ShowFacets,\n)\nfrom django.contrib.admin.utils import (\n    build_q_object_from_lookup_parameters,\n    get_fields_from_path,\n    lookup_spawns_duplicates,\n    prepare_lookup_value,\n    quote,\n)\nfrom django.core.exceptions import (\n    FieldDoesNotExist,\n    ImproperlyConfigured,\n    SuspiciousOperation,\n)\nfrom django.core.paginator import InvalidPage\nfrom django.db.models import F, Field, ManyToOneRel, OrderBy\nfrom django.db.models.expressions import Combinable\nfrom django.urls import reverse\nfrom django.utils.deprecation import RemovedInDjango60Warning\nfrom django.utils.http import urlencode\nfrom django.utils.inspect import func_supports_parameter\nfrom django.utils.timezone import make_aware\nfrom django.utils.translation import gettext\n\n# Changelist settings\nALL_VAR = \"all\"\nORDER_VAR = \"o\"\nPAGE_VAR = \"p\"\nSEARCH_VAR = \"q\"\nERROR_FLAG = \"e\"\n\nIGNORED_PARAMS = (\n    ALL_VAR,\n    ORDER_VAR,\n    SEARCH_VAR,\n    IS_FACETS_VAR,\n    IS_POPUP_VAR,\n    TO_FIELD_VAR,\n)\n\n\nclass ChangeListSearchForm(forms.Form):\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n        # Populate \"fields\" dynamically because SEARCH_VAR is a variable:\n        self.fields = {\n            SEARCH_VAR: forms.CharField(required=False, strip=False),\n        }",
+                "filename": "django/contrib/admin/views/main.py",
+                "start_index": 0,
+                "end_index": 1720,
+                "start_line": 1,
+                "end_line": 439,
+                "max_line": 625,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "search_form_class = ChangeListSearchForm",
+                "filename": "django/contrib/admin/views/main.py",
+                "start_index": 1745,
+                "end_index": 1785,
+                "start_line": 68,
+                "end_line": 68,
+                "max_line": 625,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nUseful auxiliary data structures for query construction. Not useful outside\nthe SQL domain.\n\"\"\"\nimport warnings\n\nfrom django.core.exceptions import FullResultSet\nfrom django.db.models.sql.constants import INNER, LOUTER\nfrom django.utils.deprecation import RemovedInDjango60Warning\n\n\nclass MultiJoin(Exception):\n    \"\"\"\n    Used by join construction code to indicate the point at which a\n    multi-valued join was attempted (if the caller wants to treat that\n    exceptionally).\n    \"\"\"\n\n    def __init__(self, names_pos, path_with_names):\n        self.level = names_pos\n        # The path travelled, this includes the path to the multijoin.\n        self.names_with_path = path_with_names\n\n\nclass Empty:\n    pass",
+                "filename": "django/db/models/sql/datastructures.py",
+                "start_index": 0,
+                "end_index": 715,
+                "start_line": 1,
+                "end_line": 130,
+                "max_line": 237,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "f get_search_results(self, request, queryset, search_term):\n        \"\"\"\n        Return a tuple containing a queryset to implement the search\n        and a boolean indicating if the results may contain duplicates.\n        \"\"\"\n\n        # Apply keyword searches.\n        def construct_search(field_name):\n            if field_name.startswith(\"^\"):\n                return \"%s__istartswith\" % field_name.removeprefix(\"^\")\n            elif field_name.startswith(\"=\"):\n                return \"%s__iexact\" % field_name.removeprefix(\"=\")\n            elif field_name.startswith(\"@\"):\n                return \"%s__search\" % field_name.removeprefix(\"@\")\n            # Use field_name if it includes a lookup.\n            opts = queryset.model._meta\n            lookup_fields = field_name.split(LOOKUP_SEP)\n            # Go through the fields, following all relations.\n            prev_field = None\n            for path_part in lookup_fields:\n                if path_part == \"pk\":\n                    path_part = opts.pk.name\n                try:\n                    field = opts.get_field(path_part)\n                except FieldDoesNotExist:\n                    # Use valid query lookups.\n                    if prev_field and prev_field.get_lookup(path_part):\n                        return field_name\n                else:\n                    prev_field = field\n                    if hasattr(field, \"path_infos\"):\n                        # Update opts to follow the relation.\n                        opts = field.path_infos[-1].to_opts\n            # Otherwise, use the field with icontains.\n            return \"%s__icontains\" % field_name\n\n        may_have_duplicates = False\n        search_fields = self.get_search_fields(request)\n        if search_fields and search_term:\n            orm_lookups = [\n                construct_search(str(search_field)) for search_field in search_fields\n            ]\n            term_queries = []\n            for bit in smart_split(search_term):\n                if bit.startswith(('\"', \"'\")) and bit[0] == bit[-1]:\n                    bit = unescape_string_literal(bit)\n                or_queries = models.Q.create(\n                    [(orm_lookup, bit) for orm_lookup in orm_lookups],\n                    connector=models.Q.OR,\n                )\n                term_queries.append(or_queries)\n            queryset = queryset.filter(models.Q.create(term_queries))\n            may_have_duplicates |= any(\n                lookup_spawns_duplicates(self.opts, search_spec)\n                for search_spec in orm_lookups\n            )\n        return queryset, may_have_duplicates\n\n    de",
+                "filename": "django/contrib/admin/options.py",
+                "start_index": 42280,
+                "end_index": 44888,
+                "start_line": 1132,
+                "end_line": 2516,
+                "max_line": 2529,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "from django.db.models import (\n    CharField,\n    Expression,\n    Field,\n    FloatField,\n    Func,\n    Lookup,\n    TextField,\n    Value,\n)\nfrom django.db.models.expressions import CombinedExpression, register_combinable_fields\nfrom django.db.models.functions import Cast, Coalesce\n\n\nclass SearchVectorExact(Lookup):\n    lookup_name = \"exact\"\n\n    def process_rhs(self, qn, connection):\n        if not isinstance(self.rhs, (SearchQuery, CombinedSearchQuery)):\n            config = getattr(self.lhs, \"config\", None)\n            self.rhs = SearchQuery(self.rhs, config=config)\n        rhs, rhs_params = super().process_rhs(qn, connection)\n        return rhs, rhs_params\n\n    def as_sql(self, qn, connection):\n        lhs, lhs_params = self.process_lhs(qn, connection)\n        rhs, rhs_params = self.process_rhs(qn, connection)\n        params = lhs_params + rhs_params\n        return \"%s @@ %s\" % (lhs, rhs), params\n\n\nclass SearchVectorField(Field):\n    def db_type(self, connection):\n        return \"tsvector\"\n\n\nclass SearchQueryField(Field):\n    def db_type(self, connection):\n        return \"tsquery\"\n\n\nclass _Float4Field(Field):\n    def db_type(self, connection):\n        return \"float4\"\n\n\nclass SearchConfig(Expression):\n    def __init__(self, config):\n        super().__init__()\n        if not hasattr(config, \"resolve_expression\"):\n            config = Value(config)\n        self.config = config\n\n    @classmethod\n    def from_parameter(cls, config):\n        if config is None or isinstance(config, cls):\n            return config\n        return cls(config)\n\n    def get_source_expressions(self):\n        return [self.config]\n\n    def set_source_expressions(self, exprs):\n        (self.config,) = exprs\n\n    def as_sql(self, compiler, connection):\n        sql, params = compiler.compile(self.config)\n        return \"%s::regconfig\" % sql, params\n\n\nclass SearchVectorCombinable:\n    ADD = \"||\"\n\n    def _combine(self, other, connector, reversed):\n        if not isinstance(other, SearchVectorCombinable):\n            raise TypeError(\n                \"SearchVector can only be combined with other SearchVector \"\n                \"instances, got %s.\" % type(other).__name__\n            )\n        if reversed:\n            return CombinedSearchVector(other, connector, self, self.config)\n        return CombinedSearchVector(self, connector, other, self.config)\n\n\nregister_combinable_fields(\n    SearchVectorField, SearchVectorCombinable.ADD, SearchVectorField, SearchVectorField\n)",
+                "filename": "django/contrib/postgres/search.py",
+                "start_index": 0,
+                "end_index": 2476,
+                "start_line": 1,
+                "end_line": 380,
+                "max_line": 381,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "from django.db.models import Transform\nfrom django.db.models.lookups import PostgresOperatorLookup\nfrom django.db.models.sql.query import Query\n\nfrom .search import SearchVector, SearchVectorExact, SearchVectorField\n\n\nclass DataContains(PostgresOperatorLookup):\n    lookup_name = \"contains\"\n    postgres_operator = \"@>\"\n\n\nclass ContainedBy(PostgresOperatorLookup):\n    lookup_name = \"contained_by\"\n    postgres_operator = \"<@\"\n\n\nclass Overlap(PostgresOperatorLookup):\n    lookup_name = \"overlap\"\n    postgres_operator = \"&&\"\n\n    def get_prep_lookup(self):\n        from .expressions import ArraySubquery\n\n        if isinstance(self.rhs, Query):\n            self.rhs = ArraySubquery(self.rhs)\n        return super().get_prep_lookup()\n\n\nclass HasKey(PostgresOperatorLookup):\n    lookup_name = \"has_key\"\n    postgres_operator = \"?\"\n    prepare_rhs = False\n\n\nclass HasKeys(PostgresOperatorLookup):\n    lookup_name = \"has_keys\"\n    postgres_operator = \"?&\"\n\n    def get_prep_lookup(self):\n        return [str(item) for item in self.rhs]\n\n\nclass HasAnyKeys(HasKeys):\n    lookup_name = \"has_any_keys\"\n    postgres_operator = \"?|\"\n\n\nclass Unaccent(Transform):\n    bilateral = True\n    lookup_name = \"unaccent\"\n    function = \"UNACCENT\"\n\n\nclass SearchLookup(SearchVectorExact):\n    lookup_name = \"search\"\n\n    def process_lhs(self, qn, connection):\n        if not isinstance(self.lhs.output_field, SearchVectorField):\n            config = getattr(self.rhs, \"config\", None)\n            self.lhs = SearchVector(self.lhs, config=config)\n        lhs, lhs_params = super().process_lhs(qn, connection)\n        return lhs, lhs_params\n\n\nclass TrigramSimilar(PostgresOperatorLookup):\n    lookup_name = \"trigram_similar\"\n    postgres_operator = \"%%\"\n\n\nclass TrigramWordSimilar(PostgresOperatorLookup):\n    lookup_name = \"trigram_word_similar\"\n    postgres_operator = \"%%>\"\n\n\nclass TrigramStrictWordSimilar(PostgresOperatorLookup):\n    lookup_name = \"trigram_strict_word_similar\"\n    postgres_operator = \"%%>>\"",
+                "filename": "django/contrib/postgres/lookups.py",
+                "start_index": 0,
+                "end_index": 1990,
+                "start_line": 1,
+                "end_line": 78,
+                "max_line": 78,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ChoicesFieldListFilter(FieldListFilter):\n    def __init__(self, field, request, params, model, model_admin, field_path):\n        self.lookup_kwarg = \"%s__exact\" % field_path\n        self.lookup_kwarg_isnull = \"%s__isnull\" % field_path\n        self.lookup_val = params.get(self.lookup_kwarg)\n        self.lookup_val_isnull = get_last_value_from_parameters(\n            params, self.lookup_kwarg_isnull\n        )\n        super().__init__(field, request, params, model, model_admin, field_path)\n\n    def expected_parameters(self):\n        return [self.lookup_kwarg, self.lookup_kwarg_isnull]\n\n    def get_facet_counts(self, pk_attname, filtered_qs):\n        return {\n            f\"{i}__c\": models.Count(\n                pk_attname,\n                filter=models.Q(\n                    (self.lookup_kwarg, value)\n                    if value is not None\n                    else (self.lookup_kwarg_isnull, True)\n                ),\n            )\n            for i, (value, _) in enumerate(self.field.flatchoices)\n        }\n\n    def choices(self, changelist):\n        add_facets = changelist.add_facets\n        facet_counts = self.get_facet_queryset(changelist) if add_facets else None\n        yield {\n            \"selected\": self.lookup_val is None,\n            \"query_string\": changelist.get_query_string(\n                remove=[self.lookup_kwarg, self.lookup_kwarg_isnull]\n            ),\n            \"display\": _(\"All\"),\n        }\n        none_title = \"\"\n        for i, (lookup, title) in enumerate(self.field.flatchoices):\n            if add_facets:\n                count = facet_counts[f\"{i}__c\"]\n                title = f\"{title} ({count})\"\n            if lookup is None:\n                none_title = title\n                continue\n            yield {\n                \"selected\": self.lookup_val is not None\n                and str(lookup) in self.lookup_val,\n                \"query_string\": changelist.get_query_string(\n                    {self.lookup_kwarg: lookup}, [self.lookup_kwarg_isnull]\n                ),\n                \"display\": title,\n            }\n        if none_title:\n            yield {\n                \"selected\": bool(self.lookup_val_isnull),\n                \"query_string\": changelist.get_query_string(\n                    {self.lookup_kwarg_isnull: \"True\"}, [self.lookup_kwarg]\n                ),\n                \"display\": none_title,\n            }\n\n\nFieldListFilter.register(lambda f: bool(f.choices), ChoicesFieldListFilter)",
+                "filename": "django/contrib/admin/filters.py",
+                "start_index": 15030,
+                "end_index": 17488,
+                "start_line": 398,
+                "end_line": 460,
+                "max_line": 715,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "for f in cls._meta.local_many_to_many:\n            # Skip nonexistent models.\n            if isinstance(f.remote_field.through, str):\n                continue\n\n            # Check if auto-generated name for the M2M field is too long\n            # for the database.\n            for m2m in f.remote_field.through._meta.local_fields:\n                _, rel_name = m2m.get_attname_column()\n                if (\n                    m2m.db_column is None\n                    and rel_name is not None\n                    and len(rel_name) > allowed_len\n                ):\n                    errors.append(\n                        checks.Error(\n                            \"Autogenerated column name too long for M2M field \"\n                            '\"%s\". Maximum length is \"%s\" for database \"%s\".'\n                            % (rel_name, allowed_len, db_alias),\n                            hint=(\n                                \"Use 'through' to create a separate model for \"\n                                \"M2M and then set column_name using 'db_column'.\"\n                            ),\n                            obj=cls,\n                            id=\"models.E019\",\n                        )\n                    )\n\n        return errors",
+                "filename": "django/db/models/base.py",
+                "start_index": 90213,
+                "end_index": 91455,
+                "start_line": 2293,
+                "end_line": 2553,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "for field_name, *lookups in references:\n                # pk is an alias that won't be found by opts.get_field.\n                if field_name != \"pk\":\n                    fields.add(field_name)\n                if not lookups:\n                    # If it has no lookups it cannot result in a JOIN.\n                    continue\n                try:\n                    if field_name == \"pk\":\n                        field = cls._meta.pk\n                    else:\n                        field = cls._meta.get_field(field_name)\n                    if not field.is_relation or field.many_to_many or field.one_to_many:\n                        continue\n                except FieldDoesNotExist:\n                    continue\n                # JOIN must happen at the first lookup.\n                first_lookup = lookups[0]\n                if (\n                    hasattr(field, \"get_transform\")\n                    and hasattr(field, \"get_lookup\")\n                    and field.get_transform(first_lookup) is None\n                    and field.get_lookup(first_lookup) is None\n                ):\n                    errors.append(\n                        checks.Error(\n                            \"'constraints' refers to the joined field '%s'.\"\n                            % LOOKUP_SEP.join([field_name] + lookups),\n                            obj=cls,\n                            id=\"models.E041\",\n                        )\n                    )\n            errors.extend(cls._check_local_fields(fields, \"constraints\"))",
+                "filename": "django/db/models/base.py",
+                "start_index": 100431,
+                "end_index": 101946,
+                "start_line": 2520,
+                "end_line": 2552,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/contrib/admin/options.py": [
+                {
+                    "chunk": {
+                        "code": "f get_search_results(self, request, queryset, search_term):\n        \"\"\"\n        Return a tuple containing a queryset to implement the search\n        and a boolean indicating if the results may contain duplicates.\n        \"\"\"\n\n        # Apply keyword searches.\n        def construct_search(field_name):\n            if field_name.startswith(\"^\"):\n                return \"%s__istartswith\" % field_name.removeprefix(\"^\")\n            elif field_name.startswith(\"=\"):\n                return \"%s__iexact\" % field_name.removeprefix(\"=\")\n            elif field_name.startswith(\"@\"):\n                return \"%s__search\" % field_name.removeprefix(\"@\")\n            # Use field_name if it includes a lookup.\n            opts = queryset.model._meta\n            lookup_fields = field_name.split(LOOKUP_SEP)\n            # Go through the fields, following all relations.\n            prev_field = None\n            for path_part in lookup_fields:\n                if path_part == \"pk\":\n                    path_part = opts.pk.name\n                try:\n                    field = opts.get_field(path_part)\n                except FieldDoesNotExist:\n                    # Use valid query lookups.\n                    if prev_field and prev_field.get_lookup(path_part):\n                        return field_name\n                else:\n                    prev_field = field\n                    if hasattr(field, \"path_infos\"):\n                        # Update opts to follow the relation.\n                        opts = field.path_infos[-1].to_opts\n            # Otherwise, use the field with icontains.\n            return \"%s__icontains\" % field_name\n\n        may_have_duplicates = False\n        search_fields = self.get_search_fields(request)\n        if search_fields and search_term:\n            orm_lookups = [\n                construct_search(str(search_field)) for search_field in search_fields\n            ]\n            term_queries = []\n            for bit in smart_split(search_term):\n                if bit.startswith(('\"', \"'\")) and bit[0] == bit[-1]:\n                    bit = unescape_string_literal(bit)\n                or_queries = models.Q.create(\n                    [(orm_lookup, bit) for orm_lookup in orm_lookups],\n                    connector=models.Q.OR,\n                )\n                term_queries.append(or_queries)\n            queryset = queryset.filter(models.Q.create(term_queries))\n            may_have_duplicates |= any(\n                lookup_spawns_duplicates(self.opts, search_spec)\n                for search_spec in orm_lookups\n            )\n        return queryset, may_have_duplicates\n\n    de",
+                        "filename": "django/contrib/admin/options.py",
+                        "start_index": 42280,
+                        "end_index": 44888,
+                        "start_line": 1132,
+                        "end_line": 2516,
+                        "max_line": 2529,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the get_search_results method which is responsible for constructing the search query in the admin. It is directly related to the issue of unnecessary joins in the admin changelist query when searching for clients."
+                }
+            ]
+        },
+        "solution_task": "- Optimize the `get_search_results` method in `django/contrib/admin/options.py` to reduce the number of JOINs created for each search term.\n- Replace the pattern of chaining filters for each search term with a single filter that uses `Q` objects combined with `|` (OR) for each search term.\n- Use `icontains` for case-insensitive partial matches without additional JOINs.\n\n```python\nfrom django.db.models import Q\nfrom django.utils.text import smart_split\n\ndef get_search_results(self, request, queryset, search_term):\n    search_fields = self.get_search_fields(request)\n    if search_fields and search_term:\n        # Construct a single Q object for all search terms\n        query = Q()\n        for bit in smart_split(search_term):\n            or_queries = Q()\n            for field_name in search_fields:\n                or_queries |= Q(**{f\"{field_name}__icontains\": bit})\n            query &= or_queries\n        queryset = queryset.filter(query).distinct()\n    return queryset, False\n```\n\n- Ensure that `distinct()` is called on the queryset if the search fields span related models to avoid duplicates.\n- Remove the `may_have_duplicates` logic as it is no longer needed with the new approach.\n- Test the changes to confirm that the performance issue is resolved.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable solution to the problem of unnecessary joins in the admin changelist query. It suggests optimizing the `get_search_results` method by using a single filter with `Q` objects combined with `|` (OR) for each search term, which is a valid approach to reduce the number of JOINs. The use of `icontains` for case-insensitive partial matches is also appropriate and would prevent additional JOINs. The RESPONSE also correctly advises to use `distinct()` to avoid duplicates when search fields span related models, and to remove the `may_have_duplicates` logic, which is a thoughtful touch. The RESPONSE even includes a code snippet that could be directly implemented and tested, which is highly valuable. Lastly, it provides a link to the relevant section of the code in the Django repository, which is useful for context and verification.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711720697.4721742,
+        "result": "- Optimize the `get_search_results` method in `django/contrib/admin/options.py` to reduce the number of JOINs created for each search term.\n- Replace the pattern of chaining filters for each search term with a single filter that uses `Q` objects combined with `|` (OR) for each search term.\n- Use `icontains` for case-insensitive partial matches without additional JOINs.\n\n```python\nfrom django.db.models import Q\nfrom django.utils.text import smart_split\n\ndef get_search_results(self, request, queryset, search_term):\n    search_fields = self.get_search_fields(request)\n    if search_fields and search_term:\n        # Construct a single Q object for all search terms\n        query = Q()\n        for bit in smart_split(search_term):\n            or_queries = Q()\n            for field_name in search_fields:\n                or_queries |= Q(**{f\"{field_name}__icontains\": bit})\n            query &= or_queries\n        queryset = queryset.filter(query).distinct()\n    return queryset, False\n```\n\n- Ensure that `distinct()` is called on the queryset if the search fields span related models to avoid duplicates.\n- Remove the `may_have_duplicates` logic as it is no longer needed with the new approach.\n- Test the changes to confirm that the performance issue is resolved.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__4.1/tree//django/contrib) \u2192 [admin](https://github.com/testbed/django__django__4.1/tree//django/contrib/admin)- [Lines 1132 - 2516](https://github.com/testbed/django__django__4.1/blob//django/contrib/admin/options.py#L1132-L2516)\n\n This snippet contains the get_search_results method which is responsible for constructing the search query in the admin. It is directly related to the issue of unnecessary joins in the admin changelist query when searching for clients.",
+        "context_relevance": 0.26000000000000006,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer it completely to get a score of 10.\nSupporting Evidence: The RESPONSE provides a detailed solution to the problem described in the PROMPT, which is the unnecessary joins in the admin changelist query when searching for clients. It suggests optimizing the `get_search_results` method to reduce the number of JOINs by using `Q` objects and `icontains`. The RESPONSE also includes a code snippet that directly addresses the issue and provides a link to the relevant section of the code in the Django repository. The RESPONSE is fully relevant to the PROMPT and answers it completely, thus meeting the criteria for a score of 10."
+        },
+        "qa_relevance": 1.0
+    }
+}

@@ -1,0 +1,223 @@
+{
+    "id": "psf__requests-3738",
+    "repo_name": "testbed/psf__requests__2.12",
+    "task_id": 7883472909931968435,
+    "title": "Requests v2.12.2 does not add parameters to URLs with schemes it does not understand.",
+    "body": "Follows from #3734.\r\n\r\nWhen we patched to ignore all unrecognised schemes instead of just those that didn't begin `http`, we stopped handling parameters for those URLs. This may break some more benign uses such as `http+unix`, which wanted to add parameters to their URLs.\r\n\r\nWhile this is inline with our intended policies (we do not understand URLs that have schemes we don't know anything about), this, along with the IDNA behaviour in v2.12.{0,1} will probably have broken a whole bunch of people using these non-standard URL schemes.\r\n\r\nWe should consider whether Session objects should have a registry of places to look for URL preparation based on scheme. This will allow people to opt-in to the HTTP-like processing of URLs, as well as to register their own.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/psf__requests__2.12.git",
+    "requested_commit": "",
+    "mayil_response": "- Review the `prepare_url` method in `requests/models.py` to ensure it properly handles non-standard schemes like `http+unix`.\n- Modify the conditional check that skips URL preparation for non-HTTP schemes to include or properly handle the `http+unix` scheme.\n- Ensure that the URL parameter addition logic is applied to the `http+unix` scheme as well.\n- The relevant code snippet to modify is in `requests/models.py`:\n\n```python\n# Existing check for non-HTTP schemes\nif \":\" in url and not url.lower().startswith(\"http\"):\n    self.url = url\n    return\n```\n\n- A potential solution could be to adjust the condition to allow the `http+unix` scheme to go through the URL preparation logic:\n\n```python\n# Adjusted check to allow http+unix scheme\nif \":\" in url and not (url.lower().startswith(\"http\") or url.lower().startswith(\"http+unix\")):\n    self.url = url\n    return\n```\n\n- Ensure that the rest of the `prepare_url` method properly handles the parameters and reconstructs the URL for the `http+unix` scheme.\n\n### Code snippets to check\n\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.12/tree//requests)- [Lines 410 - 482](https://github.com/testbed/psf__requests__2.12/blob//requests/models.py#L410-L482)\n\n This snippet contains the logic for preparing URLs, which is directly related to the issue of not adding parameters to URLs with unrecognized schemes.\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.12/tree//requests)- [Lines 1 - 103](https://github.com/testbed/psf__requests__2.12/blob//requests/sessions.py#L1-L103)\n\n This snippet may be relevant as it contains the Session object which could be modified to include a registry of URL preparation based on scheme as suggested in the issue. \n\n\n   - [Lines 283 - 332](https://github.com/testbed/psf__requests__2.12/blob//requests/sessions.py#L283-L332)\n\n This snippet deals with rebuilding proxy configurations and could be relevant if the issue extends to how proxies are handled with non-standard URL schemes.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.000517,
+        "snippet_processor": 0.047470000000000005,
+        "issue_star_creation": 0.03973,
+        "issue_star_solver": 0.054060000000000004,
+        "bouncer": 0.02706
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711760894.3545878,
+        "relevant_snippets": [
+            {
+                "code": "def rebuild_method(self, prepared_request, response):\n        \"\"\"When being redirected we may want to change the method of the request\n        based on certain specs or browser behavior.\n        \"\"\"\n        method = prepared_request.method\n\n        # https://tools.ietf.org/html/rfc7231#section-6.4.4\n        if response.status_code == codes.see_other and method != \"HEAD\":\n            method = \"GET\"\n\n        # Do what the browsers do, despite standards...\n        # First, turn 302s into GETs.\n        if response.status_code == codes.found and method != \"HEAD\":\n            method = \"GET\"\n\n        # Second, if a POST is responded to with a 301, turn it into a GET.\n        # This bizarre behaviour is explained in Issue 1704.\n        if response.status_code == codes.moved and method == \"POST\":\n            method = \"GET\"\n\n        prepared_request.method = method",
+                "filename": "requests/sessions.py",
+                "start_index": 12385,
+                "end_index": 13252,
+                "start_line": 334,
+                "end_line": 354,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def rebuild_auth(self, prepared_request, response):\n        \"\"\"When being redirected we may want to strip authentication from the\n        request to avoid leaking credentials. This method intelligently removes\n        and reapplies authentication where possible to avoid credential loss.\n        \"\"\"\n        headers = prepared_request.headers\n        url = prepared_request.url\n\n        if \"Authorization\" in headers and self.should_strip_auth(\n            response.request.url, url\n        ):\n            # If we get redirected to a new host, we should strip out any\n            # authentication headers.\n            del headers[\"Authorization\"]\n\n        # .netrc might have more auth for us on our new host.\n        new_auth = get_netrc_auth(url) if self.trust_env else None\n        if new_auth is not None:\n            prepared_request.prepare_auth(new_auth)\n\n    def rebuild_proxies(self, prepared_request, proxies):\n        \"\"\"This method re-evaluates the proxy configuration by considering the\n        environment variables. If we are redirected to a URL covered by\n        NO_PROXY, we strip the proxy configuration. Otherwise, we set missing\n        proxy keys for this URL (in case they were stripped by a previous\n        redirect).\n\n        This method also replaces the Proxy-Authorization header where\n        necessary.\n\n        :rtype: dict\n        \"\"\"\n        headers = prepared_request.headers\n        scheme = urlparse(prepared_request.url).scheme\n        new_proxies = resolve_proxies(prepared_request, proxies, self.trust_env)\n\n        if \"Proxy-Authorization\" in headers:\n            del headers[\"Proxy-Authorization\"]\n\n        try:\n            username, password = get_auth_from_url(new_proxies[scheme])\n        except KeyError:\n            username, password = None, None\n\n        # urllib3 handles proxy authorization for us in the standard adapter.\n        # Avoid appending this to TLS tunneled requests where it may be leaked.\n        if not scheme.startswith(\"https\") and username and password:\n            headers[\"Proxy-Authorization\"] = _basic_auth_str(username, password)\n\n        return new_proxies",
+                "filename": "requests/sessions.py",
+                "start_index": 10248,
+                "end_index": 12379,
+                "start_line": 283,
+                "end_line": 332,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def prepare_url(self, url, params):\n        \"\"\"Prepares the given HTTP URL.\"\"\"\n        #: Accept objects that have string representations.\n        #: We're unable to blindly call unicode/str functions\n        #: as this will include the bytestring indicator (b'')\n        #: on python 3.x.\n        #: https://github.com/psf/requests/pull/2238\n        if isinstance(url, bytes):\n            url = url.decode(\"utf8\")\n        else:\n            url = str(url)\n\n        # Remove leading whitespaces from url\n        url = url.lstrip()\n\n        # Don't do any URL preparation for non-HTTP schemes like `mailto`,\n        # `data` etc to work around exceptions from `url_parse`, which\n        # handles RFC 3986 only.\n        if \":\" in url and not url.lower().startswith(\"http\"):\n            self.url = url\n            return\n\n        # Support for unicode domain names and paths.\n        try:\n            scheme, auth, host, port, path, query, fragment = parse_url(url)\n        except LocationParseError as e:\n            raise InvalidURL(*e.args)\n\n        if not scheme:\n            raise MissingSchema(\n                f\"Invalid URL {url!r}: No scheme supplied. \"\n                f\"Perhaps you meant https://{url}?\"\n            )\n\n        if not host:\n            raise InvalidURL(f\"Invalid URL {url!r}: No host supplied\")\n\n        # In general, we want to try IDNA encoding the hostname if the string contains\n        # non-ASCII characters. This allows users to automatically get the correct IDNA\n        # behaviour. For strings containing only ASCII characters, we need to also verify\n        # it doesn't start with a wildcard (*), before allowing the unencoded hostname.\n        if not unicode_is_ascii(host):\n            try:\n                host = self._get_idna_encoded_host(host)\n            except UnicodeError:\n                raise InvalidURL(\"URL has an invalid label.\")\n        elif host.startswith((\"*\", \".\")):\n            raise InvalidURL(\"URL has an invalid label.\")\n\n        # Carefully reconstruct the network location\n        netloc = auth or \"\"\n        if netloc:\n            netloc += \"@\"\n        netloc += host\n        if port:\n            netloc += f\":{port}\"\n\n        # Bare domains aren't valid URLs.\n        if not path:\n            path = \"/\"\n\n        if isinstance(params, (str, bytes)):\n            params = to_native_string(params)\n\n        enc_params = self._encode_params(params)\n        if enc_params:\n            if query:\n                query = f\"{query}&{enc_params}\"\n            else:\n                query = enc_params\n\n        url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))\n        self.url = url",
+                "filename": "requests/models.py",
+                "start_index": 12438,
+                "end_index": 15101,
+                "start_line": 410,
+                "end_line": 482,
+                "max_line": 1034,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "class RequestEncodingMixin:",
+                "filename": "requests/models.py",
+                "start_index": 2127,
+                "end_index": 2154,
+                "start_line": 84,
+                "end_line": 84,
+                "max_line": 1034,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "try:\n    check_compatibility(\n        urllib3.__version__, chardet_version, charset_normalizer_version\n    )\nexcept (AssertionError, ValueError):\n    warnings.warn(\n        \"urllib3 ({}) or chardet ({})/charset_normalizer ({}) doesn't match a supported \"\n        \"version!\".format(\n            urllib3.__version__, chardet_version, charset_normalizer_version\n        ),\n        RequestsDependencyWarning,\n    )\n\n# Attempt to enable urllib3's fallback for SNI support\n# if the standard library doesn't support SNI or the\n# 'ssl' library isn't available.\ntry:\n    try:\n        import ssl\n    except ImportError:\n        ssl = None\n\n    if not getattr(ssl, \"HAS_SNI\", False):\n        from urllib3.contrib import pyopenssl\n\n        pyopenssl.inject_into_urllib3()\n\n        # Check cryptography version\n        from cryptography import __version__ as cryptography_version\n\n        _check_cryptography(cryptography_version)\nexcept ImportError:\n    pass\n\n# urllib3's DependencyWarnings should be silenced.\nfrom urllib3.exceptions import DependencyWarning\n\nwarnings.simplefilter(\"ignore\", DependencyWarning)\n\n# Set default logging handler to avoid \"No handler found\" warnings.\nimport logging\nfrom logging import NullHandler\n\nfrom . import packages, utils\nfrom .__version__ import (\n    __author__,\n    __author_email__,\n    __build__,\n    __cake__,\n    __copyright__,\n    __description__,\n    __license__,\n    __title__,\n    __url__,\n    __version__,\n)\nfrom .api import delete, get, head, options, patch, post, put, request\nfrom .exceptions import (\n    ConnectionError,\n    ConnectTimeout,\n    FileModeWarning,\n    HTTPError,\n    JSONDecodeError,\n    ReadTimeout,\n    RequestException,\n    Timeout,\n    TooManyRedirects,\n    URLRequired,\n)\nfrom .models import PreparedRequest, Request, Response\nfrom .sessions import Session, session\nfrom .status_codes import codes\n\nlogging.getLogger(__name__).addHandler(NullHandler())\n\n# FileModeWarnings go off per the default.\nwarnings.simplefilter(\"default\", FileModeWarning, append=True)",
+                "filename": "requests/__init__.py",
+                "start_index": 2942,
+                "end_index": 4962,
+                "start_line": 47,
+                "end_line": 180,
+                "max_line": 180,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def check_header_validity(header):\n    \"\"\"Verifies that header parts don't contain leading whitespace\n    reserved characters, or return characters.\n\n    :param header: tuple, in the format (name, value).\n    \"\"\"\n    name, value = header\n    _validate_header_part(header, name, 0)\n    _validate_header_part(header, value, 1)\n\n\ndef _validate_header_part(header, header_part, header_validator_index):\n    if isinstance(header_part, str):\n        validator = _HEADER_VALIDATORS_STR[header_validator_index]\n    elif isinstance(header_part, bytes):\n        validator = _HEADER_VALIDATORS_BYTE[header_validator_index]\n    else:\n        raise InvalidHeader(\n            f\"Header part ({header_part!r}) from {header} \"\n            f\"must be of type str or bytes, not {type(header_part)}\"\n        )\n\n    if not validator.match(header_part):\n        header_kind = \"name\" if header_validator_index == 0 else \"value\"\n        raise InvalidHeader(\n            f\"Invalid leading whitespace, reserved character(s), or return\"\n            f\"character(s) in header {header_kind}: {header_part!r}\"\n        )\n\n\ndef urldefragauth(url):\n    \"\"\"\n    Given a url remove the fragment and the authentication part.\n\n    :rtype: str\n    \"\"\"\n    scheme, netloc, path, params, query, fragment = urlparse(url)\n\n    # see func:`prepend_scheme_if_needed`\n    if not netloc:\n        netloc, path = path, netloc\n\n    netloc = netloc.rsplit(\"@\", 1)[-1]\n\n    return urlunparse((scheme, netloc, path, params, query, \"\"))\n\n\ndef rewind_body(prepared_request):\n    \"\"\"Move file pointer back to its recorded starting position\n    so it can be read again on redirect.\n    \"\"\"\n    body_seek = getattr(prepared_request.body, \"seek\", None)\n    if body_seek is not None and isinstance(\n        prepared_request._body_position, integer_types\n    ):\n        try:\n            body_seek(prepared_request._body_position)\n        except OSError:\n            raise UnrewindableBodyError(\n                \"An error occurred when rewinding request body for redirect.\"\n            )\n    else:\n        raise UnrewindableBodyError(\"Unable to rewind request body for redirect.\")",
+                "filename": "requests/utils.py",
+                "start_index": 31299,
+                "end_index": 33417,
+                "start_line": 1028,
+                "end_line": 1090,
+                "max_line": 1090,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\nrequests.sessions\n~~~~~~~~~~~~~~~~~\n\nThis module provides a Session object to manage and persist settings across\nrequests (cookies, auth, proxies).\n\"\"\"\nimport os\nimport sys\nimport time\nfrom collections import OrderedDict\nfrom datetime import timedelta\n\nfrom ._internal_utils import to_native_string\nfrom .adapters import HTTPAdapter\nfrom .auth import _basic_auth_str\nfrom .compat import Mapping, cookielib, urljoin, urlparse\nfrom .cookies import (\n    RequestsCookieJar,\n    cookiejar_from_dict,\n    extract_cookies_to_jar,\n    merge_cookies,\n)\nfrom .exceptions import (\n    ChunkedEncodingError,\n    ContentDecodingError,\n    InvalidSchema,\n    TooManyRedirects,\n)\nfrom .hooks import default_hooks, dispatch_hook\n\n# formerly defined here, reexposed here for backward compatibility\nfrom .models import (  # noqa: F401\n    DEFAULT_REDIRECT_LIMIT,\n    REDIRECT_STATI,\n    PreparedRequest,\n    Request,\n)\nfrom .status_codes import codes\nfrom .structures import CaseInsensitiveDict\nfrom .utils import (  # noqa: F401\n    DEFAULT_PORTS,\n    default_headers,\n    get_auth_from_url,\n    get_environ_proxies,\n    get_netrc_auth,\n    requote_uri,\n    resolve_proxies,\n    rewind_body,\n    should_bypass_proxies,\n    to_key_val_list,\n)\n\n# Preferred clock, based on which one is more accurate on a given system.\nif sys.platform == \"win32\":\n    preferred_clock = time.perf_counter\nelse:\n    preferred_clock = time.time\n\n\ndef merge_setting(request_setting, session_setting, dict_class=OrderedDict):\n    \"\"\"Determines appropriate setting for a given request, taking into account\n    the explicit setting on that request, and the setting in the session. If a\n    setting is a dictionary, they will be merged together using `dict_class`\n    \"\"\"\n\n    if session_setting is None:\n        return request_setting\n\n    if request_setting is None:\n        return session_setting\n\n    # Bypass if not a dictionary (e.g. verify)\n    if not (\n        isinstance(session_setting, Mapping) and isinstance(request_setting, Mapping)\n    ):\n        return request_setting\n\n    merged_setting = dict_class(to_key_val_list(session_setting))\n    merged_setting.update(to_key_val_list(request_setting))\n\n    # Remove keys that are set to None. Extract keys first to avoid altering\n    # the dictionary during iteration.\n    none_keys = [k for (k, v) in merged_setting.items() if v is None]\n    for key in none_keys:\n        del merged_setting[key]\n\n    return merged_setting\n\n\ndef merge_hooks(request_hooks, session_hooks, dict_class=OrderedDict):\n    \"\"\"Properly merges both requests and session hooks.\n\n    This is necessary because when request_hooks == {'response': []}, the\n    merge breaks Session hooks entirely.\n    \"\"\"\n    if session_hooks is None or session_hooks.get(\"response\") == []:\n        return request_hooks\n\n    if request_hooks is None or request_hooks.get(\"response\") == []:\n        return session_hooks\n\n    return merge_setting(request_hooks, session_hooks, dict_class)",
+                "filename": "requests/sessions.py",
+                "start_index": 0,
+                "end_index": 2962,
+                "start_line": 1,
+                "end_line": 103,
+                "max_line": 835,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "@property\n    def path_url(self):\n        \"\"\"Build the path URL to use.\"\"\"\n\n        url = []\n\n        p = urlsplit(self.url)\n\n        path = p.path\n        if not path:\n            path = \"/\"\n\n        url.append(path)\n\n        query = p.query\n        if query:\n            url.append(\"?\")\n            url.append(query)\n\n        return \"\".join(url)\n\n    @staticmethod\n    def _encode_params(data):\n        \"\"\"Encode parameters in a piece of data.\n\n        Will successfully encode parameters when passed as a dict or a list of\n        2-tuples. Order is retained if data is a list of 2-tuples but arbitrary\n        if parameters are supplied as a dict.\n        \"\"\"\n\n        if isinstance(data, (str, bytes)):\n            return data\n        elif hasattr(data, \"read\"):\n            return data\n        elif hasattr(data, \"__iter__\"):\n            result = []\n            for k, vs in to_key_val_list(data):\n                if isinstance(vs, basestring) or not hasattr(vs, \"__iter__\"):\n                    vs = [vs]\n                for v in vs:\n                    if v is not None:\n                        result.append(\n                            (\n                                k.encode(\"utf-8\") if isinstance(k, str) else k,\n                                v.encode(\"utf-8\") if isinstance(v, str) else v,\n                            )\n                        )\n            return urlencode(result, doseq=True)\n        else:\n            return data",
+                "filename": "requests/models.py",
+                "start_index": 2159,
+                "end_index": 3609,
+                "start_line": 85,
+                "end_line": 134,
+                "max_line": 1034,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "# .-. .-. .-. . . .-. .-. .-. .-.\n# |(  |-  |.| | | |-  `-.  |  `-.\n# ' ' `-' `-`.`-' `-' `-'  '  `-'\n\n__title__ = \"requests\"\n__description__ = \"Python HTTP for Humans.\"\n__url__ = \"https://requests.readthedocs.io\"\n__version__ = \"2.31.0\"\n__build__ = 0x023100\n__author__ = \"Kenneth Reitz\"\n__author_email__ = \"me@kennethreitz.org\"\n__license__ = \"Apache 2.0\"\n__copyright__ = \"Copyright Kenneth Reitz\"\n__cake__ = \"\\u2728 \\U0001f370 \\u2728\"",
+                "filename": "requests/__version__.py",
+                "start_index": 0,
+                "end_index": 434,
+                "start_line": 1,
+                "end_line": 14,
+                "max_line": 14,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import sys\n\ntry:\n    import chardet\nexcept ImportError:\n    import warnings\n\n    import charset_normalizer as chardet\n\n    warnings.filterwarnings(\"ignore\", \"Trying to detect\", module=\"charset_normalizer\")\n\n# This code exists for backwards compatibility reasons.\n# I don't like it either. Just look the other way. :)\n\nfor package in (\"urllib3\", \"idna\"):\n    locals()[package] = __import__(package)\n    # This traversal is apparently necessary such that the identities are\n    # preserved (requests.packages.urllib3.* is urllib3.*)\n    for mod in list(sys.modules):\n        if mod == package or mod.startswith(f\"{package}.\"):\n            sys.modules[f\"requests.packages.{mod}\"] = sys.modules[mod]\n\ntarget = chardet.__name__\nfor mod in list(sys.modules):\n    if mod == target or mod.startswith(f\"{target}.\"):\n        target = target.replace(target, \"chardet\")\n        sys.modules[f\"requests.packages.{target}\"] = sys.modules[mod]\n# Kinda cool, though, right?",
+                "filename": "requests/packages.py",
+                "start_index": 0,
+                "end_index": 956,
+                "start_line": 1,
+                "end_line": 28,
+                "max_line": 28,
+                "git_instance": "github",
+                "repo_name": "testbed/psf__requests__2.12",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "requests/models.py": [
+                {
+                    "chunk": {
+                        "code": "def prepare_url(self, url, params):\n        \"\"\"Prepares the given HTTP URL.\"\"\"\n        #: Accept objects that have string representations.\n        #: We're unable to blindly call unicode/str functions\n        #: as this will include the bytestring indicator (b'')\n        #: on python 3.x.\n        #: https://github.com/psf/requests/pull/2238\n        if isinstance(url, bytes):\n            url = url.decode(\"utf8\")\n        else:\n            url = str(url)\n\n        # Remove leading whitespaces from url\n        url = url.lstrip()\n\n        # Don't do any URL preparation for non-HTTP schemes like `mailto`,\n        # `data` etc to work around exceptions from `url_parse`, which\n        # handles RFC 3986 only.\n        if \":\" in url and not url.lower().startswith(\"http\"):\n            self.url = url\n            return\n\n        # Support for unicode domain names and paths.\n        try:\n            scheme, auth, host, port, path, query, fragment = parse_url(url)\n        except LocationParseError as e:\n            raise InvalidURL(*e.args)\n\n        if not scheme:\n            raise MissingSchema(\n                f\"Invalid URL {url!r}: No scheme supplied. \"\n                f\"Perhaps you meant https://{url}?\"\n            )\n\n        if not host:\n            raise InvalidURL(f\"Invalid URL {url!r}: No host supplied\")\n\n        # In general, we want to try IDNA encoding the hostname if the string contains\n        # non-ASCII characters. This allows users to automatically get the correct IDNA\n        # behaviour. For strings containing only ASCII characters, we need to also verify\n        # it doesn't start with a wildcard (*), before allowing the unencoded hostname.\n        if not unicode_is_ascii(host):\n            try:\n                host = self._get_idna_encoded_host(host)\n            except UnicodeError:\n                raise InvalidURL(\"URL has an invalid label.\")\n        elif host.startswith((\"*\", \".\")):\n            raise InvalidURL(\"URL has an invalid label.\")\n\n        # Carefully reconstruct the network location\n        netloc = auth or \"\"\n        if netloc:\n            netloc += \"@\"\n        netloc += host\n        if port:\n            netloc += f\":{port}\"\n\n        # Bare domains aren't valid URLs.\n        if not path:\n            path = \"/\"\n\n        if isinstance(params, (str, bytes)):\n            params = to_native_string(params)\n\n        enc_params = self._encode_params(params)\n        if enc_params:\n            if query:\n                query = f\"{query}&{enc_params}\"\n            else:\n                query = enc_params\n\n        url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))\n        self.url = url",
+                        "filename": "requests/models.py",
+                        "start_index": 12438,
+                        "end_index": 15101,
+                        "start_line": 410,
+                        "end_line": 482,
+                        "max_line": 1034,
+                        "git_instance": "github",
+                        "repo_name": "testbed/psf__requests__2.12",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the logic for preparing URLs, which is directly related to the issue of not adding parameters to URLs with unrecognized schemes."
+                }
+            ],
+            "requests/sessions.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\nrequests.sessions\n~~~~~~~~~~~~~~~~~\n\nThis module provides a Session object to manage and persist settings across\nrequests (cookies, auth, proxies).\n\"\"\"\nimport os\nimport sys\nimport time\nfrom collections import OrderedDict\nfrom datetime import timedelta\n\nfrom ._internal_utils import to_native_string\nfrom .adapters import HTTPAdapter\nfrom .auth import _basic_auth_str\nfrom .compat import Mapping, cookielib, urljoin, urlparse\nfrom .cookies import (\n    RequestsCookieJar,\n    cookiejar_from_dict,\n    extract_cookies_to_jar,\n    merge_cookies,\n)\nfrom .exceptions import (\n    ChunkedEncodingError,\n    ContentDecodingError,\n    InvalidSchema,\n    TooManyRedirects,\n)\nfrom .hooks import default_hooks, dispatch_hook\n\n# formerly defined here, reexposed here for backward compatibility\nfrom .models import (  # noqa: F401\n    DEFAULT_REDIRECT_LIMIT,\n    REDIRECT_STATI,\n    PreparedRequest,\n    Request,\n)\nfrom .status_codes import codes\nfrom .structures import CaseInsensitiveDict\nfrom .utils import (  # noqa: F401\n    DEFAULT_PORTS,\n    default_headers,\n    get_auth_from_url,\n    get_environ_proxies,\n    get_netrc_auth,\n    requote_uri,\n    resolve_proxies,\n    rewind_body,\n    should_bypass_proxies,\n    to_key_val_list,\n)\n\n# Preferred clock, based on which one is more accurate on a given system.\nif sys.platform == \"win32\":\n    preferred_clock = time.perf_counter\nelse:\n    preferred_clock = time.time\n\n\ndef merge_setting(request_setting, session_setting, dict_class=OrderedDict):\n    \"\"\"Determines appropriate setting for a given request, taking into account\n    the explicit setting on that request, and the setting in the session. If a\n    setting is a dictionary, they will be merged together using `dict_class`\n    \"\"\"\n\n    if session_setting is None:\n        return request_setting\n\n    if request_setting is None:\n        return session_setting\n\n    # Bypass if not a dictionary (e.g. verify)\n    if not (\n        isinstance(session_setting, Mapping) and isinstance(request_setting, Mapping)\n    ):\n        return request_setting\n\n    merged_setting = dict_class(to_key_val_list(session_setting))\n    merged_setting.update(to_key_val_list(request_setting))\n\n    # Remove keys that are set to None. Extract keys first to avoid altering\n    # the dictionary during iteration.\n    none_keys = [k for (k, v) in merged_setting.items() if v is None]\n    for key in none_keys:\n        del merged_setting[key]\n\n    return merged_setting\n\n\ndef merge_hooks(request_hooks, session_hooks, dict_class=OrderedDict):\n    \"\"\"Properly merges both requests and session hooks.\n\n    This is necessary because when request_hooks == {'response': []}, the\n    merge breaks Session hooks entirely.\n    \"\"\"\n    if session_hooks is None or session_hooks.get(\"response\") == []:\n        return request_hooks\n\n    if request_hooks is None or request_hooks.get(\"response\") == []:\n        return session_hooks\n\n    return merge_setting(request_hooks, session_hooks, dict_class)",
+                        "filename": "requests/sessions.py",
+                        "start_index": 0,
+                        "end_index": 2962,
+                        "start_line": 1,
+                        "end_line": 103,
+                        "max_line": 835,
+                        "git_instance": "github",
+                        "repo_name": "testbed/psf__requests__2.12",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet may be relevant as it contains the Session object which could be modified to include a registry of URL preparation based on scheme as suggested in the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "def rebuild_auth(self, prepared_request, response):\n        \"\"\"When being redirected we may want to strip authentication from the\n        request to avoid leaking credentials. This method intelligently removes\n        and reapplies authentication where possible to avoid credential loss.\n        \"\"\"\n        headers = prepared_request.headers\n        url = prepared_request.url\n\n        if \"Authorization\" in headers and self.should_strip_auth(\n            response.request.url, url\n        ):\n            # If we get redirected to a new host, we should strip out any\n            # authentication headers.\n            del headers[\"Authorization\"]\n\n        # .netrc might have more auth for us on our new host.\n        new_auth = get_netrc_auth(url) if self.trust_env else None\n        if new_auth is not None:\n            prepared_request.prepare_auth(new_auth)\n\n    def rebuild_proxies(self, prepared_request, proxies):\n        \"\"\"This method re-evaluates the proxy configuration by considering the\n        environment variables. If we are redirected to a URL covered by\n        NO_PROXY, we strip the proxy configuration. Otherwise, we set missing\n        proxy keys for this URL (in case they were stripped by a previous\n        redirect).\n\n        This method also replaces the Proxy-Authorization header where\n        necessary.\n\n        :rtype: dict\n        \"\"\"\n        headers = prepared_request.headers\n        scheme = urlparse(prepared_request.url).scheme\n        new_proxies = resolve_proxies(prepared_request, proxies, self.trust_env)\n\n        if \"Proxy-Authorization\" in headers:\n            del headers[\"Proxy-Authorization\"]\n\n        try:\n            username, password = get_auth_from_url(new_proxies[scheme])\n        except KeyError:\n            username, password = None, None\n\n        # urllib3 handles proxy authorization for us in the standard adapter.\n        # Avoid appending this to TLS tunneled requests where it may be leaked.\n        if not scheme.startswith(\"https\") and username and password:\n            headers[\"Proxy-Authorization\"] = _basic_auth_str(username, password)\n\n        return new_proxies",
+                        "filename": "requests/sessions.py",
+                        "start_index": 10248,
+                        "end_index": 12379,
+                        "start_line": 283,
+                        "end_line": 332,
+                        "max_line": 835,
+                        "git_instance": "github",
+                        "repo_name": "testbed/psf__requests__2.12",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet deals with rebuilding proxy configurations and could be relevant if the issue extends to how proxies are handled with non-standard URL schemes."
+                }
+            ]
+        },
+        "solution_task": "- Review the `prepare_url` method in `requests/models.py` to ensure it properly handles non-standard schemes like `http+unix`.\n- Modify the conditional check that skips URL preparation for non-HTTP schemes to include or properly handle the `http+unix` scheme.\n- Ensure that the URL parameter addition logic is applied to the `http+unix` scheme as well.\n- The relevant code snippet to modify is in `requests/models.py`:\n\n```python\n# Existing check for non-HTTP schemes\nif \":\" in url and not url.lower().startswith(\"http\"):\n    self.url = url\n    return\n```\n\n- A potential solution could be to adjust the condition to allow the `http+unix` scheme to go through the URL preparation logic:\n\n```python\n# Adjusted check to allow http+unix scheme\nif \":\" in url and not (url.lower().startswith(\"http\") or url.lower().startswith(\"http+unix\")):\n    self.url = url\n    return\n```\n\n- Ensure that the rest of the `prepare_url` method properly handles the parameters and reconstructs the URL for the `http+unix` scheme.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable solution to the problem described in the PROMPT. It suggests reviewing and modifying the `prepare_url` method in `requests/models.py` to handle non-standard schemes like `http+unix`. The RESPONSE includes a specific code snippet that needs to be changed and even provides a potential solution to adjust the condition to allow the `http+unix` scheme to go through the URL preparation logic. Additionally, the RESPONSE points to relevant code snippets in the repository that may need to be checked or modified to address the issue fully. This includes the logic for preparing URLs and the Session object, which could be modified to include a registry of URL preparation based on scheme. The RESPONSE is comprehensive and directly addresses the issue of non-standard URL schemes not being handled correctly after the patch.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711760956.728726,
+        "result": "- Review the `prepare_url` method in `requests/models.py` to ensure it properly handles non-standard schemes like `http+unix`.\n- Modify the conditional check that skips URL preparation for non-HTTP schemes to include or properly handle the `http+unix` scheme.\n- Ensure that the URL parameter addition logic is applied to the `http+unix` scheme as well.\n- The relevant code snippet to modify is in `requests/models.py`:\n\n```python\n# Existing check for non-HTTP schemes\nif \":\" in url and not url.lower().startswith(\"http\"):\n    self.url = url\n    return\n```\n\n- A potential solution could be to adjust the condition to allow the `http+unix` scheme to go through the URL preparation logic:\n\n```python\n# Adjusted check to allow http+unix scheme\nif \":\" in url and not (url.lower().startswith(\"http\") or url.lower().startswith(\"http+unix\")):\n    self.url = url\n    return\n```\n\n- Ensure that the rest of the `prepare_url` method properly handles the parameters and reconstructs the URL for the `http+unix` scheme.\n\n### Code snippets to check\n\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.12/tree//requests)- [Lines 410 - 482](https://github.com/testbed/psf__requests__2.12/blob//requests/models.py#L410-L482)\n\n This snippet contains the logic for preparing URLs, which is directly related to the issue of not adding parameters to URLs with unrecognized schemes.\n-  \u2192 [requests](https://github.com/testbed/psf__requests__2.12/tree//requests)- [Lines 1 - 103](https://github.com/testbed/psf__requests__2.12/blob//requests/sessions.py#L1-L103)\n\n This snippet may be relevant as it contains the Session object which could be modified to include a registry of URL preparation based on scheme as suggested in the issue. \n\n\n   - [Lines 283 - 332](https://github.com/testbed/psf__requests__2.12/blob//requests/sessions.py#L283-L332)\n\n This snippet deals with rebuilding proxy configurations and could be relevant if the issue extends to how proxies are handled with non-standard URL schemes.",
+        "context_relevance": 0.26000000000000006,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT to get a score of 9 or 10.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT regarding the Requests library's handling of non-standard URL schemes, specifically `http+unix`. It provides a detailed, step-by-step approach to resolving the problem, including reviewing and modifying the `prepare_url` method, adjusting the conditional check, and ensuring proper handling of URL parameters. The RESPONSE also references the relevant code snippets and provides a potential solution, which is directly related to the issue described. The RESPONSE is completely relevant and answers the entire PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

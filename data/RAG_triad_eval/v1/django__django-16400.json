@@ -1,0 +1,242 @@
+{
+    "id": "django__django-16400",
+    "repo_name": "testbed/django__django__4.2",
+    "task_id": 2814287347631811690,
+    "title": "migrate management command does not respect database parameter when adding Permissions.",
+    "body": "Description\n\t \n\t\t(last modified by Vasanth)\n\t \nWhen invoking migrate with a database parameter, the migration runs successfully. However, there seems to be a DB read request that runs after the migration. This call does not respect the db param and invokes the db router .\nWhen naming the db as a parameter, all DB calls in the context of the migrate command are expected to use the database specified.\nI came across this as I am currently using a thread-local variable to get the active DB with a custom DB router for a multi-tenant service .\nMinimal example \nSetup the custom middleware and custom DB Router as show below. Then run any DB migration. We see that \"read {}\" is being printed before the exception message.\nIdeally none of this code must be called as the DB was specified during management command.\nfrom threading import local\nfrom django.conf import settings\nlocal_state = local()\nclass InvalidTenantException(Exception):\n\tpass\nclass TenantSubdomainMiddleware:\n\tdef __init__(self, get_response):\n\t\tself.get_response = get_response\n\tdef __call__(self, request):\n\t\t## Get Subdomain\n\t\thost = request.get_host().split(\":\")[0]\n\t\tlocal_state.subdomain = (\n\t\t\t# We assume single level of subdomain : app.service.com \n\t\t\t# HOST_IP : used to for local dev. \n\t\t\thost if host in settings.HOST_IP else host.split(\".\")[0]\n\t\t)\n\t\tresponse = self.get_response(request)\n\t\treturn response\nclass TenantDatabaseRouter:\n\tdef _default_db(self):\n\t\tsubdomain = getattr(local_state, \"subdomain\", None)\n\t\tif subdomain is not None and subdomain in settings.TENANT_MAP:\n\t\t\tdb_name = settings.TENANT_MAP[local_state.subdomain]\n\t\t\treturn db_name\n\t\telse:\n\t\t\traise InvalidTenantException()\n\tdef db_for_read(self, model, **hints):\n\t\tprint(\"read\", hints)\n\t\treturn self._default_db()\n\tdef db_for_write(self, model, **hints):\n\t\tprint(\"write\", hints)\n\t\treturn self._default_db()\n\tdef allow_relation(self, obj1, obj2, **hints):\n\t\treturn None\n\tdef allow_migrate(self, db, app_label, model_name=None, **hints):\n\t\treturn None\n## settings.py\nMIDDLEWARE = [\n\t\"utils.tenant_db_router.TenantSubdomainMiddleware\",\n\t\"django.middleware.security.SecurityMiddleware\",\n\t...\n]\nTENANT_MAP = {\"localhost\":\"default\", \"tenant_1\":\"default\"}\nDATABASE_ROUTERS = [\"utils.tenant_db_router.TenantDatabaseRouter\"]\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Ensure that the `migrate` management command is correctly using the `database` parameter to set the database alias for all operations, including reads. If not, modify the command to respect the `database` parameter.\n- In the `TenantDatabaseRouter` class, ensure that the `db_for_read` and `db_for_write` methods are correctly using the `local_state.subdomain` to determine the database alias. If the subdomain is not set or invalid, it should not fall back to the default database but should raise an `InvalidTenantException`.\n- Verify that the `TenantSubdomainMiddleware` is correctly setting the `local_state.subdomain` before any database routing decisions are made. This should happen early in the request-response cycle.\n- Check the `settings.DATABASE_ROUTERS` configuration to ensure that `TenantDatabaseRouter` is included and correctly configured.\n- If the `migrate` command is being run in a context where the subdomain is not available (e.g., a management command outside of a web request), ensure that the `database` parameter is used to manually set the correct database alias in the thread-local variable before the migration operations begin.\n- Review the `allow_migrate` method in the `TenantDatabaseRouter` to ensure it respects the `database` parameter and does not allow migrations on databases that are not intended for the current tenant.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db)- [Lines 197 - 278](https://github.com/testbed/django__django__4.2/blob//django/db/utils.py#L197-L278)\n\n This snippet contains the ConnectionRouter class which is responsible for routing database operations to the appropriate database. It is relevant because the issue describes a problem with the db router not respecting the database parameter, and this class may be where the logic needs to be adjusted to respect the database parameter during migrations.\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.2/tree//django/db/migrations) \u2192 [operations](https://github.com/testbed/django__django__4.2/tree//django/db/migrations/operations)- [Lines 1 - 1](https://github.com/testbed/django__django__4.2/blob//django/db/migrations/operations/base.py#L1-L1)\n\n This snippet imports the router from django.db, which is likely used in the migration process. Since the issue is related to the db router not respecting the database parameter, this snippet may be relevant for understanding how the router is used in the context of migrations.\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__4.2/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__4.2/tree//django/contrib/auth) \u2192 [migrations](https://github.com/testbed/django__django__4.2/tree//django/contrib/auth/migrations)- [Lines 1 - 15](https://github.com/testbed/django__django__4.2/blob//django/contrib/auth/migrations/0002_alter_permission_name_max_length.py#L1-L15)\n\n This snippet is a migration file for the auth app, specifically altering the permission model. It is relevant because the issue mentions that the problem occurs when running migrations, and permissions are typically created or altered during migrations.\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.2/tree//django/db/migrations) \u2192 [operations](https://github.com/testbed/django__django__4.2/tree//django/db/migrations/operations)- [Lines 1 - 60](https://github.com/testbed/django__django__4.2/blob//django/db/migrations/operations/special.py#L1-L60)\n\n This snippet defines a special migration operation that separates database and state operations. It may be relevant because the issue could be related to how database operations are being routed during migrations, and this class could be involved in that process.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0002025,
+        "snippet_processor": 0.058730000000000004,
+        "issue_star_creation": 0.03284,
+        "issue_star_solver": 0.05058000000000001,
+        "bouncer": 0.03025
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711706389.136183,
+        "relevant_snippets": [
+            {
+                "code": "from django.db import router",
+                "filename": "django/db/migrations/operations/base.py",
+                "start_index": 0,
+                "end_index": 28,
+                "start_line": 1,
+                "end_line": 1,
+                "max_line": 146,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import subprocess\n\nfrom django.core.management.base import BaseCommand, CommandError\nfrom django.db import DEFAULT_DB_ALIAS, connections\n\n\nclass Command(BaseCommand):\n    help = (\n        \"Runs the command-line client for specified database, or the \"\n        \"default database if none is provided.\"\n    )\n\n    requires_system_checks = []\n\n    def add_arguments(self, parser):\n        parser.add_argument(\n            \"--database\",\n            default=DEFAULT_DB_ALIAS,\n            help=(\n                \"Nominates a database onto which to open a shell. Defaults to the \"\n                '\"default\" database.'\n            ),\n        )\n        parameters = parser.add_argument_group(\"parameters\", prefix_chars=\"--\")\n        parameters.add_argument(\"parameters\", nargs=\"*\")\n\n    def handle(self, **options):\n        connection = connections[options[\"database\"]]\n        try:\n            connection.client.runshell(options[\"parameters\"])\n        except FileNotFoundError:\n            # Note that we're assuming the FileNotFoundError relates to the\n            # command missing. It could be raised for some other reason, in\n            # which case this error message would be inaccurate. Still, this\n            # message catches the common case.\n            raise CommandError(\n                \"You appear not to have the %r program installed or on your path.\"\n                % connection.client.executable_name\n            )\n        except subprocess.CalledProcessError as e:\n            raise CommandError(\n                '\"%s\" returned non-zero exit status %s.'\n                % (\n                    \" \".join(map(str, e.cmd)),\n                    e.returncode,\n                ),\n                returncode=e.returncode,\n            )",
+                "filename": "django/core/management/commands/dbshell.py",
+                "start_index": 0,
+                "end_index": 1740,
+                "start_line": 1,
+                "end_line": 48,
+                "max_line": 48,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "for migration in app_migrations:\n                # Describe the migration",
+                "filename": "django/core/management/commands/makemigrations.py",
+                "start_index": 13742,
+                "end_index": 13815,
+                "start_line": 299,
+                "end_line": 341,
+                "max_line": 513,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "from django.db import router\n\nfrom .base import Operation\n\n\nclass SeparateDatabaseAndState(Operation):\n    \"\"\"\n    Take two lists of operations - ones that will be used for the database,\n    and ones that will be used for the state change. This allows operations\n    that don't support state change to have it applied, or have operations\n    that affect the state or not the database, or so on.\n    \"\"\"\n\n    serialization_expand_args = [\"database_operations\", \"state_operations\"]\n\n    def __init__(self, database_operations=None, state_operations=None):\n        self.database_operations = database_operations or []\n        self.state_operations = state_operations or []\n\n    def deconstruct(self):\n        kwargs = {}\n        if self.database_operations:\n            kwargs[\"database_operations\"] = self.database_operations\n        if self.state_operations:\n            kwargs[\"state_operations\"] = self.state_operations\n        return (self.__class__.__qualname__, [], kwargs)\n\n    def state_forwards(self, app_label, state):\n        for state_operation in self.state_operations:\n            state_operation.state_forwards(app_label, state)\n\n    def database_forwards(self, app_label, schema_editor, from_state, to_state):\n        # We calculate state separately in here since our state functions aren't useful\n        for database_operation in self.database_operations:\n            to_state = from_state.clone()\n            database_operation.state_forwards(app_label, to_state)\n            database_operation.database_forwards(\n                app_label, schema_editor, from_state, to_state\n            )\n            from_state = to_state\n\n    def database_backwards(self, app_label, schema_editor, from_state, to_state):\n        # We calculate state separately in here since our state functions aren't useful\n        to_states = {}\n        for dbop in self.database_operations:\n            to_states[dbop] = to_state\n            to_state = to_state.clone()\n            dbop.state_forwards(app_label, to_state)\n        # to_state now has the states of all the database_operations applied\n        # which is the from_state for the backwards migration of the last\n        # operation.\n        for database_operation in reversed(self.database_operations):\n            from_state = to_state\n            to_state = to_states[database_operation]\n            database_operation.database_backwards(\n                app_label, schema_editor, from_state, to_state\n            )\n\n    def describe(self):\n        return \"Custom state/database change combination\"",
+                "filename": "django/db/migrations/operations/special.py",
+                "start_index": 0,
+                "end_index": 2553,
+                "start_line": 1,
+                "end_line": 60,
+                "max_line": 208,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import signal\n\nfrom django.db.backends.base.client import BaseDatabaseClient\n\n\nclass DatabaseClient(BaseDatabaseClient):\n    executable_name = \"psql\"\n\n    @classmethod\n    def settings_to_cmd_args_env(cls, settings_dict, parameters):\n        args = [cls.executable_name]\n        options = settings_dict.get(\"OPTIONS\", {})\n\n        host = settings_dict.get(\"HOST\")\n        port = settings_dict.get(\"PORT\")\n        dbname = settings_dict.get(\"NAME\")\n        user = settings_dict.get(\"USER\")\n        passwd = settings_dict.get(\"PASSWORD\")\n        passfile = options.get(\"passfile\")\n        service = options.get(\"service\")\n        sslmode = options.get(\"sslmode\")\n        sslrootcert = options.get(\"sslrootcert\")\n        sslcert = options.get(\"sslcert\")\n        sslkey = options.get(\"sslkey\")\n\n        if not dbname and not service:\n            # Connect to the default 'postgres' db.\n            dbname = \"postgres\"\n        if user:\n            args += [\"-U\", user]\n        if host:\n            args += [\"-h\", host]\n        if port:\n            args += [\"-p\", str(port)]\n        args.extend(parameters)\n        if dbname:\n            args += [dbname]\n\n        env = {}\n        if passwd:\n            env[\"PGPASSWORD\"] = str(passwd)\n        if service:\n            env[\"PGSERVICE\"] = str(service)\n        if sslmode:\n            env[\"PGSSLMODE\"] = str(sslmode)\n        if sslrootcert:\n            env[\"PGSSLROOTCERT\"] = str(sslrootcert)\n        if sslcert:\n            env[\"PGSSLCERT\"] = str(sslcert)\n        if sslkey:\n            env[\"PGSSLKEY\"] = str(sslkey)\n        if passfile:\n            env[\"PGPASSFILE\"] = str(passfile)\n        return args, (env or None)\n\n    def runshell(self, parameters):\n        sigint_handler = signal.getsignal(signal.SIGINT)\n        try:\n            # Allow SIGINT to pass to psql to abort queries.\n            signal.signal(signal.SIGINT, signal.SIG_IGN)\n            super().runshell(parameters)\n        finally:\n            # Restore the original SIGINT handler.\n            signal.signal(signal.SIGINT, sigint_handler)",
+                "filename": "django/db/backends/postgresql/client.py",
+                "start_index": 0,
+                "end_index": 2051,
+                "start_line": 1,
+                "end_line": 64,
+                "max_line": 64,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.0
+            },
+            {
+                "code": "if not router.allow_migrate_model(db, cls):\n                continue\n            connection = connections[db]\n            if not (\n                connection.features.supports_table_check_constraints\n                or \"supports_table_check_constraints\" in cls._meta.required_db_features\n            ) and any(\n                isinstance(constraint, CheckConstraint)\n                for constraint in cls._meta.constraints\n            ):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support check constraints.\"\n                        % connection.display_name,\n                        hint=(\n                            \"A constraint won't be created. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W027\",\n                    )\n                )\n            if not (\n                connection.features.supports_partial_indexes\n                or \"supports_partial_indexes\" in cls._meta.required_db_features\n            ) and any(\n                isinstance(constraint, UniqueConstraint)\n                and constraint.condition is not None\n                for constraint in cls._meta.constraints\n            ):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support unique constraints with \"\n                        \"conditions.\" % connection.display_name,\n                        hint=(\n                            \"A constraint won't be created. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W036\",\n                    )\n                )\n            if not (\n                connection.features.supports_deferrable_unique_constraints\n                or \"supports_deferrable_unique_constraints\"\n                in cls._meta.required_db_features\n            ) and any(\n                isinstance(constraint, UniqueConstraint)\n                and constraint.deferrable is not None\n                for constraint in cls._meta.constraints\n            ):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support deferrable unique constraints.\"\n                        % connection.display_name,\n                        hint=(\n                            \"A constraint won't be created. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W038\",\n                    )\n                )",
+                "filename": "django/db/models/base.py",
+                "start_index": 92265,
+                "end_index": 95002,
+                "start_line": 1643,
+                "end_line": 2551,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import signal\n\nfrom django.db.backends.base.client import BaseDatabaseClient\n\n\nclass DatabaseClient(BaseDatabaseClient):\n    executable_name = \"mysql\"\n\n    @classmethod\n    def settings_to_cmd_args_env(cls, settings_dict, parameters):\n        args = [cls.executable_name]\n        env = None\n        database = settings_dict[\"OPTIONS\"].get(\n            \"database\",\n            settings_dict[\"OPTIONS\"].get(\"db\", settings_dict[\"NAME\"]),\n        )\n        user = settings_dict[\"OPTIONS\"].get(\"user\", settings_dict[\"USER\"])\n        password = settings_dict[\"OPTIONS\"].get(\n            \"password\",\n            settings_dict[\"OPTIONS\"].get(\"passwd\", settings_dict[\"PASSWORD\"]),\n        )\n        host = settings_dict[\"OPTIONS\"].get(\"host\", settings_dict[\"HOST\"])\n        port = settings_dict[\"OPTIONS\"].get(\"port\", settings_dict[\"PORT\"])\n        server_ca = settings_dict[\"OPTIONS\"].get(\"ssl\", {}).get(\"ca\")\n        client_cert = settings_dict[\"OPTIONS\"].get(\"ssl\", {}).get(\"cert\")\n        client_key = settings_dict[\"OPTIONS\"].get(\"ssl\", {}).get(\"key\")\n        defaults_file = settings_dict[\"OPTIONS\"].get(\"read_default_file\")\n        charset = settings_dict[\"OPTIONS\"].get(\"charset\")\n        # Seems to be no good way to set sql_mode with CLI.\n\n        if defaults_file:\n            args += [\"--defaults-file=%s\" % defaults_file]\n        if user:\n            args += [\"--user=%s\" % user]\n        if password:\n            # The MYSQL_PWD environment variable usage is discouraged per\n            # MySQL's documentation due to the possibility of exposure through\n            # `ps` on old Unix flavors but --password suffers from the same\n            # flaw on even more systems. Usage of an environment variable also\n            # prevents password exposure if the subprocess.run(check=True) call\n            # raises a CalledProcessError since the string representation of\n            # the latter includes all of the provided `args`.\n            env = {\"MYSQL_PWD\": password}\n        if host:\n            if \"/\" in host:\n                args += [\"--socket=%s\" % host]\n            else:\n                args += [\"--host=%s\" % host]\n        if port:\n            args += [\"--port=%s\" % port]\n        if server_ca:\n            args += [\"--ssl-ca=%s\" % server_ca]\n        if client_cert:\n            args += [\"--ssl-cert=%s\" % client_cert]\n        if client_key:\n            args += [\"--ssl-key=%s\" % client_key]\n        if charset:\n            args += [\"--default-character-set=%s\" % charset]\n        if database:\n            args += [database]\n        args.extend(parameters)\n        return args, env\n\n    def runshell(self, parameters):\n        sigint_handler = signal.getsignal(signal.SIGINT)\n        try:\n            # Allow SIGINT to pass to mysql to abort queries.\n            signal.signal(signal.SIGINT, signal.SIG_IGN)\n            super().runshell(parameters)\n        finally:\n            # Restore the original SIGINT handler.\n            signal.signal(signal.SIGINT, sigint_handler)",
+                "filename": "django/db/backends/mysql/client.py",
+                "start_index": 0,
+                "end_index": 2987,
+                "start_line": 1,
+                "end_line": 72,
+                "max_line": 72,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ConnectionRouter:\n    def __init__(self, routers=None):\n        \"\"\"\n        If routers is not specified, default to settings.DATABASE_ROUTERS.\n        \"\"\"\n        self._routers = routers\n\n    @cached_property\n    def routers(self):\n        if self._routers is None:\n            self._routers = settings.DATABASE_ROUTERS\n        routers = []\n        for r in self._routers:\n            if isinstance(r, str):\n                router = import_string(r)()\n            else:\n                router = r\n            routers.append(router)\n        return routers\n\n    def _router_func(action):\n        def _route_db(self, model, **hints):\n            chosen_db = None\n            for router in self.routers:\n                try:\n                    method = getattr(router, action)\n                except AttributeError:\n                    # If the router doesn't have a method, skip to the next one.\n                    pass\n                else:\n                    chosen_db = method(model, **hints)\n                    if chosen_db:\n                        return chosen_db\n            instance = hints.get(\"instance\")\n            if instance is not None and instance._state.db:\n                return instance._state.db\n            return DEFAULT_DB_ALIAS\n\n        return _route_db\n\n    db_for_read = _router_func(\"db_for_read\")\n    db_for_write = _router_func(\"db_for_write\")\n\n    def allow_relation(self, obj1, obj2, **hints):\n        for router in self.routers:\n            try:\n                method = router.allow_relation\n            except AttributeError:\n                # If the router doesn't have a method, skip to the next one.\n                pass\n            else:\n                allow = method(obj1, obj2, **hints)\n                if allow is not None:\n                    return allow\n        return obj1._state.db == obj2._state.db\n\n    def allow_migrate(self, db, app_label, **hints):\n        for router in self.routers:\n            try:\n                method = router.allow_migrate\n            except AttributeError:\n                # If the router doesn't have a method, skip to the next one.\n                continue\n\n            allow = method(db, app_label, **hints)\n\n            if allow is not None:\n                return allow\n        return True\n\n    def allow_migrate_model(self, db, model):\n        return self.allow_migrate(\n            db,\n            model._meta.app_label,\n            model_name=model._meta.model_name,\n            model=model,\n        )\n\n    def get_migratable_models(self, app_config, db, include_auto_created=False):\n        \"\"\"Return app models allowed to be migrated on provided db.\"\"\"\n        models = app_config.get_models(include_auto_created=include_auto_created)\n        return [model for model in models if self.allow_migrate_model(db, model)]",
+                "filename": "django/db/utils.py",
+                "start_index": 6466,
+                "end_index": 9278,
+                "start_line": 197,
+                "end_line": 278,
+                "max_line": 278,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"permission\",\n            name=\"name\",\n            field=models.CharField(max_length=255, verbose_name=\"name\"),\n        ),\n    ]",
+                "filename": "django/contrib/auth/migrations/0002_alter_permission_name_max_length.py",
+                "start_index": 0,
+                "end_index": 345,
+                "start_line": 1,
+                "end_line": 15,
+                "max_line": 15,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.apps import apps\nfrom django.core.management.base import BaseCommand, CommandError\nfrom django.db import DEFAULT_DB_ALIAS, connections\nfrom django.db.migrations.loader import AmbiguityError, MigrationLoader",
+                "filename": "django/core/management/commands/sqlmigrate.py",
+                "start_index": 0,
+                "end_index": 218,
+                "start_line": 1,
+                "end_line": 4,
+                "max_line": 83,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.2",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/utils.py": [
+                {
+                    "chunk": {
+                        "code": "class ConnectionRouter:\n    def __init__(self, routers=None):\n        \"\"\"\n        If routers is not specified, default to settings.DATABASE_ROUTERS.\n        \"\"\"\n        self._routers = routers\n\n    @cached_property\n    def routers(self):\n        if self._routers is None:\n            self._routers = settings.DATABASE_ROUTERS\n        routers = []\n        for r in self._routers:\n            if isinstance(r, str):\n                router = import_string(r)()\n            else:\n                router = r\n            routers.append(router)\n        return routers\n\n    def _router_func(action):\n        def _route_db(self, model, **hints):\n            chosen_db = None\n            for router in self.routers:\n                try:\n                    method = getattr(router, action)\n                except AttributeError:\n                    # If the router doesn't have a method, skip to the next one.\n                    pass\n                else:\n                    chosen_db = method(model, **hints)\n                    if chosen_db:\n                        return chosen_db\n            instance = hints.get(\"instance\")\n            if instance is not None and instance._state.db:\n                return instance._state.db\n            return DEFAULT_DB_ALIAS\n\n        return _route_db\n\n    db_for_read = _router_func(\"db_for_read\")\n    db_for_write = _router_func(\"db_for_write\")\n\n    def allow_relation(self, obj1, obj2, **hints):\n        for router in self.routers:\n            try:\n                method = router.allow_relation\n            except AttributeError:\n                # If the router doesn't have a method, skip to the next one.\n                pass\n            else:\n                allow = method(obj1, obj2, **hints)\n                if allow is not None:\n                    return allow\n        return obj1._state.db == obj2._state.db\n\n    def allow_migrate(self, db, app_label, **hints):\n        for router in self.routers:\n            try:\n                method = router.allow_migrate\n            except AttributeError:\n                # If the router doesn't have a method, skip to the next one.\n                continue\n\n            allow = method(db, app_label, **hints)\n\n            if allow is not None:\n                return allow\n        return True\n\n    def allow_migrate_model(self, db, model):\n        return self.allow_migrate(\n            db,\n            model._meta.app_label,\n            model_name=model._meta.model_name,\n            model=model,\n        )\n\n    def get_migratable_models(self, app_config, db, include_auto_created=False):\n        \"\"\"Return app models allowed to be migrated on provided db.\"\"\"\n        models = app_config.get_models(include_auto_created=include_auto_created)\n        return [model for model in models if self.allow_migrate_model(db, model)]",
+                        "filename": "django/db/utils.py",
+                        "start_index": 6466,
+                        "end_index": 9278,
+                        "start_line": 197,
+                        "end_line": 278,
+                        "max_line": 278,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the ConnectionRouter class which is responsible for routing database operations to the appropriate database. It is relevant because the issue describes a problem with the db router not respecting the database parameter, and this class may be where the logic needs to be adjusted to respect the database parameter during migrations."
+                }
+            ],
+            "django/db/migrations/operations/base.py": [
+                {
+                    "chunk": {
+                        "code": "from django.db import router",
+                        "filename": "django/db/migrations/operations/base.py",
+                        "start_index": 0,
+                        "end_index": 28,
+                        "start_line": 1,
+                        "end_line": 1,
+                        "max_line": 146,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet imports the router from django.db, which is likely used in the migration process. Since the issue is related to the db router not respecting the database parameter, this snippet may be relevant for understanding how the router is used in the context of migrations."
+                }
+            ],
+            "django/contrib/auth/migrations/0002_alter_permission_name_max_length.py": [
+                {
+                    "chunk": {
+                        "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"auth\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.AlterField(\n            model_name=\"permission\",\n            name=\"name\",\n            field=models.CharField(max_length=255, verbose_name=\"name\"),\n        ),\n    ]",
+                        "filename": "django/contrib/auth/migrations/0002_alter_permission_name_max_length.py",
+                        "start_index": 0,
+                        "end_index": 345,
+                        "start_line": 1,
+                        "end_line": 15,
+                        "max_line": 15,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is a migration file for the auth app, specifically altering the permission model. It is relevant because the issue mentions that the problem occurs when running migrations, and permissions are typically created or altered during migrations."
+                }
+            ],
+            "django/db/migrations/operations/special.py": [
+                {
+                    "chunk": {
+                        "code": "from django.db import router\n\nfrom .base import Operation\n\n\nclass SeparateDatabaseAndState(Operation):\n    \"\"\"\n    Take two lists of operations - ones that will be used for the database,\n    and ones that will be used for the state change. This allows operations\n    that don't support state change to have it applied, or have operations\n    that affect the state or not the database, or so on.\n    \"\"\"\n\n    serialization_expand_args = [\"database_operations\", \"state_operations\"]\n\n    def __init__(self, database_operations=None, state_operations=None):\n        self.database_operations = database_operations or []\n        self.state_operations = state_operations or []\n\n    def deconstruct(self):\n        kwargs = {}\n        if self.database_operations:\n            kwargs[\"database_operations\"] = self.database_operations\n        if self.state_operations:\n            kwargs[\"state_operations\"] = self.state_operations\n        return (self.__class__.__qualname__, [], kwargs)\n\n    def state_forwards(self, app_label, state):\n        for state_operation in self.state_operations:\n            state_operation.state_forwards(app_label, state)\n\n    def database_forwards(self, app_label, schema_editor, from_state, to_state):\n        # We calculate state separately in here since our state functions aren't useful\n        for database_operation in self.database_operations:\n            to_state = from_state.clone()\n            database_operation.state_forwards(app_label, to_state)\n            database_operation.database_forwards(\n                app_label, schema_editor, from_state, to_state\n            )\n            from_state = to_state\n\n    def database_backwards(self, app_label, schema_editor, from_state, to_state):\n        # We calculate state separately in here since our state functions aren't useful\n        to_states = {}\n        for dbop in self.database_operations:\n            to_states[dbop] = to_state\n            to_state = to_state.clone()\n            dbop.state_forwards(app_label, to_state)\n        # to_state now has the states of all the database_operations applied\n        # which is the from_state for the backwards migration of the last\n        # operation.\n        for database_operation in reversed(self.database_operations):\n            from_state = to_state\n            to_state = to_states[database_operation]\n            database_operation.database_backwards(\n                app_label, schema_editor, from_state, to_state\n            )\n\n    def describe(self):\n        return \"Custom state/database change combination\"",
+                        "filename": "django/db/migrations/operations/special.py",
+                        "start_index": 0,
+                        "end_index": 2553,
+                        "start_line": 1,
+                        "end_line": 60,
+                        "max_line": 208,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines a special migration operation that separates database and state operations. It may be relevant because the issue could be related to how database operations are being routed during migrations, and this class could be involved in that process."
+                }
+            ]
+        },
+        "solution_task": "- Ensure that the `migrate` management command is correctly using the `database` parameter to set the database alias for all operations, including reads. If not, modify the command to respect the `database` parameter.\n- In the `TenantDatabaseRouter` class, ensure that the `db_for_read` and `db_for_write` methods are correctly using the `local_state.subdomain` to determine the database alias. If the subdomain is not set or invalid, it should not fall back to the default database but should raise an `InvalidTenantException`.\n- Verify that the `TenantSubdomainMiddleware` is correctly setting the `local_state.subdomain` before any database routing decisions are made. This should happen early in the request-response cycle.\n- Check the `settings.DATABASE_ROUTERS` configuration to ensure that `TenantDatabaseRouter` is included and correctly configured.\n- If the `migrate` command is being run in a context where the subdomain is not available (e.g., a management command outside of a web request), ensure that the `database` parameter is used to manually set the correct database alias in the thread-local variable before the migration operations begin.\n- Review the `allow_migrate` method in the `TenantDatabaseRouter` to ensure it respects the `database` parameter and does not allow migrations on databases that are not intended for the current tenant.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a comprehensive list of actionable steps that are relevant to the issue described in the PROMPT. It addresses the need to ensure that the `migrate` management command respects the `database` parameter, the correct use of `local_state.subdomain` in the `TenantDatabaseRouter`, the correct setting of `local_state.subdomain` by the `TenantSubdomainMiddleware`, the configuration of `DATABASE_ROUTERS`, and the behavior of the `allow_migrate` method. Additionally, it suggests reviewing the `migrate` command context and manually setting the database alias if necessary. The RESPONSE also provides relevant code snippets to check, which could help in diagnosing and fixing the issue. However, it does not provide a direct solution to the bug but rather a set of checks and considerations that should be made, which is why it does not score a perfect 10.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711706554.717005,
+        "result": "- Ensure that the `migrate` management command is correctly using the `database` parameter to set the database alias for all operations, including reads. If not, modify the command to respect the `database` parameter.\n- In the `TenantDatabaseRouter` class, ensure that the `db_for_read` and `db_for_write` methods are correctly using the `local_state.subdomain` to determine the database alias. If the subdomain is not set or invalid, it should not fall back to the default database but should raise an `InvalidTenantException`.\n- Verify that the `TenantSubdomainMiddleware` is correctly setting the `local_state.subdomain` before any database routing decisions are made. This should happen early in the request-response cycle.\n- Check the `settings.DATABASE_ROUTERS` configuration to ensure that `TenantDatabaseRouter` is included and correctly configured.\n- If the `migrate` command is being run in a context where the subdomain is not available (e.g., a management command outside of a web request), ensure that the `database` parameter is used to manually set the correct database alias in the thread-local variable before the migration operations begin.\n- Review the `allow_migrate` method in the `TenantDatabaseRouter` to ensure it respects the `database` parameter and does not allow migrations on databases that are not intended for the current tenant.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db)- [Lines 197 - 278](https://github.com/testbed/django__django__4.2/blob//django/db/utils.py#L197-L278)\n\n This snippet contains the ConnectionRouter class which is responsible for routing database operations to the appropriate database. It is relevant because the issue describes a problem with the db router not respecting the database parameter, and this class may be where the logic needs to be adjusted to respect the database parameter during migrations.\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.2/tree//django/db/migrations) \u2192 [operations](https://github.com/testbed/django__django__4.2/tree//django/db/migrations/operations)- [Lines 1 - 1](https://github.com/testbed/django__django__4.2/blob//django/db/migrations/operations/base.py#L1-L1)\n\n This snippet imports the router from django.db, which is likely used in the migration process. Since the issue is related to the db router not respecting the database parameter, this snippet may be relevant for understanding how the router is used in the context of migrations.\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__4.2/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__4.2/tree//django/contrib/auth) \u2192 [migrations](https://github.com/testbed/django__django__4.2/tree//django/contrib/auth/migrations)- [Lines 1 - 15](https://github.com/testbed/django__django__4.2/blob//django/contrib/auth/migrations/0002_alter_permission_name_max_length.py#L1-L15)\n\n This snippet is a migration file for the auth app, specifically altering the permission model. It is relevant because the issue mentions that the problem occurs when running migrations, and permissions are typically created or altered during migrations.\n-  \u2192 [django](https://github.com/testbed/django__django__4.2/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.2/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.2/tree//django/db/migrations) \u2192 [operations](https://github.com/testbed/django__django__4.2/tree//django/db/migrations/operations)- [Lines 1 - 60](https://github.com/testbed/django__django__4.2/blob//django/db/migrations/operations/special.py#L1-L60)\n\n This snippet defines a special migration operation that separates database and state operations. It may be relevant because the issue could be related to how database operations are being routed during migrations, and this class could be involved in that process.",
+        "context_relevance": 0.21000000000000002,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant to the entire PROMPT and answers the PROMPT completely.\nSupporting Evidence: The RESPONSE provides a detailed analysis and actionable steps that directly address the issue described in the PROMPT, which is the `migrate` management command not respecting the database parameter when adding Permissions. It suggests checking and modifying the `migrate` command, `TenantDatabaseRouter`, and `TenantSubdomainMiddleware` to ensure they respect the database parameter. It also advises reviewing the `settings.DATABASE_ROUTERS` and the `allow_migrate` method. Additionally, the RESPONSE includes relevant code snippets from the Django repository that could contain the logic needing adjustment, thus providing a comprehensive approach to solving the problem described in the PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

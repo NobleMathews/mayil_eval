@@ -1,0 +1,223 @@
+{
+    "id": "django__django-13454",
+    "repo_name": "testbed/django__django__3.2",
+    "task_id": 3189593781233070282,
+    "title": "Using EmptyFieldListFilter with GenericForeignKey and GenericRelation crashes.",
+    "body": "Description\n\t\nI have a GenericForeignKey in my model:\ncontent_type_resource_contract = models.ForeignKey(\n\tContentType,\n\ton_delete=models.CASCADE,\n\tblank=True,\n\tnull=True,\n)\nresource_contract_id = models.PositiveIntegerField(blank=True, null=True)\nresource_contract = GenericForeignKey('content_type_resource', 'resource_contract_id')\nand I want to use the new admin.EmptyFieldListFilter in my model admin:\nclass myAdmin(admin.ModelAdmin):\n\tlist_filter = (('resource_contract', admin.EmptyFieldListFilter),)\nBut when I try to run it I get a \"'GenericForeignKey' object has no attribute 'empty_strings_allowed'\". It will work fine if I use the resource_contract_id field. Would it make sense to extend the GenericForeignKey to use those empty_strings_allowed attributes from fields that are used in this generic relation?\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.2.git",
+    "requested_commit": "",
+    "mayil_response": "- Remove the `EmptyFieldListFilter` for `resource_contract` from `MyAdmin.list_filter` as `GenericForeignKey` does not support `empty_strings_allowed`.\n- Replace `('resource_contract', admin.EmptyFieldListFilter)` with `('resource_contract_id', admin.EmptyFieldListFilter)` in `MyAdmin.list_filter` to filter on the underlying `PositiveIntegerField` which supports `empty_strings_allowed`.\n\n```python\nclass MyAdmin(admin.ModelAdmin):\n    list_filter = (('resource_contract_id', admin.EmptyFieldListFilter),)\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [admin](https://github.com/testbed/django__django__3.2/tree//django/contrib/admin)- [Lines 653 - 715](https://github.com/testbed/django__django__3.2/blob//django/contrib/admin/filters.py#L653-L715)\n\n This snippet contains the implementation of EmptyFieldListFilter which is causing the crash when used with GenericForeignKey. It checks for 'empty_strings_allowed' and 'null' attributes which are not present on GenericForeignKey objects.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [contenttypes](https://github.com/testbed/django__django__3.2/tree//django/contrib/contenttypes)- [Lines 16 - 88](https://github.com/testbed/django__django__3.2/blob//django/contrib/contenttypes/admin.py#L16-L88)\n\n This snippet is relevant because it contains checks for GenericForeignKey fields in the admin interface, which is related to the issue of using EmptyFieldListFilter with GenericForeignKey. \n\n\n   - [Lines 1 - 13](https://github.com/testbed/django__django__3.2/blob//django/contrib/contenttypes/admin.py#L1-L13)\n\n This snippet is relevant as it imports and uses GenericForeignKey, which is part of the issue when trying to use EmptyFieldListFilter in the admin interface.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00027949999999999996,
+        "snippet_processor": 0.05899,
+        "issue_star_creation": 0.02995,
+        "issue_star_solver": 0.06112000000000001,
+        "bouncer": 0.03165
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711726655.7941198,
+        "relevant_snippets": [
+            {
+                "code": "class EmptyFieldListFilter(FieldListFilter):\n    def __init__(self, field, request, params, model, model_admin, field_path):\n        if not field.empty_strings_allowed and not field.null:\n            raise ImproperlyConfigured(\n                \"The list filter '%s' cannot be used with field '%s' which \"\n                \"doesn't allow empty strings and nulls.\"\n                % (\n                    self.__class__.__name__,\n                    field.name,\n                )\n            )\n        self.lookup_kwarg = \"%s__isempty\" % field_path\n        self.lookup_val = get_last_value_from_parameters(params, self.lookup_kwarg)\n        super().__init__(field, request, params, model, model_admin, field_path)\n\n    def get_lookup_condition(self):\n        lookup_conditions = []\n        if self.field.empty_strings_allowed:\n            lookup_conditions.append((self.field_path, \"\"))\n        if self.field.null:\n            lookup_conditions.append((f\"{self.field_path}__isnull\", True))\n        return models.Q.create(lookup_conditions, connector=models.Q.OR)\n\n    def queryset(self, request, queryset):\n        if self.lookup_kwarg not in self.used_parameters:\n            return queryset\n        if self.lookup_val not in (\"0\", \"1\"):\n            raise IncorrectLookupParameters\n\n        lookup_condition = self.get_lookup_condition()\n        if self.lookup_val == \"1\":\n            return queryset.filter(lookup_condition)\n        return queryset.exclude(lookup_condition)\n\n    def expected_parameters(self):\n        return [self.lookup_kwarg]\n\n    def get_facet_counts(self, pk_attname, filtered_qs):\n        lookup_condition = self.get_lookup_condition()\n        return {\n            \"empty__c\": models.Count(pk_attname, filter=lookup_condition),\n            \"not_empty__c\": models.Count(pk_attname, filter=~lookup_condition),\n        }\n\n    def choices(self, changelist):\n        add_facets = changelist.add_facets\n        facet_counts = self.get_facet_queryset(changelist) if add_facets else None\n        for lookup, title, count_field in (\n            (None, _(\"All\"), None),\n            (\"1\", _(\"Empty\"), \"empty__c\"),\n            (\"0\", _(\"Not empty\"), \"not_empty__c\"),\n        ):\n            if add_facets:\n                if count_field is not None:\n                    count = facet_counts[count_field]\n                    title = f\"{title} ({count})\"\n            yield {\n                \"selected\": self.lookup_val == lookup,\n                \"query_string\": changelist.get_query_string(\n                    {self.lookup_kwarg: lookup}\n                ),\n                \"display\": title,\n            }",
+                "filename": "django/contrib/admin/filters.py",
+                "start_index": 25050,
+                "end_index": 27661,
+                "start_line": 653,
+                "end_line": 715,
+                "max_line": 715,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "FieldListFilter.register(lambda f: f.remote_field, RelatedFieldListFilter)\n\n\nclass BooleanFieldListFilter(FieldListFilter):\n    def __init__(self, field, request, params, model, model_admin, field_path):\n        self.lookup_kwarg = \"%s__exact\" % field_path\n        self.lookup_kwarg2 = \"%s__isnull\" % field_path\n        self.lookup_val = get_last_value_from_parameters(params, self.lookup_kwarg)\n        self.lookup_val2 = get_last_value_from_parameters(params, self.lookup_kwarg2)\n        super().__init__(field, request, params, model, model_admin, field_path)\n        if (\n            self.used_parameters\n            and self.lookup_kwarg in self.used_parameters\n            and self.used_parameters[self.lookup_kwarg] in (\"1\", \"0\")\n        ):\n            self.used_parameters[self.lookup_kwarg] = bool(\n                int(self.used_parameters[self.lookup_kwarg])\n            )\n\n    def expected_parameters(self):\n        return [self.lookup_kwarg, self.lookup_kwarg2]\n\n    def get_facet_counts(self, pk_attname, filtered_qs):\n        return {\n            \"true__c\": models.Count(\n                pk_attname, filter=models.Q(**{self.field_path: True})\n            ),\n            \"false__c\": models.Count(\n                pk_attname, filter=models.Q(**{self.field_path: False})\n            ),\n            \"null__c\": models.Count(\n                pk_attname, filter=models.Q(**{self.lookup_kwarg2: True})\n            ),\n        }\n\n    def choices(self, changelist):\n        field_choices = dict(self.field.flatchoices)\n        add_facets = changelist.add_facets\n        facet_counts = self.get_facet_queryset(changelist) if add_facets else None\n        for lookup, title, count_field in (\n            (None, _(\"All\"), None),\n            (\"1\", field_choices.get(True, _(\"Yes\")), \"true__c\"),\n            (\"0\", field_choices.get(False, _(\"No\")), \"false__c\"),\n        ):\n            if add_facets:\n                if count_field is not None:\n                    count = facet_counts[count_field]\n                    title = f\"{title} ({count})\"\n            yield {\n                \"selected\": self.lookup_val == lookup and not self.lookup_val2,\n                \"query_string\": changelist.get_query_string(\n                    {self.lookup_kwarg: lookup}, [self.lookup_kwarg2]\n                ),\n                \"display\": title,\n            }\n        if self.field.null:\n            display = field_choices.get(None, _(\"Unknown\"))\n            if add_facets:\n                count = facet_counts[\"null__c\"]\n                display = f\"{display} ({count})\"\n            yield {\n                \"selected\": self.lookup_val2 == \"True\",\n                \"query_string\": changelist.get_query_string(\n                    {self.lookup_kwarg2: \"True\"}, [self.lookup_kwarg]\n                ),\n                \"display\": display,\n            }\n\n\nFieldListFilter.register(\n    lambda f: isinstance(f, models.BooleanField), BooleanFieldListFilter\n)",
+                "filename": "django/contrib/admin/filters.py",
+                "start_index": 12095,
+                "end_index": 15027,
+                "start_line": 324,
+                "end_line": 713,
+                "max_line": 715,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "FieldListFilter.register(lambda f: True, AllValuesFieldListFilter)\n\n\nclass RelatedOnlyFieldListFilter(RelatedFieldListFilter):\n    def field_choices(self, field, request, model_admin):\n        pk_qs = (\n            model_admin.get_queryset(request)\n            .distinct()\n            .values_list(\"%s__pk\" % self.field_path, flat=True)\n        )\n        ordering = self.field_admin_ordering(field, request, model_admin)\n        return field.get_choices(\n            include_blank=False, limit_choices_to={\"pk__in\": pk_qs}, ordering=ordering\n        )",
+                "filename": "django/contrib/admin/filters.py",
+                "start_index": 24496,
+                "end_index": 25047,
+                "start_line": 637,
+                "end_line": 713,
+                "max_line": 715,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ChoicesFieldListFilter(FieldListFilter):\n    def __init__(self, field, request, params, model, model_admin, field_path):\n        self.lookup_kwarg = \"%s__exact\" % field_path\n        self.lookup_kwarg_isnull = \"%s__isnull\" % field_path\n        self.lookup_val = params.get(self.lookup_kwarg)\n        self.lookup_val_isnull = get_last_value_from_parameters(\n            params, self.lookup_kwarg_isnull\n        )\n        super().__init__(field, request, params, model, model_admin, field_path)\n\n    def expected_parameters(self):\n        return [self.lookup_kwarg, self.lookup_kwarg_isnull]\n\n    def get_facet_counts(self, pk_attname, filtered_qs):\n        return {\n            f\"{i}__c\": models.Count(\n                pk_attname,\n                filter=models.Q(\n                    (self.lookup_kwarg, value)\n                    if value is not None\n                    else (self.lookup_kwarg_isnull, True)\n                ),\n            )\n            for i, (value, _) in enumerate(self.field.flatchoices)\n        }\n\n    def choices(self, changelist):\n        add_facets = changelist.add_facets\n        facet_counts = self.get_facet_queryset(changelist) if add_facets else None\n        yield {\n            \"selected\": self.lookup_val is None,\n            \"query_string\": changelist.get_query_string(\n                remove=[self.lookup_kwarg, self.lookup_kwarg_isnull]\n            ),\n            \"display\": _(\"All\"),\n        }\n        none_title = \"\"\n        for i, (lookup, title) in enumerate(self.field.flatchoices):\n            if add_facets:\n                count = facet_counts[f\"{i}__c\"]\n                title = f\"{title} ({count})\"\n            if lookup is None:\n                none_title = title\n                continue\n            yield {\n                \"selected\": self.lookup_val is not None\n                and str(lookup) in self.lookup_val,\n                \"query_string\": changelist.get_query_string(\n                    {self.lookup_kwarg: lookup}, [self.lookup_kwarg_isnull]\n                ),\n                \"display\": title,\n            }\n        if none_title:\n            yield {\n                \"selected\": bool(self.lookup_val_isnull),\n                \"query_string\": changelist.get_query_string(\n                    {self.lookup_kwarg_isnull: \"True\"}, [self.lookup_kwarg]\n                ),\n                \"display\": none_title,\n            }\n\n\nFieldListFilter.register(lambda f: bool(f.choices), ChoicesFieldListFilter)",
+                "filename": "django/contrib/admin/filters.py",
+                "start_index": 15030,
+                "end_index": 17488,
+                "start_line": 398,
+                "end_line": 460,
+                "max_line": 715,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _prepare_related_fields_for_save(self, operation_name, fields=None):\n        # Ensure that a model instance without a PK hasn't been assigned to\n        # a ForeignKey, GenericForeignKey or OneToOneField on this model. If\n        # the field is nullable, allowing the save would result in silent data\n        # loss.\n        for field in self._meta.concrete_fields:\n            if fields and field not in fields:\n                continue\n            # If the related field isn't cached, then an instance hasn't been\n            # assigned and there's no need to worry about this check.\n            if field.is_relation and field.is_cached(self):\n                obj = getattr(self, field.name, None)\n                if not obj:\n                    continue\n                # A pk may have been assigned manually to a model instance not\n                # saved to the database (or auto-generated in a case like\n                # UUIDField), but we allow the save to proceed and rely on the\n                # database to raise an IntegrityError if applicable. If\n                # constraints aren't supported by the database, there's the\n                # unavoidable risk of data corruption.\n                if obj.pk is None:\n                    # Remove the object from a related instance cache.\n                    if not field.remote_field.multiple:\n                        field.remote_field.delete_cached_value(obj)\n                    raise ValueError(\n                        \"%s() prohibited to prevent data loss due to unsaved \"\n                        \"related object '%s'.\" % (operation_name, field.name)\n                    )\n                elif getattr(self, field.attname) in field.empty_values:\n                    # Set related object if it has been saved after an\n                    # assignment.\n                    setattr(self, field.name, obj)\n                # If the relationship's pk/to_field was changed, clear the\n                # cached relationship.\n                if getattr(obj, field.target_field.attname) != getattr(\n                    self, field.attname\n                ):\n                    field.delete_cached_value(self)\n        # GenericForeignKeys are private.\n        for field in self._meta.private_fields:\n            if fields and field not in fields:\n                continue\n            if (\n                field.is_relation\n                and field.is_cached(self)\n                and hasattr(field, \"fk_field\")\n            ):\n                obj = field.get_cached_value(self, default=None)\n                if obj and obj.pk is None:\n                    raise ValueError(\n                        f\"{operation_name}() prohibited to prevent data loss due to \"\n                        f\"unsaved related object '{field.name}'.\"\n                    )",
+                "filename": "django/db/models/base.py",
+                "start_index": 43593,
+                "end_index": 46398,
+                "start_line": 1107,
+                "end_line": 2551,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "\"\"\"\nThis encapsulates the logic for displaying filters in the Django admin.\nFilters are specified in models with the \"list_filter\" option.\n\nEach filter subclass knows how to display a filter for a field that passes a\ncertain test -- e.g. being a DateField or ForeignKey.\n\"\"\"\nimport datetime\n\nfrom django.contrib.admin.exceptions import NotRegistered\nfrom django.contrib.admin.options import IncorrectLookupParameters\nfrom django.contrib.admin.utils import (\n    build_q_object_from_lookup_parameters,\n    get_last_value_from_parameters,\n    get_model_from_relation,\n    prepare_lookup_value,\n    reverse_field_path,\n)\nfrom django.core.exceptions import ImproperlyConfigured, ValidationError\nfrom django.db import models\nfrom django.utils import timezone\nfrom django.utils.translation import gettext_lazy as _\n\n\nclass ListFilter:\n    title = None  # Human-readable title to appear in the right sidebar.\n    template = \"admin/filter.html\"\n\n    def __init__(self, request, params, model, model_admin):\n        self.request = request\n        # This dictionary will eventually contain the request's query string\n        # parameters actually used by this filter.\n        self.used_parameters = {}\n        if self.title is None:\n            raise ImproperlyConfigured(\n                \"The list filter '%s' does not specify a 'title'.\"\n                % self.__class__.__name__\n            )\n\n    def has_output(self):\n        \"\"\"\n        Return True if some choices would be output for this filter.\n        \"\"\"\n        raise NotImplementedError(\n            \"subclasses of ListFilter must provide a has_output() method\"\n        )\n\n    def choices(self, changelist):\n        \"\"\"\n        Return choices ready to be output in the template.\n\n        `changelist` is the ChangeList to be displayed.\n        \"\"\"\n        raise NotImplementedError(\n            \"subclasses of ListFilter must provide a choices() method\"\n        )\n\n    def queryset(self, request, queryset):\n        \"\"\"\n        Return the filtered queryset.\n        \"\"\"\n        raise NotImplementedError(\n            \"subclasses of ListFilter must provide a queryset() method\"\n        )\n\n    def expected_parameters(self):\n        \"\"\"\n        Return the list of parameter names that are expected from the\n        request's query string and that will be used by this filter.\n        \"\"\"\n        raise NotImplementedError(\n            \"subclasses of ListFilter must provide an expected_parameters() method\"\n        )\n\n\nclass FacetsMixin:\n    def get_facet_counts(self, pk_attname, filtered_qs):\n        raise NotImplementedError(\n            \"subclasses of FacetsMixin must provide a get_facet_counts() method.\"\n        )\n\n    def get_facet_queryset(self, changelist):\n        filtered_qs = changelist.get_queryset(\n            self.request, exclude_parameters=self.expected_parameters()\n        )\n        return filtered_qs.aggregate(\n            **self.get_facet_counts(changelist.pk_attname, filtered_qs)\n        )",
+                "filename": "django/contrib/admin/filters.py",
+                "start_index": 0,
+                "end_index": 2968,
+                "start_line": 1,
+                "end_line": 713,
+                "max_line": 715,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class GenericInlineModelAdminChecks(InlineModelAdminChecks):\n    def _check_exclude_of_parent_model(self, obj, parent_model):\n        # There's no FK to exclude, so no exclusion checks are required.\n        return []\n\n    def _check_relation(self, obj, parent_model):\n        # There's no FK, but we do need to confirm that the ct_field and\n        # ct_fk_field are valid, and that they are part of a GenericForeignKey.\n\n        gfks = [\n            f\n            for f in obj.model._meta.private_fields\n            if isinstance(f, GenericForeignKey)\n        ]\n        if not gfks:\n            return [\n                checks.Error(\n                    \"'%s' has no GenericForeignKey.\" % obj.model._meta.label,\n                    obj=obj.__class__,\n                    id=\"admin.E301\",\n                )\n            ]\n        else:\n            # Check that the ct_field and ct_fk_fields exist\n            try:\n                obj.model._meta.get_field(obj.ct_field)\n            except FieldDoesNotExist:\n                return [\n                    checks.Error(\n                        \"'ct_field' references '%s', which is not a field on '%s'.\"\n                        % (\n                            obj.ct_field,\n                            obj.model._meta.label,\n                        ),\n                        obj=obj.__class__,\n                        id=\"admin.E302\",\n                    )\n                ]\n\n            try:\n                obj.model._meta.get_field(obj.ct_fk_field)\n            except FieldDoesNotExist:\n                return [\n                    checks.Error(\n                        \"'ct_fk_field' references '%s', which is not a field on '%s'.\"\n                        % (\n                            obj.ct_fk_field,\n                            obj.model._meta.label,\n                        ),\n                        obj=obj.__class__,\n                        id=\"admin.E303\",\n                    )\n                ]\n\n            # There's one or more GenericForeignKeys; make sure that one of them\n            # uses the right ct_field and ct_fk_field.\n            for gfk in gfks:\n                if gfk.ct_field == obj.ct_field and gfk.fk_field == obj.ct_fk_field:\n                    return []\n\n            return [\n                checks.Error(\n                    \"'%s' has no GenericForeignKey using content type field '%s' and \"\n                    \"object ID field '%s'.\"\n                    % (\n                        obj.model._meta.label,\n                        obj.ct_field,\n                        obj.ct_fk_field,\n                    ),\n                    obj=obj.__class__,\n                    id=\"admin.E304\",\n                )\n            ]",
+                "filename": "django/contrib/contenttypes/admin.py",
+                "start_index": 530,
+                "end_index": 3232,
+                "start_line": 16,
+                "end_line": 88,
+                "max_line": 143,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from functools import partial\n\nfrom django.contrib.admin.checks import InlineModelAdminChecks\nfrom django.contrib.admin.options import InlineModelAdmin, flatten_fieldsets\nfrom django.contrib.contenttypes.fields import GenericForeignKey\nfrom django.contrib.contenttypes.forms import (\n    BaseGenericInlineFormSet,\n    generic_inlineformset_factory,\n)\nfrom django.core import checks\nfrom django.core.exceptions import FieldDoesNotExist\nfrom django.forms import ALL_FIELDS\nfrom django.forms.models import modelform_defines_fields",
+                "filename": "django/contrib/contenttypes/admin.py",
+                "start_index": 0,
+                "end_index": 527,
+                "start_line": 1,
+                "end_line": 13,
+                "max_line": 143,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class RelatedFieldListFilter(FieldListFilter):",
+                "filename": "django/contrib/admin/filters.py",
+                "start_index": 8037,
+                "end_index": 8083,
+                "start_line": 221,
+                "end_line": 221,
+                "max_line": 715,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def __init__(self, field, request, params, model, model_admin, field_path):\n        other_model = get_model_from_relation(field)\n        self.lookup_kwarg = \"%s__%s__exact\" % (field_path, field.target_field.name)\n        self.lookup_kwarg_isnull = \"%s__isnull\" % field_path\n        self.lookup_val = params.get(self.lookup_kwarg)\n        self.lookup_val_isnull = get_last_value_from_parameters(\n            params, self.lookup_kwarg_isnull\n        )\n        super().__init__(field, request, params, model, model_admin, field_path)\n        self.lookup_choices = self.field_choices(field, request, model_admin)\n        if hasattr(field, \"verbose_name\"):\n            self.lookup_title = field.verbose_name\n        else:\n            self.lookup_title = other_model._meta.verbose_name\n        self.title = self.lookup_title\n        self.empty_value_display = model_admin.get_empty_value_display()\n\n    @property\n    def include_empty_choice(self):\n        \"\"\"\n        Return True if a \"(None)\" choice should be included, which filters\n        out everything except empty relationships.\n        \"\"\"\n        return self.field.null or (self.field.is_relation and self.field.many_to_many)\n\n    def has_output(self):\n        if self.include_empty_choice:\n            extra = 1\n        else:\n            extra = 0\n        return len(self.lookup_choices) + extra > 1\n\n    def expected_parameters(self):\n        return [self.lookup_kwarg, self.lookup_kwarg_isnull]\n\n    def field_admin_ordering(self, field, request, model_admin):\n        \"\"\"\n        Return the model admin's ordering for related field, if provided.\n        \"\"\"\n        try:\n            related_admin = model_admin.admin_site.get_model_admin(\n                field.remote_field.model\n            )\n        except NotRegistered:\n            return ()\n        else:\n            return related_admin.get_ordering(request)\n\n    def field_choices(self, field, request, model_admin):\n        ordering = self.field_admin_ordering(field, request, model_admin)\n        return field.get_choices(include_blank=False, ordering=ordering)\n\n    def get_facet_counts(self, pk_attname, filtered_qs):\n        counts = {\n            f\"{pk_val}__c\": models.Count(\n                pk_attname, filter=models.Q(**{self.lookup_kwarg: pk_val})\n            )\n            for pk_val, _ in self.lookup_choices\n        }\n        if self.include_empty_choice:\n            counts[\"__c\"] = models.Count(\n                pk_attname, filter=models.Q(**{self.lookup_kwarg_isnull: True})\n            )\n        return counts",
+                "filename": "django/contrib/admin/filters.py",
+                "start_index": 8088,
+                "end_index": 10629,
+                "start_line": 175,
+                "end_line": 285,
+                "max_line": 715,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.2",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/contrib/admin/filters.py": [
+                {
+                    "chunk": {
+                        "code": "class EmptyFieldListFilter(FieldListFilter):\n    def __init__(self, field, request, params, model, model_admin, field_path):\n        if not field.empty_strings_allowed and not field.null:\n            raise ImproperlyConfigured(\n                \"The list filter '%s' cannot be used with field '%s' which \"\n                \"doesn't allow empty strings and nulls.\"\n                % (\n                    self.__class__.__name__,\n                    field.name,\n                )\n            )\n        self.lookup_kwarg = \"%s__isempty\" % field_path\n        self.lookup_val = get_last_value_from_parameters(params, self.lookup_kwarg)\n        super().__init__(field, request, params, model, model_admin, field_path)\n\n    def get_lookup_condition(self):\n        lookup_conditions = []\n        if self.field.empty_strings_allowed:\n            lookup_conditions.append((self.field_path, \"\"))\n        if self.field.null:\n            lookup_conditions.append((f\"{self.field_path}__isnull\", True))\n        return models.Q.create(lookup_conditions, connector=models.Q.OR)\n\n    def queryset(self, request, queryset):\n        if self.lookup_kwarg not in self.used_parameters:\n            return queryset\n        if self.lookup_val not in (\"0\", \"1\"):\n            raise IncorrectLookupParameters\n\n        lookup_condition = self.get_lookup_condition()\n        if self.lookup_val == \"1\":\n            return queryset.filter(lookup_condition)\n        return queryset.exclude(lookup_condition)\n\n    def expected_parameters(self):\n        return [self.lookup_kwarg]\n\n    def get_facet_counts(self, pk_attname, filtered_qs):\n        lookup_condition = self.get_lookup_condition()\n        return {\n            \"empty__c\": models.Count(pk_attname, filter=lookup_condition),\n            \"not_empty__c\": models.Count(pk_attname, filter=~lookup_condition),\n        }\n\n    def choices(self, changelist):\n        add_facets = changelist.add_facets\n        facet_counts = self.get_facet_queryset(changelist) if add_facets else None\n        for lookup, title, count_field in (\n            (None, _(\"All\"), None),\n            (\"1\", _(\"Empty\"), \"empty__c\"),\n            (\"0\", _(\"Not empty\"), \"not_empty__c\"),\n        ):\n            if add_facets:\n                if count_field is not None:\n                    count = facet_counts[count_field]\n                    title = f\"{title} ({count})\"\n            yield {\n                \"selected\": self.lookup_val == lookup,\n                \"query_string\": changelist.get_query_string(\n                    {self.lookup_kwarg: lookup}\n                ),\n                \"display\": title,\n            }",
+                        "filename": "django/contrib/admin/filters.py",
+                        "start_index": 25050,
+                        "end_index": 27661,
+                        "start_line": 653,
+                        "end_line": 715,
+                        "max_line": 715,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the implementation of EmptyFieldListFilter which is causing the crash when used with GenericForeignKey. It checks for 'empty_strings_allowed' and 'null' attributes which are not present on GenericForeignKey objects."
+                }
+            ],
+            "django/contrib/contenttypes/admin.py": [
+                {
+                    "chunk": {
+                        "code": "class GenericInlineModelAdminChecks(InlineModelAdminChecks):\n    def _check_exclude_of_parent_model(self, obj, parent_model):\n        # There's no FK to exclude, so no exclusion checks are required.\n        return []\n\n    def _check_relation(self, obj, parent_model):\n        # There's no FK, but we do need to confirm that the ct_field and\n        # ct_fk_field are valid, and that they are part of a GenericForeignKey.\n\n        gfks = [\n            f\n            for f in obj.model._meta.private_fields\n            if isinstance(f, GenericForeignKey)\n        ]\n        if not gfks:\n            return [\n                checks.Error(\n                    \"'%s' has no GenericForeignKey.\" % obj.model._meta.label,\n                    obj=obj.__class__,\n                    id=\"admin.E301\",\n                )\n            ]\n        else:\n            # Check that the ct_field and ct_fk_fields exist\n            try:\n                obj.model._meta.get_field(obj.ct_field)\n            except FieldDoesNotExist:\n                return [\n                    checks.Error(\n                        \"'ct_field' references '%s', which is not a field on '%s'.\"\n                        % (\n                            obj.ct_field,\n                            obj.model._meta.label,\n                        ),\n                        obj=obj.__class__,\n                        id=\"admin.E302\",\n                    )\n                ]\n\n            try:\n                obj.model._meta.get_field(obj.ct_fk_field)\n            except FieldDoesNotExist:\n                return [\n                    checks.Error(\n                        \"'ct_fk_field' references '%s', which is not a field on '%s'.\"\n                        % (\n                            obj.ct_fk_field,\n                            obj.model._meta.label,\n                        ),\n                        obj=obj.__class__,\n                        id=\"admin.E303\",\n                    )\n                ]\n\n            # There's one or more GenericForeignKeys; make sure that one of them\n            # uses the right ct_field and ct_fk_field.\n            for gfk in gfks:\n                if gfk.ct_field == obj.ct_field and gfk.fk_field == obj.ct_fk_field:\n                    return []\n\n            return [\n                checks.Error(\n                    \"'%s' has no GenericForeignKey using content type field '%s' and \"\n                    \"object ID field '%s'.\"\n                    % (\n                        obj.model._meta.label,\n                        obj.ct_field,\n                        obj.ct_fk_field,\n                    ),\n                    obj=obj.__class__,\n                    id=\"admin.E304\",\n                )\n            ]",
+                        "filename": "django/contrib/contenttypes/admin.py",
+                        "start_index": 530,
+                        "end_index": 3232,
+                        "start_line": 16,
+                        "end_line": 88,
+                        "max_line": 143,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is relevant because it contains checks for GenericForeignKey fields in the admin interface, which is related to the issue of using EmptyFieldListFilter with GenericForeignKey."
+                },
+                {
+                    "chunk": {
+                        "code": "from functools import partial\n\nfrom django.contrib.admin.checks import InlineModelAdminChecks\nfrom django.contrib.admin.options import InlineModelAdmin, flatten_fieldsets\nfrom django.contrib.contenttypes.fields import GenericForeignKey\nfrom django.contrib.contenttypes.forms import (\n    BaseGenericInlineFormSet,\n    generic_inlineformset_factory,\n)\nfrom django.core import checks\nfrom django.core.exceptions import FieldDoesNotExist\nfrom django.forms import ALL_FIELDS\nfrom django.forms.models import modelform_defines_fields",
+                        "filename": "django/contrib/contenttypes/admin.py",
+                        "start_index": 0,
+                        "end_index": 527,
+                        "start_line": 1,
+                        "end_line": 13,
+                        "max_line": 143,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.2",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is relevant as it imports and uses GenericForeignKey, which is part of the issue when trying to use EmptyFieldListFilter in the admin interface."
+                }
+            ]
+        },
+        "solution_task": "- Remove the `EmptyFieldListFilter` for `resource_contract` from `MyAdmin.list_filter` as `GenericForeignKey` does not support `empty_strings_allowed`.\n- Replace `('resource_contract', admin.EmptyFieldListFilter)` with `('resource_contract_id', admin.EmptyFieldListFilter)` in `MyAdmin.list_filter` to filter on the underlying `PositiveIntegerField` which supports `empty_strings_allowed`.\n\n```python\nclass MyAdmin(admin.ModelAdmin):\n    list_filter = (('resource_contract_id', admin.EmptyFieldListFilter),)\n```",
+        "bouncer_response": {
+            "score": 8,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT by suggesting the removal of the `EmptyFieldListFilter` for `resource_contract` and replacing it with `resource_contract_id`. This directly addresses the error message received by the user and offers a practical workaround by filtering on the underlying `PositiveIntegerField` instead of the `GenericForeignKey`. The RESPONSE also includes references to the relevant code snippets in the Django repository, which adds value by pointing the user to the source of the issue and the implementation details of the `EmptyFieldListFilter`. The RESPONSE does not address the question about extending `GenericForeignKey` to use `empty_strings_allowed` attributes, which is why it does not score a perfect 10.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711726793.956485,
+        "result": "- Remove the `EmptyFieldListFilter` for `resource_contract` from `MyAdmin.list_filter` as `GenericForeignKey` does not support `empty_strings_allowed`.\n- Replace `('resource_contract', admin.EmptyFieldListFilter)` with `('resource_contract_id', admin.EmptyFieldListFilter)` in `MyAdmin.list_filter` to filter on the underlying `PositiveIntegerField` which supports `empty_strings_allowed`.\n\n```python\nclass MyAdmin(admin.ModelAdmin):\n    list_filter = (('resource_contract_id', admin.EmptyFieldListFilter),)\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [admin](https://github.com/testbed/django__django__3.2/tree//django/contrib/admin)- [Lines 653 - 715](https://github.com/testbed/django__django__3.2/blob//django/contrib/admin/filters.py#L653-L715)\n\n This snippet contains the implementation of EmptyFieldListFilter which is causing the crash when used with GenericForeignKey. It checks for 'empty_strings_allowed' and 'null' attributes which are not present on GenericForeignKey objects.\n-  \u2192 [django](https://github.com/testbed/django__django__3.2/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.2/tree//django/contrib) \u2192 [contenttypes](https://github.com/testbed/django__django__3.2/tree//django/contrib/contenttypes)- [Lines 16 - 88](https://github.com/testbed/django__django__3.2/blob//django/contrib/contenttypes/admin.py#L16-L88)\n\n This snippet is relevant because it contains checks for GenericForeignKey fields in the admin interface, which is related to the issue of using EmptyFieldListFilter with GenericForeignKey. \n\n\n   - [Lines 1 - 13](https://github.com/testbed/django__django__3.2/blob//django/contrib/contenttypes/admin.py#L1-L13)\n\n This snippet is relevant as it imports and uses GenericForeignKey, which is part of the issue when trying to use EmptyFieldListFilter in the admin interface.",
+        "context_relevance": 0.27,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant to the entire PROMPT and answers the PROMPT completely.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT by providing a solution to the crash caused by using `EmptyFieldListFilter` with `GenericForeignKey`. It suggests removing the filter from the `GenericForeignKey` and instead applying it to the `resource_contract_id` field, which is compatible with the filter. The RESPONSE also includes code snippets and explanations from the Django GitHub repository that are directly related to the problem, thus demonstrating relevance to the entire PROMPT and supporting the solution provided."
+        },
+        "qa_relevance": 1.0
+    }
+}

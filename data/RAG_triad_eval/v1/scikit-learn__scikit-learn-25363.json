@@ -1,0 +1,206 @@
+{
+    "id": "scikit-learn__scikit-learn-25363",
+    "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+    "task_id": 1162596064868795459,
+    "title": "FIX pass explicit configuration to delayed",
+    "body": "Working alternative to #25242\r\ncloses #25242 \r\ncloses #25239 \r\n\r\nThis is an alternative to #25242 that does not work if the thread import scikit-learn is different from the thread making the call to `Parallel`.\r\n\r\nHere, we have an alternative where we pass explicitly the configuration that is obtained by the thread that makes the `Parallel` code.\r\n\r\nWe raise a warning if this is not the case. It makes sure that it will turn into an error if we forget to pass the config to `delayed`. The code will still be working if `joblib` decides to provide a way to provide a `context` and a `config`.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/scikit-learn__scikit-learn__1.3.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `__call__` method in the `Parallel` class to check if `config` is not None before creating `iterable_with_config`. If `config` is None, raise a warning that the configuration must be passed explicitly.\n- In the `_FuncWrapper` class, modify the `__call__` method to check if `self.config` is not None before executing the function with `config_context`. If `self.config` is None, raise a warning that the configuration must be passed explicitly.\n- Ensure that the `delayed` decorator in `sklearn/utils/parallel.py` is used instead of `joblib.delayed` throughout the codebase to maintain the correct configuration passing.\n- Update the `linting.sh` script to check for improper usage of `joblib.delayed` and `joblib.Parallel` and enforce the use of `sklearn.utils.parallel.delayed` and `sklearn.utils.parallel.Parallel`.\n- Remove the deprecated `delayed` function from `sklearn/utils/fixes.py` as it should now be used from `sklearn/utils/parallel.py`.\n\n### Code snippets to check\n\n-  \u2192 [sklearn](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn) \u2192 [utils](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn/utils)- [Lines 1 - 68](https://github.com/testbed/scikit-learn__scikit-learn__1.3/blob//sklearn/utils/parallel.py#L1-L68)\n\n This snippet defines the custom `Parallel` class that overrides `joblib.Parallel` to ensure scikit-learn configuration is propagated to joblib workers, which is directly related to the issue. \n\n\n   - [Lines 69 - 127](https://github.com/testbed/scikit-learn__scikit-learn__1.3/blob//sklearn/utils/parallel.py#L69-L127)\n\n This snippet defines the `delayed` decorator that is used in conjunction with the custom `Parallel` class to capture function arguments and propagate configuration, which is relevant to the issue.",
+    "ai_cost": {
+        "search_embedding": 2.6e-07,
+        "issue_classifier": 0.004554,
+        "snippet_processor": 0.29709,
+        "issue_star_creation": 0.02362,
+        "issue_star_solver": 0.06302,
+        "bouncer": 0.02704
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711738633.7467678,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"Module that customize joblib tools for scikit-learn usage.\"\"\"\n\nimport functools\nimport warnings\nfrom functools import update_wrapper\n\nimport joblib\n\nfrom .._config import config_context, get_config\n\n\ndef _with_config(delayed_func, config):\n    \"\"\"Helper function that intends to attach a config to a delayed function.\"\"\"\n    if hasattr(delayed_func, \"with_config\"):\n        return delayed_func.with_config(config)\n    else:\n        warnings.warn(\n            (\n                \"`sklearn.utils.parallel.Parallel` needs to be used in \"\n                \"conjunction with `sklearn.utils.parallel.delayed` instead of \"\n                \"`joblib.delayed` to correctly propagate the scikit-learn \"\n                \"configuration to the joblib workers.\"\n            ),\n            UserWarning,\n        )\n        return delayed_func\n\n\nclass Parallel(joblib.Parallel):\n    \"\"\"Tweak of :class:`joblib.Parallel` that propagates the scikit-learn configuration.\n\n    This subclass of :class:`joblib.Parallel` ensures that the active configuration\n    (thread-local) of scikit-learn is propagated to the parallel workers for the\n    duration of the execution of the parallel tasks.\n\n    The API does not change and you can refer to :class:`joblib.Parallel`\n    documentation for more details.\n\n    .. versionadded:: 1.3\n    \"\"\"\n\n    def __call__(self, iterable):\n        \"\"\"Dispatch the tasks and return the results.\n\n        Parameters\n        ----------\n        iterable : iterable\n            Iterable containing tuples of (delayed_function, args, kwargs) that should\n            be consumed.\n\n        Returns\n        -------\n        results : list\n            List of results of the tasks.\n        \"\"\"\n        # Capture the thread-local scikit-learn configuration at the time\n        # Parallel.__call__ is issued since the tasks can be dispatched\n        # in a different thread depending on the backend and on the value of\n        # pre_dispatch and n_jobs.\n        config = get_config()\n        iterable_with_config = (\n            (_with_config(delayed_func, config), args, kwargs)\n            for delayed_func, args, kwargs in iterable\n        )\n        return super().__call__(iterable_with_config)\n\n\n# remove when https://github.com/joblib/joblib/issues/1071 is fixed",
+                "filename": "sklearn/utils/parallel.py",
+                "start_index": 0,
+                "end_index": 2265,
+                "start_line": 1,
+                "end_line": 68,
+                "max_line": 127,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "def delayed(function):\n    \"\"\"Decorator used to capture the arguments of a function.\n\n    This alternative to `joblib.delayed` is meant to be used in conjunction\n    with `sklearn.utils.parallel.Parallel`. The latter captures the the scikit-\n    learn configuration by calling `sklearn.get_config()` in the current\n    thread, prior to dispatching the first task. The captured configuration is\n    then propagated and enabled for the duration of the execution of the\n    delayed function in the joblib workers.\n\n    .. versionchanged:: 1.3\n       `delayed` was moved from `sklearn.utils.fixes` to `sklearn.utils.parallel`\n       in scikit-learn 1.3.\n\n    Parameters\n    ----------\n    function : callable\n        The function to be delayed.\n\n    Returns\n    -------\n    output: tuple\n        Tuple containing the delayed function, the positional arguments, and the\n        keyword arguments.\n    \"\"\"\n\n    @functools.wraps(function)\n    def delayed_function(*args, **kwargs):\n        return _FuncWrapper(function), args, kwargs\n\n    return delayed_function\n\n\nclass _FuncWrapper:\n    \"\"\"Load the global configuration before calling the function.\"\"\"\n\n    def __init__(self, function):\n        self.function = function\n        update_wrapper(self, self.function)\n\n    def with_config(self, config):\n        self.config = config\n        return self\n\n    def __call__(self, *args, **kwargs):\n        config = getattr(self, \"config\", None)\n        if config is None:\n            warnings.warn(\n                (\n                    \"`sklearn.utils.parallel.delayed` should be used with\"\n                    \" `sklearn.utils.parallel.Parallel` to make it possible to\"\n                    \" propagate the scikit-learn configuration of the current thread to\"\n                    \" the joblib workers.\"\n                ),\n                UserWarning,\n            )\n            config = {}\n        with config_context(**config):\n            return self.function(*args, **kwargs)",
+                "filename": "sklearn/utils/parallel.py",
+                "start_index": 2266,
+                "end_index": 4232,
+                "start_line": 69,
+                "end_line": 127,
+                "max_line": 127,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "local_config = _get_threadlocal_config()\n\n    if assume_finite is not None:\n        local_config[\"assume_finite\"] = assume_finite\n    if working_memory is not None:\n        local_config[\"working_memory\"] = working_memory\n    if print_changed_only is not None:\n        local_config[\"print_changed_only\"] = print_changed_only\n    if display is not None:\n        local_config[\"display\"] = display\n    if pairwise_dist_chunk_size is not None:\n        local_config[\"pairwise_dist_chunk_size\"] = pairwise_dist_chunk_size\n    if enable_cython_pairwise_dist is not None:\n        local_config[\"enable_cython_pairwise_dist\"] = enable_cython_pairwise_dist\n    if array_api_dispatch is not None:\n        from .utils._array_api import _check_array_api_dispatch\n\n        _check_array_api_dispatch(array_api_dispatch)\n        local_config[\"array_api_dispatch\"] = array_api_dispatch\n    if transform_output is not None:\n        local_config[\"transform_output\"] = transform_output\n    if enable_metadata_routing is not None:\n        local_config[\"enable_metadata_routing\"] = enable_metadata_routing\n    if skip_parameter_validation is not None:\n        local_config[\"skip_parameter_validation\"] = skip_parameter_validation",
+                "filename": "sklearn/_config.py",
+                "start_index": 5971,
+                "end_index": 7176,
+                "start_line": 169,
+                "end_line": 193,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "import warnings as _warnings\n\nwith _warnings.catch_warnings():\n    _warnings.simplefilter(\"ignore\")\n    # joblib imports may raise DeprecationWarning on certain Python\n    # versions\n    import joblib\n    from joblib import (\n        Memory,\n        Parallel,\n        __version__,\n        cpu_count,\n        delayed,\n        dump,\n        effective_n_jobs,\n        hash,\n        load,\n        logger,\n        parallel_backend,\n        register_parallel_backend,\n    )\n\n\n__all__ = [\n    \"parallel_backend\",\n    \"register_parallel_backend\",\n    \"cpu_count\",\n    \"Parallel\",\n    \"Memory\",\n    \"delayed\",\n    \"effective_n_jobs\",\n    \"hash\",\n    \"logger\",\n    \"dump\",\n    \"load\",\n    \"joblib\",\n    \"__version__\",\n]",
+                "filename": "sklearn/utils/_joblib.py",
+                "start_index": 0,
+                "end_index": 709,
+                "start_line": 1,
+                "end_line": 38,
+                "max_line": 38,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "if [ ! -z \"$joblib_delayed_import\" ]; then\n    echo \"Use from sklearn.utils.parallel import delayed instead of joblib delayed. The following files contains imports to joblib.delayed:\"\n    echo \"$joblib_delayed_import\"\n    joblib_status=1\nfi\njoblib_Parallel_import=\"$(git grep -l -A 10 -E \"joblib import.+Parallel\" -- \"*.py\" \":!sklearn/utils/_joblib.py\" \":!sklearn/utils/parallel.py\")\"\nif [ ! -z \"$joblib_Parallel_import\" ]; then\n    echo \"Use from sklearn.utils.parallel import Parallel instead of joblib Parallel. The following files contains imports to joblib.Parallel:\"\n    echo \"$joblib_Parallel_import\"\n    joblib_status=1\nfi\n\nif [[ $joblib_status -eq 0 ]]\nthen\n    echo -e \"No problems detected related to joblib imports\\n\"\nelse\n    echo -e \"\\nProblems detected by joblib import check\\n\"\n    global_status=1\nfi\n\necho -e \"### Linting completed ###\\n\"\n\nif [[ $global_status -eq 1 ]]\nthen\n    echo -e \"Linting failed\\n\"\n    exit 1\nelse\n    echo -e \"Linting passed\\n\"\n    exit 0\nfi",
+                "filename": "build_tools/linting.sh",
+                "start_index": 2808,
+                "end_index": 3791,
+                "start_line": 96,
+                "end_line": 125,
+                "max_line": 125,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"Compatibility fixes for older version of python, numpy and scipy\n\nIf you add content to this file, please give the version of the package\nat which the fix is no longer needed.\n\"\"\"\n# Authors: Emmanuelle Gouillart <emmanuelle.gouillart@normalesup.org>\n#          Gael Varoquaux <gael.varoquaux@normalesup.org>\n#          Fabian Pedregosa <fpedregosa@acm.org>\n#          Lars Buitinck\n#\n# License: BSD 3 clause\n\nimport sys\nfrom importlib import resources\n\nimport numpy as np\nimport scipy\nimport scipy.stats\nimport threadpoolctl\n\nimport sklearn\n\nfrom ..externals._packaging.version import parse as parse_version\nfrom .deprecation import deprecated\n\nnp_version = parse_version(np.__version__)\nsp_version = parse_version(scipy.__version__)\nsp_base_version = parse_version(sp_version.base_version)\n\n\ntry:\n    from scipy.optimize._linesearch import line_search_wolfe1, line_search_wolfe2\nexcept ImportError:  # SciPy < 1.8\n    from scipy.optimize.linesearch import line_search_wolfe2, line_search_wolfe1  # type: ignore  # noqa\n\n\ndef _object_dtype_isnan(X):\n    return X != X\n\n\n# Rename the `method` kwarg to `interpolation` for NumPy < 1.22, because\n# `interpolation` kwarg was deprecated in favor of `method` in NumPy >= 1.22.\ndef _percentile(a, q, *, method=\"linear\", **kwargs):\n    return np.percentile(a, q, interpolation=method, **kwargs)\n\n\nif np_version < parse_version(\"1.22\"):\n    percentile = _percentile\nelse:  # >= 1.22\n    from numpy import percentile  # type: ignore  # noqa\n\n\n# compatibility fix for threadpoolctl >= 3.0.0\n# since version 3 it's possible to setup a global threadpool controller to avoid\n# looping through all loaded shared libraries each time.\n# the global controller is created during the first call to threadpoolctl.\ndef _get_threadpool_controller():\n    if not hasattr(threadpoolctl, \"ThreadpoolController\"):\n        return None\n\n    if not hasattr(sklearn, \"_sklearn_threadpool_controller\"):\n        sklearn._sklearn_threadpool_controller = threadpoolctl.ThreadpoolController()\n\n    return sklearn._sklearn_threadpool_controller\n\n\ndef threadpool_limits(limits=None, user_api=None):\n    controller = _get_threadpool_controller()\n    if controller is not None:\n        return controller.limit(limits=limits, user_api=user_api)\n    else:\n        return threadpoolctl.threadpool_limits(limits=limits, user_api=user_api)\n\n\nthreadpool_limits.__doc__ = threadpoolctl.threadpool_limits.__doc__\n\n\ndef threadpool_info():\n    controller = _get_threadpool_controller()\n    if controller is not None:\n        return controller.info()\n    else:\n        return threadpoolctl.threadpool_info()\n\n\nthreadpool_info.__doc__ = threadpoolctl.threadpool_info.__doc__\n\n\n@deprecated(\n    \"The function `delayed` has been moved from `sklearn.utils.fixes` to \"\n    \"`sklearn.utils.parallel`. This import path will be removed in 1.5.\"\n)\ndef delayed(function):\n    from sklearn.utils.parallel import delayed\n\n    return delayed(function)",
+                "filename": "sklearn/utils/fixes.py",
+                "start_index": 0,
+                "end_index": 2939,
+                "start_line": 1,
+                "end_line": 96,
+                "max_line": 160,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def config_context(\n    *,\n    assume_finite=None,\n    working_memory=None,\n    print_changed_only=None,\n    display=None,\n    pairwise_dist_chunk_size=None,\n    enable_cython_pairwise_dist=None,\n    array_api_dispatch=None,\n    transform_output=None,\n    enable_metadata_routing=None,\n    skip_parameter_validation=None,\n):",
+                "filename": "sklearn/_config.py",
+                "start_index": 7195,
+                "end_index": 7519,
+                "start_line": 197,
+                "end_line": 334,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "old_config = get_config()\n    set_config(\n        assume_finite=assume_finite,\n        working_memory=working_memory,\n        print_changed_only=print_changed_only,\n        display=display,\n        pairwise_dist_chunk_size=pairwise_dist_chunk_size,\n        enable_cython_pairwise_dist=enable_cython_pairwise_dist,\n        array_api_dispatch=array_api_dispatch,\n        transform_output=transform_output,\n        enable_metadata_routing=enable_metadata_routing,\n        skip_parameter_validation=skip_parameter_validation,\n    )\n\n    try:\n        yield\n    finally:\n        set_config(**old_config)",
+                "filename": "sklearn/_config.py",
+                "start_index": 12428,
+                "end_index": 13025,
+                "start_line": 338,
+                "end_line": 355,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "def set_config(\n    assume_finite=None,\n    working_memory=None,\n    print_changed_only=None,\n    display=None,\n    pairwise_dist_chunk_size=None,\n    enable_cython_pairwise_dist=None,\n    array_api_dispatch=None,\n    transform_output=None,\n    enable_metadata_routing=None,\n    skip_parameter_validation=None,\n):",
+                "filename": "sklearn/_config.py",
+                "start_index": 1589,
+                "end_index": 1902,
+                "start_line": 50,
+                "end_line": 334,
+                "max_line": 355,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import importlib\nimport pickle\nimport re\nimport warnings\nfrom copy import deepcopy\nfrom functools import partial, wraps\nfrom inspect import signature\nfrom numbers import Integral, Real\n\nimport joblib\nimport numpy as np\nfrom scipy import sparse\nfrom scipy.stats import rankdata\n\nfrom .. import config_context\nfrom ..base import (\n    ClusterMixin,\n    RegressorMixin,\n    clone,\n    is_classifier,\n    is_outlier_detector,\n    is_regressor,\n)\nfrom ..datasets import (\n    load_iris,\n    make_blobs,\n    make_classification,\n    make_multilabel_classification,\n    make_regression,\n)\nfrom ..exceptions import DataConversionWarning, NotFittedError, SkipTestWarning\nfrom ..feature_selection import SelectFromModel, SelectKBest\nfrom ..linear_model import (\n    LinearRegression,\n    LogisticRegression,\n    RANSACRegressor,\n    Ridge,\n    SGDRegressor,\n)\nfrom ..metrics import accuracy_score, adjusted_rand_score, f1_score\nfrom ..metrics.pairwise import linear_kernel, pairwise_distances, rbf_kernel\nfrom ..model_selection import ShuffleSplit, train_test_split\nfrom ..model_selection._validation import _safe_split\nfrom ..pipeline import make_pipeline\nfrom ..preprocessing import StandardScaler, scale\nfrom ..random_projection import BaseRandomProjection\nfrom ..utils._array_api import (\n    _convert_to_numpy,\n    get_namespace,\n    yield_namespace_device_dtype_combinations,\n)\nfrom ..utils._array_api import (\n    device as array_device,\n)\nfrom ..utils._param_validation import (\n    InvalidParameterError,\n    generate_invalid_param_val,\n    make_constraint,\n)\nfrom ..utils.fixes import parse_version, sp_version\nfrom ..utils.validation import check_is_fitted\nfrom . import IS_PYPY, is_scalar_nan, shuffle\nfrom ._param_validation import Interval\nfrom ._tags import (\n    _DEFAULT_TAGS,\n    _safe_tags,\n)\nfrom ._testing import (\n    SkipTest,\n    _get_args,\n    assert_allclose,\n    assert_allclose_dense_sparse,\n    assert_array_almost_equal,\n    assert_array_equal,\n    assert_array_less,\n    assert_raise_message,\n    create_memmap_backed_data,\n    ignore_warnings,\n    raises,\n    set_random_state,\n)\nfrom .validation import _num_samples, has_fit_parameter\n\nREGRESSION_DATASET = None\nCROSS_DECOMPOSITION = [\"PLSCanonical\", \"PLSRegression\", \"CCA\", \"PLSSVD\"]",
+                "filename": "sklearn/utils/estimator_checks.py",
+                "start_index": 0,
+                "end_index": 2257,
+                "start_line": 1,
+                "end_line": 85,
+                "max_line": 4639,
+                "git_instance": "github",
+                "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "sklearn/utils/parallel.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"Module that customize joblib tools for scikit-learn usage.\"\"\"\n\nimport functools\nimport warnings\nfrom functools import update_wrapper\n\nimport joblib\n\nfrom .._config import config_context, get_config\n\n\ndef _with_config(delayed_func, config):\n    \"\"\"Helper function that intends to attach a config to a delayed function.\"\"\"\n    if hasattr(delayed_func, \"with_config\"):\n        return delayed_func.with_config(config)\n    else:\n        warnings.warn(\n            (\n                \"`sklearn.utils.parallel.Parallel` needs to be used in \"\n                \"conjunction with `sklearn.utils.parallel.delayed` instead of \"\n                \"`joblib.delayed` to correctly propagate the scikit-learn \"\n                \"configuration to the joblib workers.\"\n            ),\n            UserWarning,\n        )\n        return delayed_func\n\n\nclass Parallel(joblib.Parallel):\n    \"\"\"Tweak of :class:`joblib.Parallel` that propagates the scikit-learn configuration.\n\n    This subclass of :class:`joblib.Parallel` ensures that the active configuration\n    (thread-local) of scikit-learn is propagated to the parallel workers for the\n    duration of the execution of the parallel tasks.\n\n    The API does not change and you can refer to :class:`joblib.Parallel`\n    documentation for more details.\n\n    .. versionadded:: 1.3\n    \"\"\"\n\n    def __call__(self, iterable):\n        \"\"\"Dispatch the tasks and return the results.\n\n        Parameters\n        ----------\n        iterable : iterable\n            Iterable containing tuples of (delayed_function, args, kwargs) that should\n            be consumed.\n\n        Returns\n        -------\n        results : list\n            List of results of the tasks.\n        \"\"\"\n        # Capture the thread-local scikit-learn configuration at the time\n        # Parallel.__call__ is issued since the tasks can be dispatched\n        # in a different thread depending on the backend and on the value of\n        # pre_dispatch and n_jobs.\n        config = get_config()\n        iterable_with_config = (\n            (_with_config(delayed_func, config), args, kwargs)\n            for delayed_func, args, kwargs in iterable\n        )\n        return super().__call__(iterable_with_config)\n\n\n# remove when https://github.com/joblib/joblib/issues/1071 is fixed",
+                        "filename": "sklearn/utils/parallel.py",
+                        "start_index": 0,
+                        "end_index": 2265,
+                        "start_line": 1,
+                        "end_line": 68,
+                        "max_line": 127,
+                        "git_instance": "github",
+                        "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the custom `Parallel` class that overrides `joblib.Parallel` to ensure scikit-learn configuration is propagated to joblib workers, which is directly related to the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "def delayed(function):\n    \"\"\"Decorator used to capture the arguments of a function.\n\n    This alternative to `joblib.delayed` is meant to be used in conjunction\n    with `sklearn.utils.parallel.Parallel`. The latter captures the the scikit-\n    learn configuration by calling `sklearn.get_config()` in the current\n    thread, prior to dispatching the first task. The captured configuration is\n    then propagated and enabled for the duration of the execution of the\n    delayed function in the joblib workers.\n\n    .. versionchanged:: 1.3\n       `delayed` was moved from `sklearn.utils.fixes` to `sklearn.utils.parallel`\n       in scikit-learn 1.3.\n\n    Parameters\n    ----------\n    function : callable\n        The function to be delayed.\n\n    Returns\n    -------\n    output: tuple\n        Tuple containing the delayed function, the positional arguments, and the\n        keyword arguments.\n    \"\"\"\n\n    @functools.wraps(function)\n    def delayed_function(*args, **kwargs):\n        return _FuncWrapper(function), args, kwargs\n\n    return delayed_function\n\n\nclass _FuncWrapper:\n    \"\"\"Load the global configuration before calling the function.\"\"\"\n\n    def __init__(self, function):\n        self.function = function\n        update_wrapper(self, self.function)\n\n    def with_config(self, config):\n        self.config = config\n        return self\n\n    def __call__(self, *args, **kwargs):\n        config = getattr(self, \"config\", None)\n        if config is None:\n            warnings.warn(\n                (\n                    \"`sklearn.utils.parallel.delayed` should be used with\"\n                    \" `sklearn.utils.parallel.Parallel` to make it possible to\"\n                    \" propagate the scikit-learn configuration of the current thread to\"\n                    \" the joblib workers.\"\n                ),\n                UserWarning,\n            )\n            config = {}\n        with config_context(**config):\n            return self.function(*args, **kwargs)",
+                        "filename": "sklearn/utils/parallel.py",
+                        "start_index": 2266,
+                        "end_index": 4232,
+                        "start_line": 69,
+                        "end_line": 127,
+                        "max_line": 127,
+                        "git_instance": "github",
+                        "repo_name": "testbed/scikit-learn__scikit-learn__1.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the `delayed` decorator that is used in conjunction with the custom `Parallel` class to capture function arguments and propagate configuration, which is relevant to the issue."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `__call__` method in the `Parallel` class to check if `config` is not None before creating `iterable_with_config`. If `config` is None, raise a warning that the configuration must be passed explicitly.\n- In the `_FuncWrapper` class, modify the `__call__` method to check if `self.config` is not None before executing the function with `config_context`. If `self.config` is None, raise a warning that the configuration must be passed explicitly.\n- Ensure that the `delayed` decorator in `sklearn/utils/parallel.py` is used instead of `joblib.delayed` throughout the codebase to maintain the correct configuration passing.\n- Update the `linting.sh` script to check for improper usage of `joblib.delayed` and `joblib.Parallel` and enforce the use of `sklearn.utils.parallel.delayed` and `sklearn.utils.parallel.Parallel`.\n- Remove the deprecated `delayed` function from `sklearn/utils/fixes.py` as it should now be used from `sklearn/utils/parallel.py`.",
+        "bouncer_response": {
+            "score": 7,
+            "criteria": "The RESPONSE must provide actionable, relevant guidance to more parts of the PROMPT's described issue to score higher.",
+            "supporting_evidence": "The RESPONSE provides a series of actionable steps that are relevant to the issue described in the PROMPT. It suggests modifying the `__call__` method in the `Parallel` class to ensure that a configuration is passed explicitly, which is directly related to the problem of ensuring that the correct configuration is used across different threads. It also recommends updating the `_FuncWrapper` class and the use of the `delayed` decorator to enforce explicit configuration passing. Additionally, the RESPONSE proposes updating the `linting.sh` script to enforce proper usage of the `delayed` and `Parallel` functions, which is a proactive step to prevent future issues. Lastly, it advises removing deprecated code, which is a good practice for maintaining clean codebases. However, the RESPONSE does not provide specific code examples or patches, which would be necessary to fully resolve the issue. It also does not address the warning that should be raised if the configuration is not passed, which is mentioned in the PROMPT.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711738729.189974,
+        "result": "- Modify the `__call__` method in the `Parallel` class to check if `config` is not None before creating `iterable_with_config`. If `config` is None, raise a warning that the configuration must be passed explicitly.\n- In the `_FuncWrapper` class, modify the `__call__` method to check if `self.config` is not None before executing the function with `config_context`. If `self.config` is None, raise a warning that the configuration must be passed explicitly.\n- Ensure that the `delayed` decorator in `sklearn/utils/parallel.py` is used instead of `joblib.delayed` throughout the codebase to maintain the correct configuration passing.\n- Update the `linting.sh` script to check for improper usage of `joblib.delayed` and `joblib.Parallel` and enforce the use of `sklearn.utils.parallel.delayed` and `sklearn.utils.parallel.Parallel`.\n- Remove the deprecated `delayed` function from `sklearn/utils/fixes.py` as it should now be used from `sklearn/utils/parallel.py`.\n\n### Code snippets to check\n\n-  \u2192 [sklearn](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn) \u2192 [utils](https://github.com/testbed/scikit-learn__scikit-learn__1.3/tree//sklearn/utils)- [Lines 1 - 68](https://github.com/testbed/scikit-learn__scikit-learn__1.3/blob//sklearn/utils/parallel.py#L1-L68)\n\n This snippet defines the custom `Parallel` class that overrides `joblib.Parallel` to ensure scikit-learn configuration is propagated to joblib workers, which is directly related to the issue. \n\n\n   - [Lines 69 - 127](https://github.com/testbed/scikit-learn__scikit-learn__1.3/blob//sklearn/utils/parallel.py#L69-L127)\n\n This snippet defines the `delayed` decorator that is used in conjunction with the custom `Parallel` class to capture function arguments and propagate configuration, which is relevant to the issue.",
+        "context_relevance": 0.51,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer the entire PROMPT completely to get a score of 10.\nSupporting Evidence: The RESPONSE provides a detailed solution to the problem described in the PROMPT, addressing the explicit passing of configuration to the `delayed` function in the context of scikit-learn and joblib. It suggests modifications to the `Parallel` and `_FuncWrapper` classes to ensure the configuration is passed explicitly and raises warnings if not. It also recommends updating the codebase to use the correct `delayed` decorator and updating the linting script to enforce these changes. The RESPONSE is directly related to the code snippets provided in the PROMPT, which discuss the `Parallel` class and `delayed` decorator in `sklearn/utils/parallel.py`. The RESPONSE is comprehensive and answers the entire PROMPT completely, thus deserving a score of 10."
+        },
+        "qa_relevance": 1.0
+    }
+}

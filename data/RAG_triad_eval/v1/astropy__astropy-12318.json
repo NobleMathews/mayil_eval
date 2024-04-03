@@ -1,0 +1,251 @@
+{
+    "id": "astropy__astropy-12318",
+    "repo_name": "testbed/astropy__astropy__4.3",
+    "task_id": 850275406438502731,
+    "title": "BlackBody bolometric flux is wrong if scale has units of dimensionless_unscaled",
+    "body": "The `astropy.modeling.models.BlackBody` class has the wrong bolometric flux if `scale` argument is passed as a Quantity with `dimensionless_unscaled` units, but the correct bolometric flux if `scale` is simply a float.\r\n\r\n### Description\r\n<!-- Provide a general description of the bug. -->\r\n\r\n### Expected behavior\r\nExpected output from sample code:\r\n\r\n```\r\n4.823870774433646e-16 erg / (cm2 s)\r\n4.823870774433646e-16 erg / (cm2 s)\r\n```\r\n\r\n### Actual behavior\r\nActual output from sample code:\r\n\r\n```\r\n4.5930032795393893e+33 erg / (cm2 s)\r\n4.823870774433646e-16 erg / (cm2 s)\r\n```\r\n\r\n### Steps to Reproduce\r\nSample code:\r\n\r\n```python\r\nfrom astropy.modeling.models import BlackBody\r\nfrom astropy import units as u\r\nimport numpy as np\r\n\r\nT = 3000 * u.K\r\nr = 1e14 * u.cm\r\nDL = 100 * u.Mpc\r\nscale = np.pi * (r / DL)**2\r\n\r\nprint(BlackBody(temperature=T, scale=scale).bolometric_flux)\r\nprint(BlackBody(temperature=T, scale=scale.to_value(u.dimensionless_unscaled)).bolometric_flux)\r\n```\r\n\r\n### System Details\r\n```pycon\r\n>>> import numpy; print(\"Numpy\", numpy.__version__)\r\nNumpy 1.20.2\r\n>>> import astropy; print(\"astropy\", astropy.__version__)\r\nastropy 4.3.dev758+g1ed1d945a\r\n>>> import scipy; print(\"Scipy\", scipy.__version__)\r\nTraceback (most recent call last):\r\n  File \"<stdin>\", line 1, in <module>\r\nModuleNotFoundError: No module named 'scipy'\r\n>>> import matplotlib; print(\"Matplotlib\", matplotlib.__version__)\r\nTraceback (most recent call last):\r\n  File \"<stdin>\", line 1, in <module>\r\nModuleNotFoundError: No module named 'matplotlib'\r\n```\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/astropy__astropy__4.3.git",
+    "requested_commit": "",
+    "mayil_response": "Based on the provided information, the issue seems to be related to the handling of the `scale` parameter in the `BlackBody` class, specifically when `scale` is a `Quantity` with `dimensionless_unscaled` units. The expected output is not consistent with the actual output when `scale` is used as a `Quantity`.\n\nTo resolve the issue, consider the following changes:\n\n- In the `bolometric_flux` property, ensure that `scale` is properly converted to a dimensionless unscaled value before using it in calculations.\n- In the `__init__` method, ensure that the `scale` parameter is correctly initialized, taking into account whether it is passed as a float or a `Quantity`.\n- In the `evaluate` method, ensure that `scale` is correctly applied to the blackbody spectrum calculation, and that it is stripped of any units before being used in the final calculation.\n\nHere is a concise solution:\n\n- Modify the `bolometric_flux` property to correctly handle `scale` as a `Quantity`:\n\n```python\n@property\ndef bolometric_flux(self):\n    \"\"\"Bolometric flux.\"\"\"\n    if hasattr(self.scale, 'unit'):\n        scale = self.scale.to_value(u.dimensionless_unscaled)\n    else:\n        scale = self.scale.value\n\n    native_bolflux = scale * const.sigma_sb * self.temperature**4 / np.pi\n    return native_bolflux.to(u.erg / (u.cm**2 * u.s))\n```\n\n- Ensure that the `__init__` method correctly initializes the `scale` parameter:\n\n```python\ndef __init__(self, *args, **kwargs):\n    scale = kwargs.get(\"scale\", None)\n    if hasattr(scale, \"unit\") and not scale.unit.is_equivalent(u.dimensionless_unscaled):\n        output_units = scale.unit\n        if not output_units.is_equivalent(self._native_units, u.spectral_density(1 * u.AA)):\n            raise ValueError(\"scale units not dimensionless or in surface brightness: {output_units}\")\n        kwargs[\"scale\"] = scale.to_value(u.dimensionless_unscaled)\n    else:\n        self._output_units = self._native_units\n    super().__init__(*args, **kwargs)\n```\n\n- In the `evaluate` method, ensure that `scale` is correctly applied:\n\n```python\ndef evaluate(self, x, temperature, scale):\n    # ... [existing code] ...\n    if hasattr(scale, 'unit'):\n        scale = scale.to_value(u.dimensionless_unscaled)\n    y = scale * bb_nu.to(self._output_units, u.spectral_density(freq))\n    if hasattr(temperature, \"unit\"):\n        return y\n    return y.value\n```\n\nThese changes should ensure that the `scale` parameter is handled correctly, whether it is a dimensionless float or a `Quantity` with `dimensionless_unscaled` units, and that the expected output is produced.\n\n### Code snippets to check\n\n-  \u2192 [astropy](https://github.com/testbed/astropy__astropy__4.3/tree//astropy) \u2192 [modeling](https://github.com/testbed/astropy__astropy__4.3/tree//astropy/modeling)- [Lines 2 - 806](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L2-L806)\n\n This snippet defines the BlackBody model, including the parameters and their expected units. It is relevant because the issue is related to the handling of the 'scale' parameter when it has 'dimensionless_unscaled' units. \n\n\n   - [Lines 213 - 248](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L213-L248)\n\n This snippet contains the 'bolometric_flux' property, which is the method returning incorrect values according to the issue. It is relevant as it likely contains the logic that needs to be fixed. \n\n\n   - [Lines 99 - 121](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L99-L121)\n\n This snippet includes the '__init__' method of the BlackBody class, where the 'scale' parameter is processed. It is relevant because the issue may be related to how the 'scale' parameter is initialized with units. \n\n\n   - [Lines 124 - 203](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L124-L203)\n\n This snippet is part of the 'evaluate' method of the BlackBody class, which calculates the blackbody spectrum. It is relevant because it includes the handling of the 'scale' parameter and may contain the logic that leads to the incorrect bolometric flux. \n\n\n   - [Lines 204 - 211](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L204-L211)\n\n This snippet is the continuation of the 'evaluate' method where the final blackbody spectrum is scaled and returned. It is relevant because it shows how the 'scale' parameter affects the output and may be part of the issue.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00037749999999999996,
+        "snippet_processor": 0.05247,
+        "issue_star_creation": 0.04722,
+        "issue_star_solver": 0.06335,
+        "bouncer": 0.03012
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711737307.785038,
+        "relevant_snippets": [
+            {
+                "code": "\"\"\"\n    Blackbody model using the Planck function.\n\n    Parameters\n    ----------\n    temperature : `~astropy.units.Quantity` ['temperature']\n        Blackbody temperature.\n\n    scale : float or `~astropy.units.Quantity` ['dimensionless']\n        Scale factor.  If dimensionless, input units will assumed\n        to be in Hz and output units in (erg / (cm ** 2 * s * Hz * sr).\n        If not dimensionless, must be equivalent to either\n        (erg / (cm ** 2 * s * Hz * sr) or erg / (cm ** 2 * s * AA * sr),\n        in which case the result will be returned in the requested units and\n        the scale will be stripped of units (with the float value applied).\n\n    Notes\n    -----\n    Model formula:\n\n        .. math:: B_{\\\\nu}(T) = A \\\\frac{2 h \\\\nu^{3} / c^{2}}{exp(h \\\\nu / k T) - 1}\n\n    Examples\n    --------\n    >>> from astropy.modeling import models\n    >>> from astropy import units as u\n    >>> bb = models.BlackBody(temperature=5000*u.K)\n    >>> bb(6000 * u.AA)  # doctest: +FLOAT_CMP\n    <Quantity 1.53254685e-05 erg / (Hz s sr cm2)>\n\n    .. plot::\n        :include-source:\n\n        import numpy as np\n        import matplotlib.pyplot as plt\n\n        from astropy.modeling.models import BlackBody\n        from astropy import units as u\n        from astropy.visualization import quantity_support\n\n        bb = BlackBody(temperature=5778*u.K)\n        wav = np.arange(1000, 110000) * u.AA\n        flux = bb(wav)\n\n        with quantity_support():\n            plt.figure()\n            plt.semilogx(wav, flux)\n            plt.axvline(bb.nu_max.to(u.AA, equivalencies=u.spectral()).value, ls='--')\n            plt.show()\n    \"\"\"\n\n    # We parametrize this model with a temperature and a scale.\n    temperature = Parameter(\n        default=5000.0, min=0, unit=u.K, description=\"Blackbody temperature\"\n    )\n    scale = Parameter(default=1.0, min=0, description=\"Scale factor\")\n\n    # We allow values without units to be passed when evaluating the model, and\n    # in this case the input x values are assumed to be frequencies in Hz or wavelengths\n    # in AA (depending on the choice of output units controlled by units on scale\n    # and stored in self._output_units during init).\n    _input_units_allow_dimensionless = True\n\n    # We enable the spectral equivalency by default for the spectral axis\n    input_units_equivalencies = {\"x\": u.spectral()}\n\n    # Store the native units returned by B_nu equation\n    _native_units = u.erg / (u.cm**2 * u.s * u.Hz * u.sr)\n\n    # Store the base native output units.  If scale is not dimensionless, it\n    # must be equivalent to one of these.  If equivalent to SLAM, then\n    # input_units will expect AA for 'x', otherwise Hz.\n    _native_output_units = {\n        \"SNU\": u.erg / (u.cm**2 * u.s * u.Hz * u.sr),\n        \"SLAM\": u.erg / (u.cm**2 * u.s * u.AA * u.sr),\n    }",
+                "filename": "astropy/modeling/physical_models.py",
+                "start_index": 499,
+                "end_index": 3320,
+                "start_line": 2,
+                "end_line": 806,
+                "max_line": 809,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "\"\"\"Evaluate the model.\n\n        Parameters\n        ----------\n        x : float, `~numpy.ndarray`, or `~astropy.units.Quantity` ['frequency']\n            Frequency at which to compute the blackbody. If no units are given,\n            this defaults to Hz (or AA if `scale` was initialized with units\n            equivalent to erg / (cm ** 2 * s * AA * sr)).\n\n        temperature : float, `~numpy.ndarray`, or `~astropy.units.Quantity`\n            Temperature of the blackbody. If no units are given, this defaults\n            to Kelvin.\n\n        scale : float, `~numpy.ndarray`, or `~astropy.units.Quantity` ['dimensionless']\n            Desired scale for the blackbody.\n\n        Returns\n        -------\n        y : number or ndarray\n            Blackbody spectrum. The units are determined from the units of\n            ``scale``.\n\n        .. note::\n\n            Use `numpy.errstate` to suppress Numpy warnings, if desired.\n\n        .. warning::\n\n            Output values might contain ``nan`` and ``inf``.\n\n        Raises\n        ------\n        ValueError\n            Invalid temperature.\n\n        ZeroDivisionError\n            Wavelength is zero (when converting to frequency).\n        \"\"\"\n        if not isinstance(temperature, u.Quantity):\n            in_temp = u.Quantity(temperature, u.K)\n        else:\n            in_temp = temperature\n\n        if not isinstance(x, u.Quantity):\n            # then we assume it has input_units which depends on the\n            # requested output units (either Hz or AA)\n            in_x = u.Quantity(x, self.input_units[\"x\"])\n        else:\n            in_x = x\n\n        # Convert to units for calculations, also force double precision\n        with u.add_enabled_equivalencies(u.spectral() + u.temperature()):\n            freq = u.Quantity(in_x, u.Hz, dtype=np.float64)\n            temp = u.Quantity(in_temp, u.K)\n\n        # Check if input values are physically possible\n        if np.any(temp < 0):\n            raise ValueError(f\"Temperature should be positive: {temp}\")\n        if not np.all(np.isfinite(freq)) or np.any(freq <= 0):\n            warnings.warn(\n                \"Input contains invalid wavelength/frequency value(s)\",\n                AstropyUserWarning,\n            )\n\n        log_boltz = const.h * freq / (const.k_B * temp)\n        boltzm1 = np.expm1(log_boltz)\n\n        # Calculate blackbody flux\n        bb_nu = 2.0 * const.h * freq**3 / (const.c**2 * boltzm1) / u.sr\n\n        if self.scale.unit is not None:\n            # Will be dimensionless at this point, but may not be dimensionless_unscaled\n            if not hasattr(scale, \"unit\"):\n                # during fitting, scale will be passed without units\n                # but we still need to convert from the input dimensionless\n                # to dimensionless unscaled\n                scale = scale * self.scale.unit\n            scale = scale.to(u.dimensionless_unscaled).value\n\n        # NOTE: scale is already stripped of any input units",
+                "filename": "astropy/modeling/physical_models.py",
+                "start_index": 4236,
+                "end_index": 7195,
+                "start_line": 124,
+                "end_line": 203,
+                "max_line": 809,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "@property\n    def input_units(self):\n        # The input units are those of the 'x' value, which will depend on the\n        # units compatible with the expected output units.\n        if self._output_units.is_equivalent(self._native_output_units[\"SNU\"]):\n            return {self.inputs[0]: u.Hz}\n        else:\n            # only other option is equivalent with SLAM\n            return {self.inputs[0]: u.AA}\n\n    def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):\n        return {\"temperature\": u.K}\n\n    @property\n    def bolometric_flux(self):\n        \"\"\"Bolometric flux.\"\"\"\n        if self.scale.unit is not None:\n            # Will be dimensionless at this point, but may not be dimensionless_unscaled\n            scale = self.scale.quantity.to(u.dimensionless_unscaled)\n        else:\n            scale = self.scale.value\n\n        # bolometric flux in the native units of the planck function\n        native_bolflux = scale * const.sigma_sb * self.temperature**4 / np.pi\n        # return in more \"astro\" units\n        return native_bolflux.to(u.erg / (u.cm**2 * u.s))\n\n    @property\n    def lambda_max(self):\n        \"\"\"Peak wavelength when the curve is expressed as power density.\"\"\"\n        return const.b_wien / self.temperature\n\n    @property\n    def nu_max(self):\n        \"\"\"Peak frequency when the curve is expressed as power density.\"\"\"\n        return 2.8214391 * const.k_B * self.temperature / const.h",
+                "filename": "astropy/modeling/physical_models.py",
+                "start_index": 7547,
+                "end_index": 8978,
+                "start_line": 213,
+                "end_line": 248,
+                "max_line": 809,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "def __init__(self, *args, **kwargs):\n        scale = kwargs.get(\"scale\", None)\n\n        # Support scale with non-dimensionless unit by stripping the unit and\n        # storing as self._output_units.\n        if hasattr(scale, \"unit\") and not scale.unit.is_equivalent(\n            u.dimensionless_unscaled\n        ):\n            output_units = scale.unit\n            if not output_units.is_equivalent(\n                self._native_units, u.spectral_density(1 * u.AA)\n            ):\n                raise ValueError(\n                    \"scale units not dimensionless or in \"\n                    f\"surface brightness: {output_units}\"\n                )\n\n            kwargs[\"scale\"] = scale.value\n            self._output_units = output_units\n        else:\n            self._output_units = self._native_units\n\n        return super().__init__(*args, **kwargs)",
+                "filename": "astropy/modeling/physical_models.py",
+                "start_index": 3326,
+                "end_index": 4179,
+                "start_line": 99,
+                "end_line": 121,
+                "max_line": 809,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "y = scale * bb_nu.to(self._output_units, u.spectral_density(freq))\n\n        # If the temperature parameter has no unit, we should return a unitless\n        # value. This occurs for instance during fitting, since we drop the\n        # units temporarily.\n        if hasattr(temperature, \"unit\"):\n            return y\n        return y.value",
+                "filename": "astropy/modeling/physical_models.py",
+                "start_index": 7204,
+                "end_index": 7541,
+                "start_line": 204,
+                "end_line": 211,
+                "max_line": 809,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "name: Bug report\ndescription: Create a report describing unexpected or incorrect behavior in astropy.\nlabels: Bug\nbody:\n  - type: markdown\n    attributes:\n      value: >-\n        Thanks for taking the time to fill out this bug report!\n        Please have a search on our GitHub repository to see if a similar\n        issue has already been posted. If a similar issue is closed, have a\n        quick look to see if you are satisfied by the resolution.\n        If not please go ahead and open an issue!\n        Please check that the\n        [development version](https://docs.astropy.org/en/latest/development/workflow/get_devel_version.html)\n        still produces the same bug.\n  - type: textarea\n    attributes:\n      label: Description\n      description: >-\n        A clear and concise description of what the bug is.\n  - type: textarea\n    attributes:\n      label: Expected behavior\n      description: >-\n        A clear and concise description of what you expected to happen.\n  - type: textarea\n    attributes:\n      label: How to Reproduce\n      description: >-\n        A clear and concise description of what actually happened instead.\n        Was the output confusing or poorly described? Please provide steps to reproduce this bug.\n      value: |\n        1. Get package from '...'\n        2. Then run '...'\n        3. An error occurs.\n\n        ```python\n        # Put your Python code snippet here.\n        ```\n  - type: textarea\n    attributes:\n      label: Versions\n      description: Version of relevant packages.\n      value: |\n        import platform; print(platform.platform())\n        import sys; print(\"Python\", sys.version)\n        import astropy; print(\"astropy\", astropy.__version__)\n        import numpy; print(\"Numpy\", numpy.__version__)\n        import erfa; print(\"pyerfa\", erfa.__version__)\n        import scipy; print(\"Scipy\", scipy.__version__)\n        import matplotlib; print(\"Matplotlib\", matplotlib.__version__)",
+                "filename": ".github/ISSUE_TEMPLATE/bug_report.yaml",
+                "start_index": 0,
+                "end_index": 1940,
+                "start_line": 1,
+                "end_line": 51,
+                "max_line": 51,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "class BlackBody(Fittable1DModel):",
+                "filename": "astropy/modeling/physical_models.py",
+                "start_index": 461,
+                "end_index": 494,
+                "start_line": 21,
+                "end_line": 21,
+                "max_line": 809,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "lass Dex(LogQuantity):\n    _unit_class = DexUnit\n\n\nclass Decibel(LogQuantity):\n    _unit_class = DecibelUnit\n\n\nclass Magnitude(LogQuantity):\n    _unit_class = MagUnit\n\n\ndex._function_unit_class = DexUnit\ndB._function_unit_class = DecibelUnit\nmag._function_unit_class = MagUnit\n\n\nSTmag = MagUnit(photometric.STflux)\nSTmag.__doc__ = \"ST magnitude: STmag=-21.1 corresponds to 1 erg/s/cm2/A\"\n\nABmag = MagUnit(photometric.ABflux)\nABmag.__doc__ = \"AB magnitude: ABmag=-48.6 corresponds to 1 erg/s/cm2/Hz\"\n\nM_bol = MagUnit(photometric.Bol)\nM_bol.__doc__ = (\n    f\"Absolute bolometric magnitude: M_bol=0 corresponds to L_bol0={photometric.Bol.si}\"\n)\n\nm_bol = MagUnit(photometric.bol)\nm_bol.__doc__ = (\n    f\"Apparent bolometric magnitude: m_bol=0 corresponds to f_bol0={photometric.bol.si}\"\n)",
+                "filename": "astropy/units/function/logarithmic.py",
+                "start_index": 14457,
+                "end_index": 15241,
+                "start_line": 410,
+                "end_line": 441,
+                "max_line": 441,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "# Licensed under a 3-clause BSD style license - see LICENSE.rst\n\n\"\"\"\nThis module defines magnitude zero points and related photometric quantities.\n\nThe corresponding magnitudes are given in the description of each unit\n(the actual definitions are in `~astropy.units.function.logarithmic`).\n\"\"\"\n\n\nimport numpy as _numpy\n\nfrom astropy.constants import si as _si\n\nfrom . import astrophys, cgs, si\nfrom .core import Unit, UnitBase, def_unit\n\n_ns = globals()\n\ndef_unit(\n    [\"Bol\", \"L_bol\"],\n    _si.L_bol0,\n    namespace=_ns,\n    prefixes=False,\n    doc=(\n        \"Luminosity corresponding to absolute bolometric magnitude zero \"\n        \"(magnitude ``M_bol``).\"\n    ),\n)\ndef_unit(\n    [\"bol\", \"f_bol\"],\n    _si.L_bol0 / (4 * _numpy.pi * (10.0 * astrophys.pc) ** 2),\n    namespace=_ns,\n    prefixes=False,\n    doc=(\n        \"Irradiance corresponding to appparent bolometric magnitude zero \"\n        \"(magnitude ``m_bol``).\"\n    ),\n)\ndef_unit(\n    [\"AB\", \"ABflux\"],\n    10.0 ** (48.6 / -2.5) * cgs.erg * cgs.cm**-2 / si.s / si.Hz,\n    namespace=_ns,\n    prefixes=False,\n    doc=\"AB magnitude zero flux density (magnitude ``ABmag``).\",\n)\ndef_unit(\n    [\"ST\", \"STflux\"],\n    10.0 ** (21.1 / -2.5) * cgs.erg * cgs.cm**-2 / si.s / si.AA,\n    namespace=_ns,\n    prefixes=False,\n    doc=\"ST magnitude zero flux density (magnitude ``STmag``).\",\n)\ndef_unit(\n    [\"mgy\", \"maggy\"],\n    namespace=_ns,\n    prefixes=[([\"n\"], [\"nano\"], 1e-9)],\n    doc=(\n        \"Maggies - a linear flux unit that is the flux for a mag=0 object.\"\n        \"To tie this onto a specific calibrated unit system, the \"\n        \"zero_point_flux equivalency should be used.\"\n    ),\n)\n\n\ndef zero_point_flux(flux0):\n    \"\"\"\n    An equivalency for converting linear flux units (\"maggys\") defined relative\n    to a standard source into a standardized system.\n\n    Parameters\n    ----------\n    flux0 : `~astropy.units.Quantity`\n        The flux of a magnitude-0 object in the \"maggy\" system.\n    \"\"\"\n    flux_unit0 = Unit(flux0)\n    return [(maggy, flux_unit0)]\n\n\n###########################################################################\n# CLEANUP\n\ndel UnitBase\ndel def_unit\ndel cgs, si, astrophys\n\n###########################################################################\n# DOCSTRING\n\nif __doc__ is not None:\n    # This generates a docstring for this module that describes all of the\n    # standard units defined here.\n    from .utils import generate_unit_summary as _generate_unit_summary\n\n    __doc__ += _generate_unit_summary(globals())",
+                "filename": "astropy/units/photometric.py",
+                "start_index": 0,
+                "end_index": 2498,
+                "start_line": 1,
+                "end_line": 95,
+                "max_line": 95,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "factor_K = (astrophys.Jy / (2 * _si.k_B * nu**2 / _si.c**2)).to(si.K).value\n\n    if beam_area is not None:\n        beam = beam_area.to_value(si.sr)\n\n        def convert_Jy_to_K(x_jybm):\n            return x_jybm / beam / factor_Jy\n\n        def convert_K_to_Jy(x_K):\n            return x_K * beam / factor_K\n\n        return Equivalency(\n            [\n                (astrophys.Jy, si.K, convert_Jy_to_K, convert_K_to_Jy),\n                (astrophys.Jy / astrophys.beam, si.K, convert_Jy_to_K, convert_K_to_Jy),\n            ],\n            \"brightness_temperature\",\n            {\"frequency\": frequency, \"beam_area\": beam_area},\n        )\n    else:\n\n        def convert_JySr_to_K(x_jysr):\n            return x_jysr / factor_Jy\n\n        def convert_K_to_JySr(x_K):\n            return x_K / factor_K  # multiplied by 1x for 1 steradian\n\n        return Equivalency(\n            [(astrophys.Jy / si.sr, si.K, convert_JySr_to_K, convert_K_to_JySr)],\n            \"brightness_temperature\",\n            {\"frequency\": frequency, \"beam_area\": beam_area},\n        )",
+                "filename": "astropy/units/equivalencies.py",
+                "start_index": 22722,
+                "end_index": 23773,
+                "start_line": 665,
+                "end_line": 904,
+                "max_line": 908,
+                "git_instance": "github",
+                "repo_name": "testbed/astropy__astropy__4.3",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "astropy/modeling/physical_models.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    Blackbody model using the Planck function.\n\n    Parameters\n    ----------\n    temperature : `~astropy.units.Quantity` ['temperature']\n        Blackbody temperature.\n\n    scale : float or `~astropy.units.Quantity` ['dimensionless']\n        Scale factor.  If dimensionless, input units will assumed\n        to be in Hz and output units in (erg / (cm ** 2 * s * Hz * sr).\n        If not dimensionless, must be equivalent to either\n        (erg / (cm ** 2 * s * Hz * sr) or erg / (cm ** 2 * s * AA * sr),\n        in which case the result will be returned in the requested units and\n        the scale will be stripped of units (with the float value applied).\n\n    Notes\n    -----\n    Model formula:\n\n        .. math:: B_{\\\\nu}(T) = A \\\\frac{2 h \\\\nu^{3} / c^{2}}{exp(h \\\\nu / k T) - 1}\n\n    Examples\n    --------\n    >>> from astropy.modeling import models\n    >>> from astropy import units as u\n    >>> bb = models.BlackBody(temperature=5000*u.K)\n    >>> bb(6000 * u.AA)  # doctest: +FLOAT_CMP\n    <Quantity 1.53254685e-05 erg / (Hz s sr cm2)>\n\n    .. plot::\n        :include-source:\n\n        import numpy as np\n        import matplotlib.pyplot as plt\n\n        from astropy.modeling.models import BlackBody\n        from astropy import units as u\n        from astropy.visualization import quantity_support\n\n        bb = BlackBody(temperature=5778*u.K)\n        wav = np.arange(1000, 110000) * u.AA\n        flux = bb(wav)\n\n        with quantity_support():\n            plt.figure()\n            plt.semilogx(wav, flux)\n            plt.axvline(bb.nu_max.to(u.AA, equivalencies=u.spectral()).value, ls='--')\n            plt.show()\n    \"\"\"\n\n    # We parametrize this model with a temperature and a scale.\n    temperature = Parameter(\n        default=5000.0, min=0, unit=u.K, description=\"Blackbody temperature\"\n    )\n    scale = Parameter(default=1.0, min=0, description=\"Scale factor\")\n\n    # We allow values without units to be passed when evaluating the model, and\n    # in this case the input x values are assumed to be frequencies in Hz or wavelengths\n    # in AA (depending on the choice of output units controlled by units on scale\n    # and stored in self._output_units during init).\n    _input_units_allow_dimensionless = True\n\n    # We enable the spectral equivalency by default for the spectral axis\n    input_units_equivalencies = {\"x\": u.spectral()}\n\n    # Store the native units returned by B_nu equation\n    _native_units = u.erg / (u.cm**2 * u.s * u.Hz * u.sr)\n\n    # Store the base native output units.  If scale is not dimensionless, it\n    # must be equivalent to one of these.  If equivalent to SLAM, then\n    # input_units will expect AA for 'x', otherwise Hz.\n    _native_output_units = {\n        \"SNU\": u.erg / (u.cm**2 * u.s * u.Hz * u.sr),\n        \"SLAM\": u.erg / (u.cm**2 * u.s * u.AA * u.sr),\n    }",
+                        "filename": "astropy/modeling/physical_models.py",
+                        "start_index": 499,
+                        "end_index": 3320,
+                        "start_line": 2,
+                        "end_line": 806,
+                        "max_line": 809,
+                        "git_instance": "github",
+                        "repo_name": "testbed/astropy__astropy__4.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the BlackBody model, including the parameters and their expected units. It is relevant because the issue is related to the handling of the 'scale' parameter when it has 'dimensionless_unscaled' units."
+                },
+                {
+                    "chunk": {
+                        "code": "@property\n    def input_units(self):\n        # The input units are those of the 'x' value, which will depend on the\n        # units compatible with the expected output units.\n        if self._output_units.is_equivalent(self._native_output_units[\"SNU\"]):\n            return {self.inputs[0]: u.Hz}\n        else:\n            # only other option is equivalent with SLAM\n            return {self.inputs[0]: u.AA}\n\n    def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):\n        return {\"temperature\": u.K}\n\n    @property\n    def bolometric_flux(self):\n        \"\"\"Bolometric flux.\"\"\"\n        if self.scale.unit is not None:\n            # Will be dimensionless at this point, but may not be dimensionless_unscaled\n            scale = self.scale.quantity.to(u.dimensionless_unscaled)\n        else:\n            scale = self.scale.value\n\n        # bolometric flux in the native units of the planck function\n        native_bolflux = scale * const.sigma_sb * self.temperature**4 / np.pi\n        # return in more \"astro\" units\n        return native_bolflux.to(u.erg / (u.cm**2 * u.s))\n\n    @property\n    def lambda_max(self):\n        \"\"\"Peak wavelength when the curve is expressed as power density.\"\"\"\n        return const.b_wien / self.temperature\n\n    @property\n    def nu_max(self):\n        \"\"\"Peak frequency when the curve is expressed as power density.\"\"\"\n        return 2.8214391 * const.k_B * self.temperature / const.h",
+                        "filename": "astropy/modeling/physical_models.py",
+                        "start_index": 7547,
+                        "end_index": 8978,
+                        "start_line": 213,
+                        "end_line": 248,
+                        "max_line": 809,
+                        "git_instance": "github",
+                        "repo_name": "testbed/astropy__astropy__4.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the 'bolometric_flux' property, which is the method returning incorrect values according to the issue. It is relevant as it likely contains the logic that needs to be fixed."
+                },
+                {
+                    "chunk": {
+                        "code": "def __init__(self, *args, **kwargs):\n        scale = kwargs.get(\"scale\", None)\n\n        # Support scale with non-dimensionless unit by stripping the unit and\n        # storing as self._output_units.\n        if hasattr(scale, \"unit\") and not scale.unit.is_equivalent(\n            u.dimensionless_unscaled\n        ):\n            output_units = scale.unit\n            if not output_units.is_equivalent(\n                self._native_units, u.spectral_density(1 * u.AA)\n            ):\n                raise ValueError(\n                    \"scale units not dimensionless or in \"\n                    f\"surface brightness: {output_units}\"\n                )\n\n            kwargs[\"scale\"] = scale.value\n            self._output_units = output_units\n        else:\n            self._output_units = self._native_units\n\n        return super().__init__(*args, **kwargs)",
+                        "filename": "astropy/modeling/physical_models.py",
+                        "start_index": 3326,
+                        "end_index": 4179,
+                        "start_line": 99,
+                        "end_line": 121,
+                        "max_line": 809,
+                        "git_instance": "github",
+                        "repo_name": "testbed/astropy__astropy__4.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the '__init__' method of the BlackBody class, where the 'scale' parameter is processed. It is relevant because the issue may be related to how the 'scale' parameter is initialized with units."
+                },
+                {
+                    "chunk": {
+                        "code": "\"\"\"Evaluate the model.\n\n        Parameters\n        ----------\n        x : float, `~numpy.ndarray`, or `~astropy.units.Quantity` ['frequency']\n            Frequency at which to compute the blackbody. If no units are given,\n            this defaults to Hz (or AA if `scale` was initialized with units\n            equivalent to erg / (cm ** 2 * s * AA * sr)).\n\n        temperature : float, `~numpy.ndarray`, or `~astropy.units.Quantity`\n            Temperature of the blackbody. If no units are given, this defaults\n            to Kelvin.\n\n        scale : float, `~numpy.ndarray`, or `~astropy.units.Quantity` ['dimensionless']\n            Desired scale for the blackbody.\n\n        Returns\n        -------\n        y : number or ndarray\n            Blackbody spectrum. The units are determined from the units of\n            ``scale``.\n\n        .. note::\n\n            Use `numpy.errstate` to suppress Numpy warnings, if desired.\n\n        .. warning::\n\n            Output values might contain ``nan`` and ``inf``.\n\n        Raises\n        ------\n        ValueError\n            Invalid temperature.\n\n        ZeroDivisionError\n            Wavelength is zero (when converting to frequency).\n        \"\"\"\n        if not isinstance(temperature, u.Quantity):\n            in_temp = u.Quantity(temperature, u.K)\n        else:\n            in_temp = temperature\n\n        if not isinstance(x, u.Quantity):\n            # then we assume it has input_units which depends on the\n            # requested output units (either Hz or AA)\n            in_x = u.Quantity(x, self.input_units[\"x\"])\n        else:\n            in_x = x\n\n        # Convert to units for calculations, also force double precision\n        with u.add_enabled_equivalencies(u.spectral() + u.temperature()):\n            freq = u.Quantity(in_x, u.Hz, dtype=np.float64)\n            temp = u.Quantity(in_temp, u.K)\n\n        # Check if input values are physically possible\n        if np.any(temp < 0):\n            raise ValueError(f\"Temperature should be positive: {temp}\")\n        if not np.all(np.isfinite(freq)) or np.any(freq <= 0):\n            warnings.warn(\n                \"Input contains invalid wavelength/frequency value(s)\",\n                AstropyUserWarning,\n            )\n\n        log_boltz = const.h * freq / (const.k_B * temp)\n        boltzm1 = np.expm1(log_boltz)\n\n        # Calculate blackbody flux\n        bb_nu = 2.0 * const.h * freq**3 / (const.c**2 * boltzm1) / u.sr\n\n        if self.scale.unit is not None:\n            # Will be dimensionless at this point, but may not be dimensionless_unscaled\n            if not hasattr(scale, \"unit\"):\n                # during fitting, scale will be passed without units\n                # but we still need to convert from the input dimensionless\n                # to dimensionless unscaled\n                scale = scale * self.scale.unit\n            scale = scale.to(u.dimensionless_unscaled).value\n\n        # NOTE: scale is already stripped of any input units",
+                        "filename": "astropy/modeling/physical_models.py",
+                        "start_index": 4236,
+                        "end_index": 7195,
+                        "start_line": 124,
+                        "end_line": 203,
+                        "max_line": 809,
+                        "git_instance": "github",
+                        "repo_name": "testbed/astropy__astropy__4.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is part of the 'evaluate' method of the BlackBody class, which calculates the blackbody spectrum. It is relevant because it includes the handling of the 'scale' parameter and may contain the logic that leads to the incorrect bolometric flux."
+                },
+                {
+                    "chunk": {
+                        "code": "y = scale * bb_nu.to(self._output_units, u.spectral_density(freq))\n\n        # If the temperature parameter has no unit, we should return a unitless\n        # value. This occurs for instance during fitting, since we drop the\n        # units temporarily.\n        if hasattr(temperature, \"unit\"):\n            return y\n        return y.value",
+                        "filename": "astropy/modeling/physical_models.py",
+                        "start_index": 7204,
+                        "end_index": 7541,
+                        "start_line": 204,
+                        "end_line": 211,
+                        "max_line": 809,
+                        "git_instance": "github",
+                        "repo_name": "testbed/astropy__astropy__4.3",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet is the continuation of the 'evaluate' method where the final blackbody spectrum is scaled and returned. It is relevant because it shows how the 'scale' parameter affects the output and may be part of the issue."
+                }
+            ]
+        },
+        "solution_task": "Based on the provided information, the issue seems to be related to the handling of the `scale` parameter in the `BlackBody` class, specifically when `scale` is a `Quantity` with `dimensionless_unscaled` units. The expected output is not consistent with the actual output when `scale` is used as a `Quantity`.\n\nTo resolve the issue, consider the following changes:\n\n- In the `bolometric_flux` property, ensure that `scale` is properly converted to a dimensionless unscaled value before using it in calculations.\n- In the `__init__` method, ensure that the `scale` parameter is correctly initialized, taking into account whether it is passed as a float or a `Quantity`.\n- In the `evaluate` method, ensure that `scale` is correctly applied to the blackbody spectrum calculation, and that it is stripped of any units before being used in the final calculation.\n\nHere is a concise solution:\n\n- Modify the `bolometric_flux` property to correctly handle `scale` as a `Quantity`:\n\n```python\n@property\ndef bolometric_flux(self):\n    \"\"\"Bolometric flux.\"\"\"\n    if hasattr(self.scale, 'unit'):\n        scale = self.scale.to_value(u.dimensionless_unscaled)\n    else:\n        scale = self.scale.value\n\n    native_bolflux = scale * const.sigma_sb * self.temperature**4 / np.pi\n    return native_bolflux.to(u.erg / (u.cm**2 * u.s))\n```\n\n- Ensure that the `__init__` method correctly initializes the `scale` parameter:\n\n```python\ndef __init__(self, *args, **kwargs):\n    scale = kwargs.get(\"scale\", None)\n    if hasattr(scale, \"unit\") and not scale.unit.is_equivalent(u.dimensionless_unscaled):\n        output_units = scale.unit\n        if not output_units.is_equivalent(self._native_units, u.spectral_density(1 * u.AA)):\n            raise ValueError(\"scale units not dimensionless or in surface brightness: {output_units}\")\n        kwargs[\"scale\"] = scale.to_value(u.dimensionless_unscaled)\n    else:\n        self._output_units = self._native_units\n    super().__init__(*args, **kwargs)\n```\n\n- In the `evaluate` method, ensure that `scale` is correctly applied:\n\n```python\ndef evaluate(self, x, temperature, scale):\n    # ... [existing code] ...\n    if hasattr(scale, 'unit'):\n        scale = scale.to_value(u.dimensionless_unscaled)\n    y = scale * bb_nu.to(self._output_units, u.spectral_density(freq))\n    if hasattr(temperature, \"unit\"):\n        return y\n    return y.value\n```\n\nThese changes should ensure that the `scale` parameter is handled correctly, whether it is a dimensionless float or a `Quantity` with `dimensionless_unscaled` units, and that the expected output is produced.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a detailed analysis of the problem and offers specific, actionable solutions to address the bug in the `BlackBody` class of the `astropy.modeling.models` module. It correctly identifies the need to handle the `scale` parameter properly when it is a `Quantity` with `dimensionless_unscaled` units. The RESPONSE suggests modifications to the `bolometric_flux` property, the `__init__` method, and the `evaluate` method, which are all directly related to the issue described in the PROMPT. The code snippets provided are relevant and would likely resolve the discrepancy in the bolometric flux calculation. Additionally, the RESPONSE includes references to the relevant lines of code in the `astropy` repository, which is helpful for locating the sections that need to be fixed.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711737440.436615,
+        "result": "Based on the provided information, the issue seems to be related to the handling of the `scale` parameter in the `BlackBody` class, specifically when `scale` is a `Quantity` with `dimensionless_unscaled` units. The expected output is not consistent with the actual output when `scale` is used as a `Quantity`.\n\nTo resolve the issue, consider the following changes:\n\n- In the `bolometric_flux` property, ensure that `scale` is properly converted to a dimensionless unscaled value before using it in calculations.\n- In the `__init__` method, ensure that the `scale` parameter is correctly initialized, taking into account whether it is passed as a float or a `Quantity`.\n- In the `evaluate` method, ensure that `scale` is correctly applied to the blackbody spectrum calculation, and that it is stripped of any units before being used in the final calculation.\n\nHere is a concise solution:\n\n- Modify the `bolometric_flux` property to correctly handle `scale` as a `Quantity`:\n\n```python\n@property\ndef bolometric_flux(self):\n    \"\"\"Bolometric flux.\"\"\"\n    if hasattr(self.scale, 'unit'):\n        scale = self.scale.to_value(u.dimensionless_unscaled)\n    else:\n        scale = self.scale.value\n\n    native_bolflux = scale * const.sigma_sb * self.temperature**4 / np.pi\n    return native_bolflux.to(u.erg / (u.cm**2 * u.s))\n```\n\n- Ensure that the `__init__` method correctly initializes the `scale` parameter:\n\n```python\ndef __init__(self, *args, **kwargs):\n    scale = kwargs.get(\"scale\", None)\n    if hasattr(scale, \"unit\") and not scale.unit.is_equivalent(u.dimensionless_unscaled):\n        output_units = scale.unit\n        if not output_units.is_equivalent(self._native_units, u.spectral_density(1 * u.AA)):\n            raise ValueError(\"scale units not dimensionless or in surface brightness: {output_units}\")\n        kwargs[\"scale\"] = scale.to_value(u.dimensionless_unscaled)\n    else:\n        self._output_units = self._native_units\n    super().__init__(*args, **kwargs)\n```\n\n- In the `evaluate` method, ensure that `scale` is correctly applied:\n\n```python\ndef evaluate(self, x, temperature, scale):\n    # ... [existing code] ...\n    if hasattr(scale, 'unit'):\n        scale = scale.to_value(u.dimensionless_unscaled)\n    y = scale * bb_nu.to(self._output_units, u.spectral_density(freq))\n    if hasattr(temperature, \"unit\"):\n        return y\n    return y.value\n```\n\nThese changes should ensure that the `scale` parameter is handled correctly, whether it is a dimensionless float or a `Quantity` with `dimensionless_unscaled` units, and that the expected output is produced.\n\n### Code snippets to check\n\n-  \u2192 [astropy](https://github.com/testbed/astropy__astropy__4.3/tree//astropy) \u2192 [modeling](https://github.com/testbed/astropy__astropy__4.3/tree//astropy/modeling)- [Lines 2 - 806](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L2-L806)\n\n This snippet defines the BlackBody model, including the parameters and their expected units. It is relevant because the issue is related to the handling of the 'scale' parameter when it has 'dimensionless_unscaled' units. \n\n\n   - [Lines 213 - 248](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L213-L248)\n\n This snippet contains the 'bolometric_flux' property, which is the method returning incorrect values according to the issue. It is relevant as it likely contains the logic that needs to be fixed. \n\n\n   - [Lines 99 - 121](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L99-L121)\n\n This snippet includes the '__init__' method of the BlackBody class, where the 'scale' parameter is processed. It is relevant because the issue may be related to how the 'scale' parameter is initialized with units. \n\n\n   - [Lines 124 - 203](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L124-L203)\n\n This snippet is part of the 'evaluate' method of the BlackBody class, which calculates the blackbody spectrum. It is relevant because it includes the handling of the 'scale' parameter and may contain the logic that leads to the incorrect bolometric flux. \n\n\n   - [Lines 204 - 211](https://github.com/testbed/astropy__astropy__4.3/blob//astropy/modeling/physical_models.py#L204-L211)\n\n This snippet is the continuation of the 'evaluate' method where the final blackbody spectrum is scaled and returned. It is relevant because it shows how the 'scale' parameter affects the output and may be part of the issue.",
+        "context_relevance": 0.68,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT and answer it completely to get a score of 10.\nSupporting Evidence: The RESPONSE provides a detailed explanation of the issue with the `BlackBody` class in the `astropy.modeling.models` module, specifically addressing the incorrect bolometric flux when the `scale` argument is passed as a `Quantity` with `dimensionless_unscaled` units. It offers a clear and relevant solution to the problem, including code modifications for the `bolometric_flux` property, the `__init__` method, and the `evaluate` method. The RESPONSE also correctly identifies the relevant code snippets in the `astropy` repository that pertain to the issue, making it fully relevant to the entire PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

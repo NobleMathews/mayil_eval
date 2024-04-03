@@ -1,0 +1,221 @@
+{
+    "id": "django__django-11085",
+    "repo_name": "testbed/django__django__3.0",
+    "task_id": 3772161613208312833,
+    "title": "Custom model metaclasses cannot access the attribute dict in __init__",
+    "body": "Description\n\t\nIn Django <=2.2, it is possible for models to define a custom metaclass (as a subclass of models.base.ModelBase) and access the attribute dict of the class being defined:\nfrom django.db import models\nclass PageBase(models.base.ModelBase):\n\tdef __init__(cls, name, bases, dct):\n\t\tsuper(PageBase, cls).__init__(name, bases, dct)\n\t\tif 'magic' in dct:\n\t\t\tprint(\"enabling magic on %s\" % (name))\nclass Page(models.Model, metaclass=PageBase):\n\tmagic = True\n\ttitle = models.CharField(max_length=255)\nAs of commit a68ea231012434b522ce45c513d84add516afa60, this fails because all attributes without a contribute_to_class method are popped from the dict in ModelBase.__new__ .\n(This pattern is used by Wagtail's Page model \u200bhttps://github.com/wagtail/wagtail/blob/3e1e67021e0a20783ed59e17b43e3c481897fce3/wagtail/core/models.py#L190 , so this is causing various failures against django stable/2.2.x.)\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.0.git",
+    "requested_commit": "",
+    "mayil_response": "Based on the provided information, the issue seems to be related to the custom metaclass `PageBase` and its interaction with Django's `ModelBase.__new__` method. The `magic` attribute is being popped from the attribute dictionary because it does not have a `contribute_to_class` method, which is a requirement after the specified Django commit `a68ea231012434b522ce45c513d84add516afa60`.\n\nTo resolve the issue:\n\n- Ensure that the `magic` attribute has a `contribute_to_class` method, or wrap it in a descriptor that does.\n- Modify the `PageBase` metaclass to add the `magic` attribute back into the dictionary after the call to `super().__new__` if it was removed.\n\nHere is a potential solution:\n\n```python\nfrom django.db import models\n\nclass MagicAttribute:\n    def __init__(self, value):\n        self.value = value\n\n    def contribute_to_class(self, cls, name):\n        setattr(cls, name, self.value)\n\nclass PageBase(models.base.ModelBase):\n    def __new__(cls, name, bases, dct):\n        # Call super().__new__ and let Django's ModelBase process the attributes\n        new_class = super().__new__(cls, name, bases, dct)\n        # Check if 'magic' attribute was popped and add it back if necessary\n        if 'magic' in dct:\n            setattr(new_class, 'magic', dct['magic'])\n        return new_class\n\n    def __init__(cls, name, bases, dct):\n        super().__init__(name, bases, dct)\n        # Custom logic for 'magic' attribute can go here if needed\n\nclass Page(models.Model, metaclass=PageBase):\n    # Use the MagicAttribute descriptor for the 'magic' attribute\n    magic = MagicAttribute(True)\n    title = models.CharField(max_length=255)\n```\n\nThis solution ensures that the `magic` attribute is properly handled by Django's model metaclass and is not removed during the class creation process.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models)- [Lines 96 - 143](https://github.com/testbed/django__django__3.0/blob//django/db/models/base.py#L96-L143)\n\n This snippet includes the ModelBase metaclass __new__ method where attributes are being filtered and potentially removed before __init__ is called, which is directly related to the issue. \n\n\n   - [Lines 133 - 204](https://github.com/testbed/django__django__3.0/blob//django/db/models/base.py#L133-L204)\n\n This snippet shows the use of add_to_class method and the handling of attributes with contribute_to_class method, which is relevant to the issue of attribute dict access in __init__. \n\n\n   - [Lines 1 - 89](https://github.com/testbed/django__django__3.0/blob//django/db/models/base.py#L1-L89)\n\n This snippet defines the _has_contribute_to_class utility function used to determine if an attribute has a contribute_to_class method, which is relevant to the issue.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0013564999999999998,
+        "snippet_processor": 0.047610000000000006,
+        "issue_star_creation": 0.027669999999999997,
+        "issue_star_solver": 0.04948,
+        "bouncer": 0.024900000000000002
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711730307.2621582,
+        "relevant_snippets": [
+            {
+                "code": "import copy\nimport inspect\nimport warnings\nfrom functools import partialmethod\nfrom itertools import chain\n\nfrom asgiref.sync import sync_to_async\n\nimport django\nfrom django.apps import apps\nfrom django.conf import settings\nfrom django.core import checks\nfrom django.core.exceptions import (\n    NON_FIELD_ERRORS,\n    FieldDoesNotExist,\n    FieldError,\n    MultipleObjectsReturned,\n    ObjectDoesNotExist,\n    ValidationError,\n)\nfrom django.db import (\n    DJANGO_VERSION_PICKLE_KEY,\n    DatabaseError,\n    connection,\n    connections,\n    router,\n    transaction,\n)\nfrom django.db.models import NOT_PROVIDED, ExpressionWrapper, IntegerField, Max, Value\nfrom django.db.models.constants import LOOKUP_SEP\nfrom django.db.models.constraints import CheckConstraint, UniqueConstraint\nfrom django.db.models.deletion import CASCADE, Collector\nfrom django.db.models.expressions import RawSQL\nfrom django.db.models.fields.related import (\n    ForeignObjectRel,\n    OneToOneField,\n    lazy_related_operation,\n    resolve_relation,\n)\nfrom django.db.models.functions import Coalesce\nfrom django.db.models.manager import Manager\nfrom django.db.models.options import Options\nfrom django.db.models.query import F, Q\nfrom django.db.models.signals import (\n    class_prepared,\n    post_init,\n    post_save,\n    pre_init,\n    pre_save,\n)\nfrom django.db.models.utils import AltersData, make_model_tuple\nfrom django.utils.encoding import force_str\nfrom django.utils.hashable import make_hashable\nfrom django.utils.text import capfirst, get_text_list\nfrom django.utils.translation import gettext_lazy as _\n\n\nclass Deferred:\n    def __repr__(self):\n        return \"<Deferred field>\"\n\n    def __str__(self):\n        return \"<Deferred field>\"\n\n\nDEFERRED = Deferred()\n\n\ndef subclass_exception(name, bases, module, attached_to):\n    \"\"\"\n    Create exception subclass. Used by ModelBase below.\n\n    The exception is created in a way that allows it to be pickled, assuming\n    that the returned exception class will be added as an attribute to the\n    'attached_to' class.\n    \"\"\"\n    return type(\n        name,\n        bases,\n        {\n            \"__module__\": module,\n            \"__qualname__\": \"%s.%s\" % (attached_to.__qualname__, name),\n        },\n    )\n\n\ndef _has_contribute_to_class(value):\n    # Only call contribute_to_class() if it's bound.\n    return not inspect.isclass(value) and hasattr(value, \"contribute_to_class\")",
+                "filename": "django/db/models/base.py",
+                "start_index": 0,
+                "end_index": 2403,
+                "start_line": 1,
+                "end_line": 89,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"Metaclass for all models.\"\"\"",
+                "filename": "django/db/models/base.py",
+                "start_index": 2433,
+                "end_index": 2464,
+                "start_line": 93,
+                "end_line": 93,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.db import connection\n        from django.db.backends.utils import truncate_name\n\n        cls._meta = self\n        self.model = cls\n        # First, construct the default values for these options.\n        self.object_name = cls.__name__\n        self.model_name = self.object_name.lower()\n        self.verbose_name = camel_case_to_spaces(self.object_name)\n\n        # Store the original user-defined values for each option,\n        # for use when serializing the model definition\n        self.original_attrs = {}\n\n        # Next, apply any overridden values from 'class Meta'.\n        if self.meta:\n            meta_attrs = self.meta.__dict__.copy()\n            for name in self.meta.__dict__:\n                # Ignore any private attributes that Django doesn't care about.\n                # NOTE: We can't modify a dictionary's contents while looping\n                # over it, so we loop over the *original* dictionary instead.\n                if name.startswith(\"_\"):\n                    del meta_attrs[name]\n            for attr_name in DEFAULT_NAMES:\n                if attr_name in meta_attrs:\n                    setattr(self, attr_name, meta_attrs.pop(attr_name))\n                    self.original_attrs[attr_name] = getattr(self, attr_name)\n                elif hasattr(self.meta, attr_name):\n                    setattr(self, attr_name, getattr(self.meta, attr_name))\n                    self.original_attrs[attr_name] = getattr(self, attr_name)\n\n            self.unique_together = normalize_together(self.unique_together)\n            self.index_together = normalize_together(self.index_together)\n            if self.index_together:\n                warnings.warn(\n                    f\"'index_together' is deprecated. Use 'Meta.indexes' in \"\n                    f\"{self.label!r} instead.\",\n                    RemovedInDjango51Warning,\n                )\n            # App label/class name interpolation for names of constraints and\n            # indexes.\n            if not getattr(cls._meta, \"abstract\", False):\n                for attr_name in {\"constraints\", \"indexes\"}:\n                    objs = getattr(self, attr_name, [])\n                    setattr(self, attr_name, self._format_names_with_class(cls, objs))\n\n            # verbose_name_plural is a special case because it uses a 's'\n            # by default.\n            if self.verbose_name_plural is None:\n                self.verbose_name_plural = format_lazy(\"{}s\", self.verbose_name)\n\n            # order_with_respect_and ordering are mutually exclusive.\n            self._ordering_clash = bool(self.ordering and self.order_with_respect_to)\n\n            # Any leftover attributes must be invalid.\n            if meta_attrs != {}:\n                raise TypeError(\n                    \"'class Meta' got invalid attribute(s): %s\" % \",\".join(meta_attrs)\n                )\n        else:\n            self.verbose_name_plural = format_lazy(\"{}s\", self.verbose_name)\n        del self.meta",
+                "filename": "django/db/models/options.py",
+                "start_index": 5657,
+                "end_index": 8620,
+                "start_line": 10,
+                "end_line": 236,
+                "max_line": 1007,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ModelFormMetaclass(DeclarativeFieldsMetaclass):\n    def __new__(mcs, name, bases, attrs):\n        new_class = super().__new__(mcs, name, bases, attrs)\n\n        if bases == (BaseModelForm,):\n            return new_class\n\n        opts = new_class._meta = ModelFormOptions(getattr(new_class, \"Meta\", None))\n\n        # We check if a string was passed to `fields` or `exclude`,\n        # which is likely to be a mistake where the user typed ('foo') instead\n        # of ('foo',)\n        for opt in [\"fields\", \"exclude\", \"localized_fields\"]:\n            value = getattr(opts, opt)\n            if isinstance(value, str) and value != ALL_FIELDS:\n                msg = (\n                    \"%(model)s.Meta.%(opt)s cannot be a string. \"\n                    \"Did you mean to type: ('%(value)s',)?\"\n                    % {\n                        \"model\": new_class.__name__,\n                        \"opt\": opt,\n                        \"value\": value,\n                    }\n                )\n                raise TypeError(msg)\n\n        if opts.model:\n            # If a model is defined, extract form fields from it.\n            if opts.fields is None and opts.exclude is None:\n                raise ImproperlyConfigured(\n                    \"Creating a ModelForm without either the 'fields' attribute \"\n                    \"or the 'exclude' attribute is prohibited; form %s \"\n                    \"needs updating.\" % name\n                )\n\n            if opts.fields == ALL_FIELDS:\n                # Sentinel for fields_for_model to indicate \"get the list of\n                # fields from the model\"\n                opts.fields = None\n\n            fields = fields_for_model(\n                opts.model,\n                opts.fields,\n                opts.exclude,\n                opts.widgets,\n                opts.formfield_callback,\n                opts.localized_fields,\n                opts.labels,\n                opts.help_texts,\n                opts.error_messages,\n                opts.field_classes,\n                # limit_choices_to will be applied during ModelForm.__init__().\n                apply_limit_choices_to=False,\n                form_declared_fields=new_class.declared_fields,\n            )\n\n            # make sure opts.fields doesn't specify an invalid field\n            none_model_fields = {k for k, v in fields.items() if not v}\n            missing_fields = none_model_fields.difference(new_class.declared_fields)\n            if missing_fields:\n                message = \"Unknown field(s) (%s) specified for %s\"\n                message %= (\", \".join(missing_fields), opts.model.__name__)\n                raise FieldError(message)\n            # Include all the other declared fields.\n            fields.update(new_class.declared_fields)\n        else:\n            fields = new_class.declared_fields\n\n        new_class.base_fields = fields\n\n        return new_class",
+                "filename": "django/forms/models.py",
+                "start_index": 9037,
+                "end_index": 11921,
+                "start_line": 268,
+                "end_line": 338,
+                "max_line": 1674,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ModelForm(BaseModelForm, metaclass=ModelFormMetaclass):\n    pass",
+                "filename": "django/forms/models.py",
+                "start_index": 20279,
+                "end_index": 20349,
+                "start_line": 561,
+                "end_line": 738,
+                "max_line": 1674,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class Model(AltersData, metaclass=ModelBase):",
+                "filename": "django/db/models/base.py",
+                "start_index": 17365,
+                "end_index": 17410,
+                "start_line": 459,
+                "end_line": 459,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "if not abstract:\n            new_class.add_to_class(\n                \"DoesNotExist\",\n                subclass_exception(\n                    \"DoesNotExist\",\n                    tuple(\n                        x.DoesNotExist\n                        for x in parents\n                        if hasattr(x, \"_meta\") and not x._meta.abstract\n                    )\n                    or (ObjectDoesNotExist,),\n                    module,\n                    attached_to=new_class,\n                ),\n            )\n            new_class.add_to_class(\n                \"MultipleObjectsReturned\",\n                subclass_exception(\n                    \"MultipleObjectsReturned\",\n                    tuple(\n                        x.MultipleObjectsReturned\n                        for x in parents\n                        if hasattr(x, \"_meta\") and not x._meta.abstract\n                    )\n                    or (MultipleObjectsReturned,),\n                    module,\n                    attached_to=new_class,\n                ),\n            )\n            if base_meta and not base_meta.abstract:\n                # Non-abstract child classes inherit some attributes from their\n                # non-abstract parent (unless an ABC comes before it in the\n                # method resolution order).\n                if not hasattr(meta, \"ordering\"):\n                    new_class._meta.ordering = base_meta.ordering\n                if not hasattr(meta, \"get_latest_by\"):\n                    new_class._meta.get_latest_by = base_meta.get_latest_by\n\n        is_proxy = new_class._meta.proxy\n\n        # If the model is a proxy, ensure that the base class\n        # hasn't been swapped out.\n        if is_proxy and base_meta and base_meta.swapped:\n            raise TypeError(\n                \"%s cannot proxy the swapped model '%s'.\" % (name, base_meta.swapped)\n            )\n\n        # Add remaining attributes (those with a contribute_to_class() method)\n        # to the class.\n        for obj_name, obj in contributable_attrs.items():\n            new_class.add_to_class(obj_name, obj)\n\n        # All the fields of any type declared on this model\n        new_fields = chain(\n            new_class._meta.local_fields,\n            new_class._meta.local_many_to_many,\n            new_class._meta.private_fields,\n        )\n        field_names = {f.name for f in new_fields}\n\n        # Basic setup for proxy models.",
+                "filename": "django/db/models/base.py",
+                "start_index": 4453,
+                "end_index": 6852,
+                "start_line": 133,
+                "end_line": 204,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class BaseModelAdmin(metaclass=forms.MediaDefiningClass):",
+                "filename": "django/contrib/admin/options.py",
+                "start_index": 3959,
+                "end_index": 4016,
+                "start_line": 124,
+                "end_line": 124,
+                "max_line": 2529,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "super_new = super().__new__\n\n        # Also ensure initialization is only performed for subclasses of Model\n        # (excluding Model class itself).\n        parents = [b for b in bases if isinstance(b, ModelBase)]\n        if not parents:\n            return super_new(cls, name, bases, attrs)\n\n        # Create the class.\n        module = attrs.pop(\"__module__\")\n        new_attrs = {\"__module__\": module}\n        classcell = attrs.pop(\"__classcell__\", None)\n        if classcell is not None:\n            new_attrs[\"__classcell__\"] = classcell\n        attr_meta = attrs.pop(\"Meta\", None)\n        # Pass all attrs without a (Django-specific) contribute_to_class()\n        # method to type.__new__() so that they're properly initialized\n        # (i.e. __set_name__()).\n        contributable_attrs = {}\n        for obj_name, obj in attrs.items():\n            if _has_contribute_to_class(obj):\n                contributable_attrs[obj_name] = obj\n            else:\n                new_attrs[obj_name] = obj\n        new_class = super_new(cls, name, bases, new_attrs, **kwargs)\n\n        abstract = getattr(attr_meta, \"abstract\", False)\n        meta = attr_meta or getattr(new_class, \"Meta\", None)\n        base_meta = getattr(new_class, \"_meta\", None)\n\n        app_label = None\n\n        # Look for an application configuration to attach the model to.\n        app_config = apps.get_containing_app_config(module)\n\n        if getattr(meta, \"app_label\", None) is None:\n            if app_config is None:\n                if not abstract:\n                    raise RuntimeError(\n                        \"Model class %s.%s doesn't declare an explicit \"\n                        \"app_label and isn't in an application in \"\n                        \"INSTALLED_APPS.\" % (module, name)\n                    )\n\n            else:\n                app_label = app_config.label\n\n        new_class.add_to_class(\"_meta\", Options(meta, app_label))",
+                "filename": "django/db/models/base.py",
+                "start_index": 2526,
+                "end_index": 4444,
+                "start_line": 96,
+                "end_line": 143,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "import collections.abc\nimport inspect\nimport warnings\nfrom math import ceil\n\nfrom django.utils.functional import cached_property\nfrom django.utils.inspect import method_has_no_args\nfrom django.utils.translation import gettext_lazy as _\n\n\nclass UnorderedObjectListWarning(RuntimeWarning):\n    pass\n\n\nclass InvalidPage(Exception):\n    pass\n\n\nclass PageNotAnInteger(InvalidPage):\n    pass\n\n\nclass EmptyPage(InvalidPage):\n    pass",
+                "filename": "django/core/paginator.py",
+                "start_index": 0,
+                "end_index": 426,
+                "start_line": 1,
+                "end_line": 24,
+                "max_line": 238,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.0
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/models/base.py": [
+                {
+                    "chunk": {
+                        "code": "super_new = super().__new__\n\n        # Also ensure initialization is only performed for subclasses of Model\n        # (excluding Model class itself).\n        parents = [b for b in bases if isinstance(b, ModelBase)]\n        if not parents:\n            return super_new(cls, name, bases, attrs)\n\n        # Create the class.\n        module = attrs.pop(\"__module__\")\n        new_attrs = {\"__module__\": module}\n        classcell = attrs.pop(\"__classcell__\", None)\n        if classcell is not None:\n            new_attrs[\"__classcell__\"] = classcell\n        attr_meta = attrs.pop(\"Meta\", None)\n        # Pass all attrs without a (Django-specific) contribute_to_class()\n        # method to type.__new__() so that they're properly initialized\n        # (i.e. __set_name__()).\n        contributable_attrs = {}\n        for obj_name, obj in attrs.items():\n            if _has_contribute_to_class(obj):\n                contributable_attrs[obj_name] = obj\n            else:\n                new_attrs[obj_name] = obj\n        new_class = super_new(cls, name, bases, new_attrs, **kwargs)\n\n        abstract = getattr(attr_meta, \"abstract\", False)\n        meta = attr_meta or getattr(new_class, \"Meta\", None)\n        base_meta = getattr(new_class, \"_meta\", None)\n\n        app_label = None\n\n        # Look for an application configuration to attach the model to.\n        app_config = apps.get_containing_app_config(module)\n\n        if getattr(meta, \"app_label\", None) is None:\n            if app_config is None:\n                if not abstract:\n                    raise RuntimeError(\n                        \"Model class %s.%s doesn't declare an explicit \"\n                        \"app_label and isn't in an application in \"\n                        \"INSTALLED_APPS.\" % (module, name)\n                    )\n\n            else:\n                app_label = app_config.label\n\n        new_class.add_to_class(\"_meta\", Options(meta, app_label))",
+                        "filename": "django/db/models/base.py",
+                        "start_index": 2526,
+                        "end_index": 4444,
+                        "start_line": 96,
+                        "end_line": 143,
+                        "max_line": 2607,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the ModelBase metaclass __new__ method where attributes are being filtered and potentially removed before __init__ is called, which is directly related to the issue."
+                },
+                {
+                    "chunk": {
+                        "code": "if not abstract:\n            new_class.add_to_class(\n                \"DoesNotExist\",\n                subclass_exception(\n                    \"DoesNotExist\",\n                    tuple(\n                        x.DoesNotExist\n                        for x in parents\n                        if hasattr(x, \"_meta\") and not x._meta.abstract\n                    )\n                    or (ObjectDoesNotExist,),\n                    module,\n                    attached_to=new_class,\n                ),\n            )\n            new_class.add_to_class(\n                \"MultipleObjectsReturned\",\n                subclass_exception(\n                    \"MultipleObjectsReturned\",\n                    tuple(\n                        x.MultipleObjectsReturned\n                        for x in parents\n                        if hasattr(x, \"_meta\") and not x._meta.abstract\n                    )\n                    or (MultipleObjectsReturned,),\n                    module,\n                    attached_to=new_class,\n                ),\n            )\n            if base_meta and not base_meta.abstract:\n                # Non-abstract child classes inherit some attributes from their\n                # non-abstract parent (unless an ABC comes before it in the\n                # method resolution order).\n                if not hasattr(meta, \"ordering\"):\n                    new_class._meta.ordering = base_meta.ordering\n                if not hasattr(meta, \"get_latest_by\"):\n                    new_class._meta.get_latest_by = base_meta.get_latest_by\n\n        is_proxy = new_class._meta.proxy\n\n        # If the model is a proxy, ensure that the base class\n        # hasn't been swapped out.\n        if is_proxy and base_meta and base_meta.swapped:\n            raise TypeError(\n                \"%s cannot proxy the swapped model '%s'.\" % (name, base_meta.swapped)\n            )\n\n        # Add remaining attributes (those with a contribute_to_class() method)\n        # to the class.\n        for obj_name, obj in contributable_attrs.items():\n            new_class.add_to_class(obj_name, obj)\n\n        # All the fields of any type declared on this model\n        new_fields = chain(\n            new_class._meta.local_fields,\n            new_class._meta.local_many_to_many,\n            new_class._meta.private_fields,\n        )\n        field_names = {f.name for f in new_fields}\n\n        # Basic setup for proxy models.",
+                        "filename": "django/db/models/base.py",
+                        "start_index": 4453,
+                        "end_index": 6852,
+                        "start_line": 133,
+                        "end_line": 204,
+                        "max_line": 2607,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the use of add_to_class method and the handling of attributes with contribute_to_class method, which is relevant to the issue of attribute dict access in __init__."
+                },
+                {
+                    "chunk": {
+                        "code": "import copy\nimport inspect\nimport warnings\nfrom functools import partialmethod\nfrom itertools import chain\n\nfrom asgiref.sync import sync_to_async\n\nimport django\nfrom django.apps import apps\nfrom django.conf import settings\nfrom django.core import checks\nfrom django.core.exceptions import (\n    NON_FIELD_ERRORS,\n    FieldDoesNotExist,\n    FieldError,\n    MultipleObjectsReturned,\n    ObjectDoesNotExist,\n    ValidationError,\n)\nfrom django.db import (\n    DJANGO_VERSION_PICKLE_KEY,\n    DatabaseError,\n    connection,\n    connections,\n    router,\n    transaction,\n)\nfrom django.db.models import NOT_PROVIDED, ExpressionWrapper, IntegerField, Max, Value\nfrom django.db.models.constants import LOOKUP_SEP\nfrom django.db.models.constraints import CheckConstraint, UniqueConstraint\nfrom django.db.models.deletion import CASCADE, Collector\nfrom django.db.models.expressions import RawSQL\nfrom django.db.models.fields.related import (\n    ForeignObjectRel,\n    OneToOneField,\n    lazy_related_operation,\n    resolve_relation,\n)\nfrom django.db.models.functions import Coalesce\nfrom django.db.models.manager import Manager\nfrom django.db.models.options import Options\nfrom django.db.models.query import F, Q\nfrom django.db.models.signals import (\n    class_prepared,\n    post_init,\n    post_save,\n    pre_init,\n    pre_save,\n)\nfrom django.db.models.utils import AltersData, make_model_tuple\nfrom django.utils.encoding import force_str\nfrom django.utils.hashable import make_hashable\nfrom django.utils.text import capfirst, get_text_list\nfrom django.utils.translation import gettext_lazy as _\n\n\nclass Deferred:\n    def __repr__(self):\n        return \"<Deferred field>\"\n\n    def __str__(self):\n        return \"<Deferred field>\"\n\n\nDEFERRED = Deferred()\n\n\ndef subclass_exception(name, bases, module, attached_to):\n    \"\"\"\n    Create exception subclass. Used by ModelBase below.\n\n    The exception is created in a way that allows it to be pickled, assuming\n    that the returned exception class will be added as an attribute to the\n    'attached_to' class.\n    \"\"\"\n    return type(\n        name,\n        bases,\n        {\n            \"__module__\": module,\n            \"__qualname__\": \"%s.%s\" % (attached_to.__qualname__, name),\n        },\n    )\n\n\ndef _has_contribute_to_class(value):\n    # Only call contribute_to_class() if it's bound.\n    return not inspect.isclass(value) and hasattr(value, \"contribute_to_class\")",
+                        "filename": "django/db/models/base.py",
+                        "start_index": 0,
+                        "end_index": 2403,
+                        "start_line": 1,
+                        "end_line": 89,
+                        "max_line": 2607,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the _has_contribute_to_class utility function used to determine if an attribute has a contribute_to_class method, which is relevant to the issue."
+                }
+            ]
+        },
+        "solution_task": "Based on the provided information, the issue seems to be related to the custom metaclass `PageBase` and its interaction with Django's `ModelBase.__new__` method. The `magic` attribute is being popped from the attribute dictionary because it does not have a `contribute_to_class` method, which is a requirement after the specified Django commit `a68ea231012434b522ce45c513d84add516afa60`.\n\nTo resolve the issue:\n\n- Ensure that the `magic` attribute has a `contribute_to_class` method, or wrap it in a descriptor that does.\n- Modify the `PageBase` metaclass to add the `magic` attribute back into the dictionary after the call to `super().__new__` if it was removed.\n\nHere is a potential solution:\n\n```python\nfrom django.db import models\n\nclass MagicAttribute:\n    def __init__(self, value):\n        self.value = value\n\n    def contribute_to_class(self, cls, name):\n        setattr(cls, name, self.value)\n\nclass PageBase(models.base.ModelBase):\n    def __new__(cls, name, bases, dct):\n        # Call super().__new__ and let Django's ModelBase process the attributes\n        new_class = super().__new__(cls, name, bases, dct)\n        # Check if 'magic' attribute was popped and add it back if necessary\n        if 'magic' in dct:\n            setattr(new_class, 'magic', dct['magic'])\n        return new_class\n\n    def __init__(cls, name, bases, dct):\n        super().__init__(name, bases, dct)\n        # Custom logic for 'magic' attribute can go here if needed\n\nclass Page(models.Model, metaclass=PageBase):\n    # Use the MagicAttribute descriptor for the 'magic' attribute\n    magic = MagicAttribute(True)\n    title = models.CharField(max_length=255)\n```\n\nThis solution ensures that the `magic` attribute is properly handled by Django's model metaclass and is not removed during the class creation process.",
+        "bouncer_response": {
+            "score": 8,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE accurately identifies the core issue: the 'magic' attribute is being removed from the attribute dictionary because it lacks a 'contribute_to_class' method. The solution provided is actionable and directly addresses the problem by suggesting the implementation of a 'contribute_to_class' method for the 'magic' attribute and modifying the 'PageBase' metaclass to re-add the 'magic' attribute if necessary. The code snippet provided is relevant and demonstrates how to implement the proposed solution. Additionally, the RESPONSE includes references to specific lines of code in the Django repository that are related to the issue, which could be useful for further investigation or understanding of the underlying Django mechanisms. The RESPONSE does not score a 10 because it does not address the potential impact on existing code that uses the 'magic' attribute without a 'contribute_to_class' method, which could be a concern for backward compatibility.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711731017.7059689,
+        "result": "Based on the provided information, the issue seems to be related to the custom metaclass `PageBase` and its interaction with Django's `ModelBase.__new__` method. The `magic` attribute is being popped from the attribute dictionary because it does not have a `contribute_to_class` method, which is a requirement after the specified Django commit `a68ea231012434b522ce45c513d84add516afa60`.\n\nTo resolve the issue:\n\n- Ensure that the `magic` attribute has a `contribute_to_class` method, or wrap it in a descriptor that does.\n- Modify the `PageBase` metaclass to add the `magic` attribute back into the dictionary after the call to `super().__new__` if it was removed.\n\nHere is a potential solution:\n\n```python\nfrom django.db import models\n\nclass MagicAttribute:\n    def __init__(self, value):\n        self.value = value\n\n    def contribute_to_class(self, cls, name):\n        setattr(cls, name, self.value)\n\nclass PageBase(models.base.ModelBase):\n    def __new__(cls, name, bases, dct):\n        # Call super().__new__ and let Django's ModelBase process the attributes\n        new_class = super().__new__(cls, name, bases, dct)\n        # Check if 'magic' attribute was popped and add it back if necessary\n        if 'magic' in dct:\n            setattr(new_class, 'magic', dct['magic'])\n        return new_class\n\n    def __init__(cls, name, bases, dct):\n        super().__init__(name, bases, dct)\n        # Custom logic for 'magic' attribute can go here if needed\n\nclass Page(models.Model, metaclass=PageBase):\n    # Use the MagicAttribute descriptor for the 'magic' attribute\n    magic = MagicAttribute(True)\n    title = models.CharField(max_length=255)\n```\n\nThis solution ensures that the `magic` attribute is properly handled by Django's model metaclass and is not removed during the class creation process.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__3.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__3.0/tree//django/db/models)- [Lines 96 - 143](https://github.com/testbed/django__django__3.0/blob//django/db/models/base.py#L96-L143)\n\n This snippet includes the ModelBase metaclass __new__ method where attributes are being filtered and potentially removed before __init__ is called, which is directly related to the issue. \n\n\n   - [Lines 133 - 204](https://github.com/testbed/django__django__3.0/blob//django/db/models/base.py#L133-L204)\n\n This snippet shows the use of add_to_class method and the handling of attributes with contribute_to_class method, which is relevant to the issue of attribute dict access in __init__. \n\n\n   - [Lines 1 - 89](https://github.com/testbed/django__django__3.0/blob//django/db/models/base.py#L1-L89)\n\n This snippet defines the _has_contribute_to_class utility function used to determine if an attribute has a contribute_to_class method, which is relevant to the issue.",
+        "context_relevance": 0.18,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant to the entire PROMPT and answers the entire PROMPT completely.\nSupporting Evidence: The RESPONSE directly addresses the issue described in the PROMPT by explaining the cause of the problem and providing a detailed solution to fix it. It explains the interaction between the custom metaclass `PageBase` and Django's `ModelBase.__new__` method, and why the `magic` attribute is being removed. The RESPONSE then offers a code example that corrects the issue, ensuring the `magic` attribute is handled correctly. Additionally, the RESPONSE includes relevant code snippets from the Django repository that are directly related to the issue, demonstrating a complete understanding and relevance to the entire PROMPT."
+        },
+        "qa_relevance": 1.0
+    }
+}

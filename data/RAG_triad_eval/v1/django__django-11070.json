@@ -1,0 +1,206 @@
+{
+    "id": "django__django-11070",
+    "repo_name": "testbed/django__django__3.0",
+    "task_id": 6565805999080333651,
+    "title": "Add autocomplete attribute to contrib.auth fields",
+    "body": "Description\n\t \n\t\t(last modified by CHI Cheng)\n\t \nAdd autocomplete=username/email/current-password/new-password to contrib.auth builtin forms.\nPull request: \u200bhttps://github.com/django/django/pull/9921\nThe most useful one is autocomplete=new-password, which prevents browsers prefill with current password, Chrome will also suggest a random strong password for users who turned on account sync.\nRelated docs:\n\u200bhttps://html.spec.whatwg.org/multipage/form-control-infrastructure.html#autofill\n\u200bhttps://www.chromium.org/developers/design-documents/form-styles-that-chromium-understands\n\u200bhttps://developer.mozilla.org/en-US/docs/Web/Security/Securing_your_site/Turning_off_form_autocompletion#The_autocomplete_attribute_and_login_fields\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__3.0.git",
+    "requested_commit": "",
+    "mayil_response": "To implement the feature request to add autocomplete attributes to Django's `contrib.auth` built-in forms, you will need to modify the relevant form fields in the `django/contrib/auth/forms.py` file. Here's how you can do it:\n\n- For the username field, you can add the `autocomplete=\"username\"` attribute to the `UsernameField` widget attributes.\n- For the email field, if there is an email field in the auth forms, you would add `autocomplete=\"email\"` in a similar manner.\n- For the current password field, add `autocomplete=\"current-password\"` to the widget of the `old_password` field in the `PasswordChangeForm`.\n- For the new password fields, add `autocomplete=\"new-password\"` to the widgets of the `new_password1` and `new_password2` fields in the `SetPasswordForm` and `PasswordChangeForm`.\n\nHere is the specific implementation:\n\n1. Update the `UsernameField` widget attributes in `forms.py`:\n```python\nclass UsernameField(forms.CharField):\n    def widget_attrs(self, widget):\n        attrs = super().widget_attrs(widget)\n        attrs.update({\n            \"autocapitalize\": \"none\",\n            \"autocomplete\": \"username\",  # Add this line\n        })\n        return attrs\n```\n\n2. Update the `PasswordChangeForm` to include the `autocomplete` attribute for the `old_password` field:\n```python\nclass PasswordChangeForm(SetPasswordForm):\n    old_password = forms.CharField(\n        label=_(\"Old password\"),\n        strip=False,\n        widget=forms.PasswordInput(\n            attrs={\n                \"autocomplete\": \"current-password\",  # Add this line\n                \"autofocus\": True\n            }\n        ),\n    )\n    # Rest of the class remains unchanged\n```\n\n3. Update the `SetPasswordForm` to include the `autocomplete` attribute for the `new_password1` and `new_password2` fields:\n```python\nclass SetPasswordForm(forms.Form):\n    new_password1 = forms.CharField(\n        label=_(\"New password\"),\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"new-password\"}  # Add this line\n        ),\n        # Rest of the field definition remains unchanged\n    )\n    new_password2 = forms.CharField(\n        label=_(\"New password confirmation\"),\n        strip=False,\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"new-password\"}  # Add this line\n        ),\n        # Rest of the field definition remains unchanged\n    )\n    # Rest of the class remains unchanged\n```\n\nAfter making these changes, you should test the forms to ensure that the autocomplete attributes are working as expected in different browsers. Additionally, you may need to update the documentation to reflect these changes and inform users about the new feature.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.0/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.0/tree//django/contrib/auth)- [Lines 1 - 367](https://github.com/testbed/django__django__3.0/blob//django/contrib/auth/forms.py#L1-L367)\n\n This snippet contains the UsernameField class where the autocomplete attribute is set to 'username'. It is relevant because the issue requires adding or modifying autocomplete attributes. \n\n\n   - [Lines 378 - 465](https://github.com/testbed/django__django__3.0/blob//django/contrib/auth/forms.py#L378-L465)\n\n This snippet includes the SetPasswordForm and PasswordChangeForm where the autocomplete attributes for new and current passwords are set. It is directly relevant to the issue as it involves setting autocomplete attributes for password fields.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0013564999999999998,
+        "snippet_processor": 0.047610000000000006,
+        "issue_star_creation": 0.027669999999999997,
+        "issue_star_solver": 0.04948,
+        "bouncer": 0.024900000000000002
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711730307.2719622,
+        "relevant_snippets": [
+            {
+                "code": "import unicodedata\n\nfrom django import forms\nfrom django.contrib.auth import authenticate, get_user_model, password_validation\nfrom django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX, identify_hasher\nfrom django.contrib.auth.models import User\nfrom django.contrib.auth.tokens import default_token_generator\nfrom django.contrib.sites.shortcuts import get_current_site\nfrom django.core.exceptions import ValidationError\nfrom django.core.mail import EmailMultiAlternatives\nfrom django.template import loader\nfrom django.utils.encoding import force_bytes\nfrom django.utils.http import urlsafe_base64_encode\nfrom django.utils.text import capfirst\nfrom django.utils.translation import gettext\nfrom django.utils.translation import gettext_lazy as _\n\nUserModel = get_user_model()\n\n\ndef _unicode_ci_compare(s1, s2):\n    \"\"\"\n    Perform case-insensitive comparison of two identifiers, using the\n    recommended algorithm from Unicode Technical Report 36, section\n    2.11.2(B)(2).\n    \"\"\"\n    return (\n        unicodedata.normalize(\"NFKC\", s1).casefold()\n        == unicodedata.normalize(\"NFKC\", s2).casefold()\n    )\n\n\nclass ReadOnlyPasswordHashWidget(forms.Widget):\n    template_name = \"auth/widgets/read_only_password_hash.html\"\n    read_only = True\n\n    def get_context(self, name, value, attrs):\n        context = super().get_context(name, value, attrs)\n        summary = []\n        if not value or value.startswith(UNUSABLE_PASSWORD_PREFIX):\n            summary.append({\"label\": gettext(\"No password set.\")})\n        else:\n            try:\n                hasher = identify_hasher(value)\n            except ValueError:\n                summary.append(\n                    {\n                        \"label\": gettext(\n                            \"Invalid password format or unknown hashing algorithm.\"\n                        )\n                    }\n                )\n            else:\n                for key, value_ in hasher.safe_summary(value).items():\n                    summary.append({\"label\": gettext(key), \"value\": value_})\n        context[\"summary\"] = summary\n        return context\n\n    def id_for_label(self, id_):\n        return None\n\n\nclass ReadOnlyPasswordHashField(forms.Field):\n    widget = ReadOnlyPasswordHashWidget\n\n    def __init__(self, *args, **kwargs):\n        kwargs.setdefault(\"required\", False)\n        kwargs.setdefault(\"disabled\", True)\n        super().__init__(*args, **kwargs)\n\n\nclass UsernameField(forms.CharField):\n    def to_python(self, value):\n        return unicodedata.normalize(\"NFKC\", super().to_python(value))\n\n    def widget_attrs(self, widget):\n        return {\n            **super().widget_attrs(widget),\n            \"autocapitalize\": \"none\",\n            \"autocomplete\": \"username\",\n        }",
+                "filename": "django/contrib/auth/forms.py",
+                "start_index": 0,
+                "end_index": 2738,
+                "start_line": 1,
+                "end_line": 367,
+                "max_line": 510,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "class AdminTextareaWidget(forms.Textarea):\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": \"vLargeTextField\", **(attrs or {})})\n\n\nclass AdminTextInputWidget(forms.TextInput):\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": \"vTextField\", **(attrs or {})})\n\n\nclass AdminEmailInputWidget(forms.EmailInput):\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": \"vTextField\", **(attrs or {})})\n\n\nclass AdminURLFieldWidget(forms.URLInput):\n    template_name = \"admin/widgets/url.html\"\n\n    def __init__(self, attrs=None, validator_class=URLValidator):\n        super().__init__(attrs={\"class\": \"vURLField\", **(attrs or {})})\n        self.validator = validator_class()\n\n    def get_context(self, name, value, attrs):\n        try:\n            self.validator(value if value else \"\")\n            url_valid = True\n        except ValidationError:\n            url_valid = False\n        context = super().get_context(name, value, attrs)\n        context[\"current_label\"] = _(\"Currently:\")\n        context[\"change_label\"] = _(\"Change:\")\n        context[\"widget\"][\"href\"] = (\n            smart_urlquote(context[\"widget\"][\"value\"]) if value else \"\"\n        )\n        context[\"url_valid\"] = url_valid\n        return context\n\n\nclass AdminIntegerFieldWidget(forms.NumberInput):\n    class_name = \"vIntegerField\"\n\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": self.class_name, **(attrs or {})})\n\n\nclass AdminBigIntegerFieldWidget(AdminIntegerFieldWidget):\n    class_name = \"vBigIntegerField\"\n\n\nclass AdminUUIDInputWidget(forms.TextInput):\n    def __init__(self, attrs=None):\n        super().__init__(attrs={\"class\": \"vUUIDField\", **(attrs or {})})\n\n\n# Mapping of lowercase language codes [returned by Django's get_language()] to\n# language codes supported by select2.\n# See django/contrib/admin/static/admin/js/vendor/select2/i18n/*\nSELECT2_TRANSLATIONS = {\n    x.lower(): x\n    for x in [\n        \"ar\",\n        \"az\",\n        \"bg\",\n        \"ca\",\n        \"cs\",\n        \"da\",\n        \"de\",\n        \"el\",\n        \"en\",\n        \"es\",\n        \"et\",\n        \"eu\",\n        \"fa\",\n        \"fi\",\n        \"fr\",\n        \"gl\",\n        \"he\",\n        \"hi\",\n        \"hr\",\n        \"hu\",\n        \"id\",\n        \"is\",\n        \"it\",\n        \"ja\",\n        \"km\",\n        \"ko\",\n        \"lt\",\n        \"lv\",\n        \"mk\",\n        \"ms\",\n        \"nb\",\n        \"nl\",\n        \"pl\",\n        \"pt-BR\",\n        \"pt\",\n        \"ro\",\n        \"ru\",\n        \"sk\",\n        \"sr-Cyrl\",\n        \"sr\",\n        \"sv\",\n        \"th\",\n        \"tr\",\n        \"uk\",\n        \"vi\",\n    ]\n}\nSELECT2_TRANSLATIONS.update({\"zh-hans\": \"zh-CN\", \"zh-hant\": \"zh-TW\"})",
+                "filename": "django/contrib/admin/widgets.py",
+                "start_index": 11903,
+                "end_index": 14597,
+                "start_line": 354,
+                "end_line": 461,
+                "max_line": 595,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class UserChangeForm(forms.ModelForm):\n    password = ReadOnlyPasswordHashField(\n        label=_(\"Password\"),\n        help_text=_(\n            \"Raw passwords are not stored, so there is no way to see this \"\n            \"user\u2019s password, but you can change the password using \"\n            '<a href=\"{}\">this form</a>.'\n        ),\n    )\n\n    class Meta:\n        model = User\n        fields = \"__all__\"\n        field_classes = {\"username\": UsernameField}\n\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n        password = self.fields.get(\"password\")\n        if password:\n            password.help_text = password.help_text.format(\n                f\"../../{self.instance.pk}/password/\"\n            )\n        user_permissions = self.fields.get(\"user_permissions\")\n        if user_permissions:\n            user_permissions.queryset = user_permissions.queryset.select_related(\n                \"content_type\"\n            )\n\n\nc",
+                "filename": "django/contrib/auth/forms.py",
+                "start_index": 5614,
+                "end_index": 6569,
+                "start_line": 170,
+                "end_line": 506,
+                "max_line": 510,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class AutocompleteMixin:",
+                "filename": "django/contrib/admin/widgets.py",
+                "start_index": 15093,
+                "end_index": 15117,
+                "start_line": 477,
+                "end_line": 477,
+                "max_line": 595,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "'use strict';\n{\n    const $ = django.jQuery;\n    const fields = $('#django-admin-prepopulated-fields-constants').data('prepopulatedFields');\n    $.each(fields, function(index, field) {\n        $(\n            '.empty-form .form-row .field-' + field.name +\n            ', .empty-form.form-row .field-' + field.name +\n            ', .empty-form .form-row.field-' + field.name\n        ).addClass('prepopulated_field');\n        $(field.id).data('dependency_list', field.dependency_list).prepopulate(\n            field.dependency_ids, field.maxLength, field.allowUnicode\n        );\n    });\n}",
+                "filename": "django/contrib/admin/static/admin/js/prepopulate_init.js",
+                "start_index": 0,
+                "end_index": 585,
+                "start_line": 1,
+                "end_line": 15,
+                "max_line": 15,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "lass SetPasswordForm(forms.Form):\n    \"\"\"\n    A form that lets a user set their password without entering the old\n    password\n    \"\"\"\n\n    error_messages = {\n        \"password_mismatch\": _(\"The two password fields didn\u2019t match.\"),\n    }\n    new_password1 = forms.CharField(\n        label=_(\"New password\"),\n        widget=forms.PasswordInput(attrs={\"autocomplete\": \"new-password\"}),\n        strip=False,\n        help_text=password_validation.password_validators_help_text_html(),\n    )\n    new_password2 = forms.CharField(\n        label=_(\"New password confirmation\"),\n        strip=False,\n        widget=forms.PasswordInput(attrs={\"autocomplete\": \"new-password\"}),\n    )\n\n    def __init__(self, user, *args, **kwargs):\n        self.user = user\n        super().__init__(*args, **kwargs)\n\n    def clean_new_password2(self):\n        password1 = self.cleaned_data.get(\"new_password1\")\n        password2 = self.cleaned_data.get(\"new_password2\")\n        if password1 and password2 and password1 != password2:\n            raise ValidationError(\n                self.error_messages[\"password_mismatch\"],\n                code=\"password_mismatch\",\n            )\n        password_validation.validate_password(password2, self.user)\n        return password2\n\n    def save(self, commit=True):\n        password = self.cleaned_data[\"new_password1\"]\n        self.user.set_password(password)\n        if commit:\n            self.user.save()\n        return self.user\n\n\nclass PasswordChangeForm(SetPasswordForm):\n    \"\"\"\n    A form that lets a user change their password by entering their old\n    password.\n    \"\"\"\n\n    error_messages = {\n        **SetPasswordForm.error_messages,\n        \"password_incorrect\": _(\n            \"Your old password was entered incorrectly. Please enter it again.\"\n        ),\n    }\n    old_password = forms.CharField(\n        label=_(\"Old password\"),\n        strip=False,\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"current-password\", \"autofocus\": True}\n        ),\n    )\n\n    field_order = [\"old_password\", \"new_password1\", \"new_password2\"]\n\n    def clean_old_password(self):\n        \"\"\"\n        Validate that the old_password field is correct.\n        \"\"\"\n        old_password = self.cleaned_data[\"old_password\"]\n        if not self.user.check_password(old_password):\n            raise ValidationError(\n                self.error_messages[\"password_incorrect\"],\n                code=\"password_incorrect\",\n            )\n        return old_password\n\n\ncla",
+                "filename": "django/contrib/auth/forms.py",
+                "start_index": 12892,
+                "end_index": 15383,
+                "start_line": 378,
+                "end_line": 465,
+                "max_line": 510,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "/*global URLify*/\n'use strict';\n{\n    const $ = django.jQuery;\n    $.fn.prepopulate = function(dependencies, maxLength, allowUnicode) {\n        /*\n            Depends on urlify.js\n            Populates a selected field with the values of the dependent fields,\n            URLifies and shortens the string.\n            dependencies - array of dependent fields ids\n            maxLength - maximum length of the URLify'd string\n            allowUnicode - Unicode support of the URLify'd string\n        */\n        return this.each(function() {\n            const prepopulatedField = $(this);\n\n            const populate = function() {\n                // Bail if the field's value has been changed by the user\n                if (prepopulatedField.data('_changed')) {\n                    return;\n                }\n\n                const values = [];\n                $.each(dependencies, function(i, field) {\n                    field = $(field);\n                    if (field.val().length > 0) {\n                        values.push(field.val());\n                    }\n                });\n                prepopulatedField.val(URLify(values.join(' '), maxLength, allowUnicode));\n            };\n\n            prepopulatedField.data('_changed', false);\n            prepopulatedField.on('change', function() {\n                prepopulatedField.data('_changed', true);\n            });\n\n            if (!prepopulatedField.val()) {\n                $(dependencies.join(',')).on('keyup change focus', populate);\n            }\n        });\n    };\n}",
+                "filename": "django/contrib/admin/static/admin/js/prepopulate.js",
+                "start_index": 0,
+                "end_index": 1530,
+                "start_line": 1,
+                "end_line": 43,
+                "max_line": 43,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class AutocompleteSelect(AutocompleteMixin, forms.Select):\n    pass\n\n\nclass AutocompleteSelectMultiple(AutocompleteMixin, forms.SelectMultiple):\n    pass",
+                "filename": "django/contrib/admin/widgets.py",
+                "start_index": 19247,
+                "end_index": 19400,
+                "start_line": 590,
+                "end_line": 595,
+                "max_line": 595,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "'use strict';\n{\n    const $ = django.jQuery;\n\n    $.fn.djangoAdminSelect2 = function() {\n        $.each(this, function(i, element) {\n            $(element).select2({\n                ajax: {\n                    data: (params) => {\n                        return {\n                            term: params.term,\n                            page: params.page,\n                            app_label: element.dataset.appLabel,\n                            model_name: element.dataset.modelName,\n                            field_name: element.dataset.fieldName\n                        };\n                    }\n                }\n            });\n        });\n        return this;\n    };\n\n    $(function() {\n        // Initialize all autocomplete widgets except the one in the template\n        // form used when a new formset is added.\n        $('.admin-autocomplete').not('[name*=__prefix__]').djangoAdminSelect2();\n    });\n\n    document.addEventListener('formset:added', (event) => {\n        $(event.target).find('.admin-autocomplete').djangoAdminSelect2();\n    });\n}",
+                "filename": "django/contrib/admin/static/admin/js/autocomplete.js",
+                "start_index": 0,
+                "end_index": 1059,
+                "start_line": 1,
+                "end_line": 33,
+                "max_line": 33,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "# by adding to ModelAdmin.formfield_overrides.\n\nFORMFIELD_FOR_DBFIELD_DEFAULTS = {\n    models.DateTimeField: {\n        \"form_class\": forms.SplitDateTimeField,\n        \"widget\": widgets.AdminSplitDateTime,\n    },\n    models.DateField: {\"widget\": widgets.AdminDateWidget},\n    models.TimeField: {\"widget\": widgets.AdminTimeWidget},\n    models.TextField: {\"widget\": widgets.AdminTextareaWidget},\n    models.URLField: {\"widget\": widgets.AdminURLFieldWidget},\n    models.IntegerField: {\"widget\": widgets.AdminIntegerFieldWidget},\n    models.BigIntegerField: {\"widget\": widgets.AdminBigIntegerFieldWidget},\n    models.CharField: {\"widget\": widgets.AdminTextInputWidget},\n    models.ImageField: {\"widget\": widgets.AdminFileWidget},\n    models.FileField: {\"widget\": widgets.AdminFileWidget},\n    models.EmailField: {\"widget\": widgets.AdminEmailInputWidget},\n    models.UUIDField: {\"widget\": widgets.AdminUUIDInputWidget},\n}\n\ncsrf_protect_m = method_decorator(csrf_protect)",
+                "filename": "django/contrib/admin/options.py",
+                "start_index": 2992,
+                "end_index": 3956,
+                "start_line": 101,
+                "end_line": 121,
+                "max_line": 2529,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__3.0",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "feature request",
+        "snippet_processor_task": {
+            "django/contrib/auth/forms.py": [
+                {
+                    "chunk": {
+                        "code": "import unicodedata\n\nfrom django import forms\nfrom django.contrib.auth import authenticate, get_user_model, password_validation\nfrom django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX, identify_hasher\nfrom django.contrib.auth.models import User\nfrom django.contrib.auth.tokens import default_token_generator\nfrom django.contrib.sites.shortcuts import get_current_site\nfrom django.core.exceptions import ValidationError\nfrom django.core.mail import EmailMultiAlternatives\nfrom django.template import loader\nfrom django.utils.encoding import force_bytes\nfrom django.utils.http import urlsafe_base64_encode\nfrom django.utils.text import capfirst\nfrom django.utils.translation import gettext\nfrom django.utils.translation import gettext_lazy as _\n\nUserModel = get_user_model()\n\n\ndef _unicode_ci_compare(s1, s2):\n    \"\"\"\n    Perform case-insensitive comparison of two identifiers, using the\n    recommended algorithm from Unicode Technical Report 36, section\n    2.11.2(B)(2).\n    \"\"\"\n    return (\n        unicodedata.normalize(\"NFKC\", s1).casefold()\n        == unicodedata.normalize(\"NFKC\", s2).casefold()\n    )\n\n\nclass ReadOnlyPasswordHashWidget(forms.Widget):\n    template_name = \"auth/widgets/read_only_password_hash.html\"\n    read_only = True\n\n    def get_context(self, name, value, attrs):\n        context = super().get_context(name, value, attrs)\n        summary = []\n        if not value or value.startswith(UNUSABLE_PASSWORD_PREFIX):\n            summary.append({\"label\": gettext(\"No password set.\")})\n        else:\n            try:\n                hasher = identify_hasher(value)\n            except ValueError:\n                summary.append(\n                    {\n                        \"label\": gettext(\n                            \"Invalid password format or unknown hashing algorithm.\"\n                        )\n                    }\n                )\n            else:\n                for key, value_ in hasher.safe_summary(value).items():\n                    summary.append({\"label\": gettext(key), \"value\": value_})\n        context[\"summary\"] = summary\n        return context\n\n    def id_for_label(self, id_):\n        return None\n\n\nclass ReadOnlyPasswordHashField(forms.Field):\n    widget = ReadOnlyPasswordHashWidget\n\n    def __init__(self, *args, **kwargs):\n        kwargs.setdefault(\"required\", False)\n        kwargs.setdefault(\"disabled\", True)\n        super().__init__(*args, **kwargs)\n\n\nclass UsernameField(forms.CharField):\n    def to_python(self, value):\n        return unicodedata.normalize(\"NFKC\", super().to_python(value))\n\n    def widget_attrs(self, widget):\n        return {\n            **super().widget_attrs(widget),\n            \"autocapitalize\": \"none\",\n            \"autocomplete\": \"username\",\n        }",
+                        "filename": "django/contrib/auth/forms.py",
+                        "start_index": 0,
+                        "end_index": 2738,
+                        "start_line": 1,
+                        "end_line": 367,
+                        "max_line": 510,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the UsernameField class where the autocomplete attribute is set to 'username'. It is relevant because the issue requires adding or modifying autocomplete attributes."
+                },
+                {
+                    "chunk": {
+                        "code": "lass SetPasswordForm(forms.Form):\n    \"\"\"\n    A form that lets a user set their password without entering the old\n    password\n    \"\"\"\n\n    error_messages = {\n        \"password_mismatch\": _(\"The two password fields didn\u2019t match.\"),\n    }\n    new_password1 = forms.CharField(\n        label=_(\"New password\"),\n        widget=forms.PasswordInput(attrs={\"autocomplete\": \"new-password\"}),\n        strip=False,\n        help_text=password_validation.password_validators_help_text_html(),\n    )\n    new_password2 = forms.CharField(\n        label=_(\"New password confirmation\"),\n        strip=False,\n        widget=forms.PasswordInput(attrs={\"autocomplete\": \"new-password\"}),\n    )\n\n    def __init__(self, user, *args, **kwargs):\n        self.user = user\n        super().__init__(*args, **kwargs)\n\n    def clean_new_password2(self):\n        password1 = self.cleaned_data.get(\"new_password1\")\n        password2 = self.cleaned_data.get(\"new_password2\")\n        if password1 and password2 and password1 != password2:\n            raise ValidationError(\n                self.error_messages[\"password_mismatch\"],\n                code=\"password_mismatch\",\n            )\n        password_validation.validate_password(password2, self.user)\n        return password2\n\n    def save(self, commit=True):\n        password = self.cleaned_data[\"new_password1\"]\n        self.user.set_password(password)\n        if commit:\n            self.user.save()\n        return self.user\n\n\nclass PasswordChangeForm(SetPasswordForm):\n    \"\"\"\n    A form that lets a user change their password by entering their old\n    password.\n    \"\"\"\n\n    error_messages = {\n        **SetPasswordForm.error_messages,\n        \"password_incorrect\": _(\n            \"Your old password was entered incorrectly. Please enter it again.\"\n        ),\n    }\n    old_password = forms.CharField(\n        label=_(\"Old password\"),\n        strip=False,\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"current-password\", \"autofocus\": True}\n        ),\n    )\n\n    field_order = [\"old_password\", \"new_password1\", \"new_password2\"]\n\n    def clean_old_password(self):\n        \"\"\"\n        Validate that the old_password field is correct.\n        \"\"\"\n        old_password = self.cleaned_data[\"old_password\"]\n        if not self.user.check_password(old_password):\n            raise ValidationError(\n                self.error_messages[\"password_incorrect\"],\n                code=\"password_incorrect\",\n            )\n        return old_password\n\n\ncla",
+                        "filename": "django/contrib/auth/forms.py",
+                        "start_index": 12892,
+                        "end_index": 15383,
+                        "start_line": 378,
+                        "end_line": 465,
+                        "max_line": 510,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__3.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the SetPasswordForm and PasswordChangeForm where the autocomplete attributes for new and current passwords are set. It is directly relevant to the issue as it involves setting autocomplete attributes for password fields."
+                }
+            ]
+        },
+        "solution_task": "To implement the feature request to add autocomplete attributes to Django's `contrib.auth` built-in forms, you will need to modify the relevant form fields in the `django/contrib/auth/forms.py` file. Here's how you can do it:\n\n- For the username field, you can add the `autocomplete=\"username\"` attribute to the `UsernameField` widget attributes.\n- For the email field, if there is an email field in the auth forms, you would add `autocomplete=\"email\"` in a similar manner.\n- For the current password field, add `autocomplete=\"current-password\"` to the widget of the `old_password` field in the `PasswordChangeForm`.\n- For the new password fields, add `autocomplete=\"new-password\"` to the widgets of the `new_password1` and `new_password2` fields in the `SetPasswordForm` and `PasswordChangeForm`.\n\nHere is the specific implementation:\n\n1. Update the `UsernameField` widget attributes in `forms.py`:\n```python\nclass UsernameField(forms.CharField):\n    def widget_attrs(self, widget):\n        attrs = super().widget_attrs(widget)\n        attrs.update({\n            \"autocapitalize\": \"none\",\n            \"autocomplete\": \"username\",  # Add this line\n        })\n        return attrs\n```\n\n2. Update the `PasswordChangeForm` to include the `autocomplete` attribute for the `old_password` field:\n```python\nclass PasswordChangeForm(SetPasswordForm):\n    old_password = forms.CharField(\n        label=_(\"Old password\"),\n        strip=False,\n        widget=forms.PasswordInput(\n            attrs={\n                \"autocomplete\": \"current-password\",  # Add this line\n                \"autofocus\": True\n            }\n        ),\n    )\n    # Rest of the class remains unchanged\n```\n\n3. Update the `SetPasswordForm` to include the `autocomplete` attribute for the `new_password1` and `new_password2` fields:\n```python\nclass SetPasswordForm(forms.Form):\n    new_password1 = forms.CharField(\n        label=_(\"New password\"),\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"new-password\"}  # Add this line\n        ),\n        # Rest of the field definition remains unchanged\n    )\n    new_password2 = forms.CharField(\n        label=_(\"New password confirmation\"),\n        strip=False,\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"new-password\"}  # Add this line\n        ),\n        # Rest of the field definition remains unchanged\n    )\n    # Rest of the class remains unchanged\n```\n\nAfter making these changes, you should test the forms to ensure that the autocomplete attributes are working as expected in different browsers. Additionally, you may need to update the documentation to reflect these changes and inform users about the new feature.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The VALUE score should reflect how well the RESPONSE addresses the specific needs and context presented in the PROMPT, regardless of the completeness of the PROMPT itself.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable guide on how to implement the autocomplete attributes in Django's `contrib.auth` built-in forms. It addresses the feature request directly by specifying the exact fields and forms that need to be modified, and it includes precise code snippets to illustrate the changes. The RESPONSE also suggests testing the forms in different browsers and updating the documentation, which are important steps in the implementation process. The only reason it does not score a 10 is that it does not explicitly mention the need to consider the email field in the auth forms, which is part of the original feature request. However, it does provide a general approach for adding the email field if it exists.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711730453.193002,
+        "result": "To implement the feature request to add autocomplete attributes to Django's `contrib.auth` built-in forms, you will need to modify the relevant form fields in the `django/contrib/auth/forms.py` file. Here's how you can do it:\n\n- For the username field, you can add the `autocomplete=\"username\"` attribute to the `UsernameField` widget attributes.\n- For the email field, if there is an email field in the auth forms, you would add `autocomplete=\"email\"` in a similar manner.\n- For the current password field, add `autocomplete=\"current-password\"` to the widget of the `old_password` field in the `PasswordChangeForm`.\n- For the new password fields, add `autocomplete=\"new-password\"` to the widgets of the `new_password1` and `new_password2` fields in the `SetPasswordForm` and `PasswordChangeForm`.\n\nHere is the specific implementation:\n\n1. Update the `UsernameField` widget attributes in `forms.py`:\n```python\nclass UsernameField(forms.CharField):\n    def widget_attrs(self, widget):\n        attrs = super().widget_attrs(widget)\n        attrs.update({\n            \"autocapitalize\": \"none\",\n            \"autocomplete\": \"username\",  # Add this line\n        })\n        return attrs\n```\n\n2. Update the `PasswordChangeForm` to include the `autocomplete` attribute for the `old_password` field:\n```python\nclass PasswordChangeForm(SetPasswordForm):\n    old_password = forms.CharField(\n        label=_(\"Old password\"),\n        strip=False,\n        widget=forms.PasswordInput(\n            attrs={\n                \"autocomplete\": \"current-password\",  # Add this line\n                \"autofocus\": True\n            }\n        ),\n    )\n    # Rest of the class remains unchanged\n```\n\n3. Update the `SetPasswordForm` to include the `autocomplete` attribute for the `new_password1` and `new_password2` fields:\n```python\nclass SetPasswordForm(forms.Form):\n    new_password1 = forms.CharField(\n        label=_(\"New password\"),\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"new-password\"}  # Add this line\n        ),\n        # Rest of the field definition remains unchanged\n    )\n    new_password2 = forms.CharField(\n        label=_(\"New password confirmation\"),\n        strip=False,\n        widget=forms.PasswordInput(\n            attrs={\"autocomplete\": \"new-password\"}  # Add this line\n        ),\n        # Rest of the field definition remains unchanged\n    )\n    # Rest of the class remains unchanged\n```\n\nAfter making these changes, you should test the forms to ensure that the autocomplete attributes are working as expected in different browsers. Additionally, you may need to update the documentation to reflect these changes and inform users about the new feature.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__3.0/tree//django) \u2192 [contrib](https://github.com/testbed/django__django__3.0/tree//django/contrib) \u2192 [auth](https://github.com/testbed/django__django__3.0/tree//django/contrib/auth)- [Lines 1 - 367](https://github.com/testbed/django__django__3.0/blob//django/contrib/auth/forms.py#L1-L367)\n\n This snippet contains the UsernameField class where the autocomplete attribute is set to 'username'. It is relevant because the issue requires adding or modifying autocomplete attributes. \n\n\n   - [Lines 378 - 465](https://github.com/testbed/django__django__3.0/blob//django/contrib/auth/forms.py#L378-L465)\n\n This snippet includes the SetPasswordForm and PasswordChangeForm where the autocomplete attributes for new and current passwords are set. It is directly relevant to the issue as it involves setting autocomplete attributes for password fields.",
+        "context_relevance": 0.33,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant to the entire PROMPT and answers the PROMPT completely.\nSupporting Evidence: The RESPONSE provides a detailed explanation of how to add autocomplete attributes to Django's `contrib.auth` built-in forms, which is exactly what the PROMPT requests. It includes code snippets and instructions for the username, email, current password, and new password fields, directly addressing the description in the PROMPT. The RESPONSE also references the related documentation and provides a link to the code snippets to check, which aligns with the information provided in the PROMPT. The RESPONSE is comprehensive and fully relevant to the PROMPT, thus deserving the highest score."
+        },
+        "qa_relevance": 1.0
+    }
+}

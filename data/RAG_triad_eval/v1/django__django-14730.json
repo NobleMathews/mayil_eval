@@ -1,0 +1,206 @@
+{
+    "id": "django__django-14730",
+    "repo_name": "testbed/django__django__4.0",
+    "task_id": 1422583277590418434,
+    "title": "Prevent developers from defining a related_name on symmetrical ManyToManyFields",
+    "body": "Description\n\t\nIn ManyToManyField, if the symmetrical argument is passed, or if it's a self-referential ManyToMany relationship, the related field on the target model is not created. However, if a developer passes in the related_name not understanding this fact, they may be confused until they find the information about symmetrical relationship. Thus, it is proposed to raise an error when the user defines a ManyToManyField in this condition.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.0.git",
+    "requested_commit": "",
+    "mayil_response": "- In the `ManyToManyField` class `__init__` method, add a validation check for the `symmetrical` and `related_name` arguments.\n- Raise a `ValueError` if `related_name` is provided when `symmetrical` is `True`.\n\n```python\nclass ManyToManyField(RelatedField):\n    def __init__(\n        self,\n        to,\n        related_name=None,\n        related_query_name=None,\n        limit_choices_to=None,\n        symmetrical=None,\n        through=None,\n        through_fields=None,\n        db_constraint=True,\n        db_table=None,\n        swappable=True,\n        **kwargs,\n    ):\n        # existing code\n        ...\n        if symmetrical is None:\n            symmetrical = to == RECURSIVE_RELATIONSHIP_CONSTANT\n        # Add this validation check\n        if symmetrical and related_name is not None:\n            raise ValueError(\"Cannot use related_name argument with a symmetrical ManyToManyField.\")\n        # existing code\n        ...\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__4.0/tree//django/db/models) \u2192 [fields](https://github.com/testbed/django__django__4.0/tree//django/db/models/fields)- [Lines 46 - 1976](https://github.com/testbed/django__django__4.0/blob//django/db/models/fields/related.py#L46-L1976)\n\n This snippet includes the __init__ method of ManyToManyField where the 'symmetrical' and 'related_name' parameters are handled. It is directly relevant to the issue as it is the place where the validation for the 'related_name' parameter should be added when 'symmetrical' is True. \n\n\n   - [Lines 1423 - 1461](https://github.com/testbed/django__django__4.0/blob//django/db/models/fields/related.py#L1423-L1461)\n\n This snippet contains a method that checks for ignored options on ManyToManyField. It already includes a warning for when 'related_name' is set on a symmetrical relationship. This warning should be upgraded to an error as per the issue description.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.00026399999999999997,
+        "snippet_processor": 0.044789999999999996,
+        "issue_star_creation": 0.01797,
+        "issue_star_solver": 0.06754,
+        "bouncer": 0.027520000000000003
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711721729.212599,
+        "relevant_snippets": [
+            {
+                "code": "def contribute_to_class(self, cls, name, **kwargs):\n        # To support multiple relations to self, it's useful to have a non-None\n        # related name on symmetrical relations for internal reasons. The\n        # concept doesn't make a lot of sense externally (\"you want me to\n        # specify *what* on my non-reversible relation?!\"), so we set it up\n        # automatically. The funky name reduces the chance of an accidental\n        # clash.\n        if self.remote_field.symmetrical and (\n            self.remote_field.model == RECURSIVE_RELATIONSHIP_CONSTANT\n            or self.remote_field.model == cls._meta.object_name\n        ):\n            self.remote_field.related_name = \"%s_rel_+\" % name\n        elif self.remote_field.is_hidden():\n            # If the backwards relation is disabled, replace the original\n            # related_name with one generated from the m2m field name. Django\n            # still uses backwards relations internally and we need to avoid\n            # clashes between multiple m2m fields with related_name == '+'.\n            self.remote_field.related_name = \"_%s_%s_%s_+\" % (\n                cls._meta.app_label,\n                cls.__name__.lower(),\n                name,\n            )\n\n        super().contribute_to_class(cls, name, **kwargs)\n\n        # The intermediate m2m model is not auto created if:\n        #  1) There is a manually specified intermediate, or\n        #  2) The class owning the m2m field is abstract.\n        #  3) The class owning the m2m field has been swapped out.\n        if not cls._meta.abstract:\n            if self.remote_field.through:\n\n                def resolve_through_model(_, model, field):\n                    field.remote_field.through = model\n\n                lazy_related_operation(\n                    resolve_through_model, cls, self.remote_field.through, field=self\n                )\n            elif not cls._meta.swapped:\n                self.remote_field.through = create_many_to_many_intermediary_model(\n                    self, cls\n                )\n\n        # Add the descriptor for the m2m relation.\n        setattr(cls, self.name, ManyToManyDescriptor(self.remote_field, reverse=False))\n\n        # Set up the accessor for the m2m table name for the relation.\n        self.m2m_db_table = partial(self._get_m2m_db_table, cls._meta)",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 71843,
+                "end_index": 74169,
+                "start_line": 1894,
+                "end_line": 1941,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "seen_from = sum(\n                    from_model == getattr(field.remote_field, \"model\", None)\n                    for field in self.remote_field.through._meta.fields\n                )\n                seen_to = sum(\n                    to_model == getattr(field.remote_field, \"model\", None)\n                    for field in self.remote_field.through._meta.fields\n                )\n\n                if seen_from > 1 and not self.remote_field.through_fields:\n                    errors.append(\n                        checks.Error(\n                            (\n                                \"The model is used as an intermediate model by \"\n                                \"'%s', but it has more than one foreign key \"\n                                \"from '%s', which is ambiguous. You must specify \"\n                                \"which foreign key Django should use via the \"\n                                \"through_fields keyword argument.\"\n                            )\n                            % (self, from_model_name),\n                            hint=(\n                                \"If you want to create a recursive relationship, \"\n                                'use ManyToManyField(\"%s\", through=\"%s\").'\n                            )\n                            % (\n                                RECURSIVE_RELATIONSHIP_CONSTANT,\n                                relationship_model_name,\n                            ),\n                            obj=self,\n                            id=\"fields.E334\",\n                        )\n                    )\n\n                if seen_to > 1 and not self.remote_field.through_fields:\n                    errors.append(\n                        checks.Error(\n                            \"The model is used as an intermediate model by \"\n                            \"'%s', but it has more than one foreign key \"\n                            \"to '%s', which is ambiguous. You must specify \"\n                            \"which foreign key Django should use via the \"\n                            \"through_fields keyword argument.\" % (self, to_model_name),\n                            hint=(\n                                \"If you want to create a recursive relationship, \"\n                                'use ManyToManyField(\"%s\", through=\"%s\").'\n                            )\n                            % (\n                                RECURSIVE_RELATIONSHIP_CONSTANT,\n                                relationship_model_name,\n                            ),\n                            obj=self,\n                            id=\"fields.E335\",\n                        )\n                    )",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 55506,
+                "end_index": 58155,
+                "start_line": 1529,
+                "end_line": 1777,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\n    Provide a many-to-many relation by using an intermediary model that\n    holds two ForeignKey fields pointed at the two sides of the relation.\n\n    Unless a ``through`` model was provided, ManyToManyField will use the\n    create_many_to_many_intermediary_model factory to automatically generate\n    the intermediary model.\n    \"\"\"\n\n    # Field flags\n    many_to_many = True\n    many_to_one = False\n    one_to_many = False\n    one_to_one = False\n\n    rel_class = ManyToManyRel\n\n    description = _(\"Many-to-many relationship\")\n\n    def __init__(\n        self,\n        to,\n        related_name=None,\n        related_query_name=None,\n        limit_choices_to=None,\n        symmetrical=None,\n        through=None,\n        through_fields=None,\n        db_constraint=True,\n        db_table=None,\n        swappable=True,\n        **kwargs,\n    ):\n        try:\n            to._meta\n        except AttributeError:\n            if not isinstance(to, str):\n                raise TypeError(\n                    \"%s(%r) is invalid. First parameter to ManyToManyField \"\n                    \"must be either a model, a model name, or the string %r\"\n                    % (\n                        self.__class__.__name__,\n                        to,\n                        RECURSIVE_RELATIONSHIP_CONSTANT,\n                    )\n                )\n\n        if symmetrical is None:\n            symmetrical = to == RECURSIVE_RELATIONSHIP_CONSTANT\n\n        if through is not None and db_table is not None:\n            raise ValueError(\n                \"Cannot specify a db_table if an intermediary model is used.\"\n            )\n\n        kwargs[\"rel\"] = self.rel_class(\n            self,\n            to,\n            related_name=related_name,\n            related_query_name=related_query_name,\n            limit_choices_to=limit_choices_to,\n            symmetrical=symmetrical,\n            through=through,\n            through_fields=through_fields,\n            db_constraint=db_constraint,\n        )\n        self.has_null_arg = \"null\" in kwargs\n\n        super().__init__(\n            related_name=related_name,\n            related_query_name=related_query_name,\n            limit_choices_to=limit_choices_to,\n            **kwargs,\n        )\n\n        self.db_table = db_table\n        self.swappable = swappable\n\n    def check(self, **kwargs):\n        return [\n            *super().check(**kwargs),\n            *self._check_unique(**kwargs),\n            *self._check_relationship_model(**kwargs),\n            *self._check_ignored_options(**kwargs),\n            *self._check_table_uniqueness(**kwargs),\n        ]\n\n    def _check_unique(self, **kwargs):\n        if self.unique:\n            return [\n                checks.Error(\n                    \"ManyToManyFields cannot be unique.\",\n                    obj=self,\n                    id=\"fields.E330\",\n                )\n            ]\n        return []",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 48457,
+                "end_index": 51342,
+                "start_line": 46,
+                "end_line": 1976,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.4
+            },
+            {
+                "code": "def _check_ignored_options(self, **kwargs):\n        warnings = []\n\n        if self.has_null_arg:\n            warnings.append(\n                checks.Warning(\n                    \"null has no effect on ManyToManyField.\",\n                    obj=self,\n                    id=\"fields.W340\",\n                )\n            )\n\n        if self._validators:\n            warnings.append(\n                checks.Warning(\n                    \"ManyToManyField does not support validators.\",\n                    obj=self,\n                    id=\"fields.W341\",\n                )\n            )\n        if self.remote_field.symmetrical and self._related_name:\n            warnings.append(\n                checks.Warning(\n                    \"related_name has no effect on ManyToManyField \"\n                    'with a symmetrical relationship, e.g. to \"self\".',\n                    obj=self,\n                    id=\"fields.W345\",\n                )\n            )\n        if self.db_comment:\n            warnings.append(\n                checks.Warning(\n                    \"db_comment has no effect on ManyToManyField.\",\n                    obj=self,\n                    id=\"fields.W346\",\n                )\n            )\n\n        return warnings",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 51348,
+                "end_index": 52575,
+                "start_line": 1423,
+                "end_line": 1461,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.8
+            },
+            {
+                "code": "if self_referential:\n                seen_self = sum(\n                    from_model == getattr(field.remote_field, \"model\", None)\n                    for field in self.remote_field.through._meta.fields\n                )\n\n                if seen_self > 2 and not self.remote_field.through_fields:\n                    errors.append(\n                        checks.Error(\n                            \"The model is used as an intermediate model by \"\n                            \"'%s', but it has more than two foreign keys \"\n                            \"to '%s', which is ambiguous. You must specify \"\n                            \"which two foreign keys Django should use via the \"\n                            \"through_fields keyword argument.\"\n                            % (self, from_model_name),\n                            hint=(\n                                \"Use through_fields to specify which two foreign keys \"\n                                \"Django should use.\"\n                            ),\n                            obj=self.remote_field.through,\n                            id=\"fields.E333\",\n                        )\n                    )",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 54255,
+                "end_index": 55411,
+                "start_line": 1503,
+                "end_line": 1777,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "for field_name, related_model in (\n                    (source_field_name, source),\n                    (target_field_name, target),\n                ):\n                    possible_field_names = []\n                    for f in through._meta.fields:\n                        if (\n                            hasattr(f, \"remote_field\")\n                            and getattr(f.remote_field, \"model\", None) == related_model\n                        ):\n                            possible_field_names.append(f.name)\n                    if possible_field_names:\n                        hint = (\n                            \"Did you mean one of the following foreign keys to '%s': \"\n                            \"%s?\"\n                            % (\n                                related_model._meta.object_name,\n                                \", \".join(possible_field_names),\n                            )\n                        )\n                    else:\n                        hint = None\n\n                    try:\n                        field = through._meta.get_field(field_name)\n                    except exceptions.FieldDoesNotExist:\n                        errors.append(\n                            checks.Error(\n                                \"The intermediary model '%s' has no field '%s'.\"\n                                % (qualified_model_name, field_name),\n                                hint=hint,\n                                obj=self,\n                                id=\"fields.E338\",\n                            )\n                        )\n                    else:\n                        if not (\n                            hasattr(field, \"remote_field\")\n                            and getattr(field.remote_field, \"model\", None)\n                            == related_model\n                        ):\n                            errors.append(\n                                checks.Error(\n                                    \"'%s.%s' is not a foreign key to '%s'.\"\n                                    % (\n                                        through._meta.object_name,\n                                        field_name,\n                                        related_model._meta.object_name,\n                                    ),\n                                    hint=hint,\n                                    obj=self,\n                                    id=\"fields.E339\",\n                                )\n                            )",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 60505,
+                "end_index": 62981,
+                "start_line": 1636,
+                "end_line": 1689,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _prepare_related_fields_for_save(self, operation_name, fields=None):\n        # Ensure that a model instance without a PK hasn't been assigned to\n        # a ForeignKey, GenericForeignKey or OneToOneField on this model. If\n        # the field is nullable, allowing the save would result in silent data\n        # loss.\n        for field in self._meta.concrete_fields:\n            if fields and field not in fields:\n                continue\n            # If the related field isn't cached, then an instance hasn't been\n            # assigned and there's no need to worry about this check.\n            if field.is_relation and field.is_cached(self):\n                obj = getattr(self, field.name, None)\n                if not obj:\n                    continue\n                # A pk may have been assigned manually to a model instance not\n                # saved to the database (or auto-generated in a case like\n                # UUIDField), but we allow the save to proceed and rely on the\n                # database to raise an IntegrityError if applicable. If\n                # constraints aren't supported by the database, there's the\n                # unavoidable risk of data corruption.\n                if obj.pk is None:\n                    # Remove the object from a related instance cache.\n                    if not field.remote_field.multiple:\n                        field.remote_field.delete_cached_value(obj)\n                    raise ValueError(\n                        \"%s() prohibited to prevent data loss due to unsaved \"\n                        \"related object '%s'.\" % (operation_name, field.name)\n                    )\n                elif getattr(self, field.attname) in field.empty_values:\n                    # Set related object if it has been saved after an\n                    # assignment.\n                    setattr(self, field.name, obj)\n                # If the relationship's pk/to_field was changed, clear the\n                # cached relationship.\n                if getattr(obj, field.target_field.attname) != getattr(\n                    self, field.attname\n                ):\n                    field.delete_cached_value(self)\n        # GenericForeignKeys are private.\n        for field in self._meta.private_fields:\n            if fields and field not in fields:\n                continue\n            if (\n                field.is_relation\n                and field.is_cached(self)\n                and hasattr(field, \"fk_field\")\n            ):\n                obj = field.get_cached_value(self, default=None)\n                if obj and obj.pk is None:\n                    raise ValueError(\n                        f\"{operation_name}() prohibited to prevent data loss due to \"\n                        f\"unsaved related object '{field.name}'.\"\n                    )",
+                "filename": "django/db/models/base.py",
+                "start_index": 43593,
+                "end_index": 46398,
+                "start_line": 1107,
+                "end_line": 2551,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "for clash_field in potential_clashes:\n            # i.e. \"app_label.Model.m2m\".\n            clash_name = \"%s.%s\" % (\n                clash_field.related_model._meta.label,\n                clash_field.field.name,\n            )\n            if not rel_is_hidden and clash_field.get_accessor_name() == rel_name:\n                errors.append(\n                    checks.Error(\n                        f\"Reverse accessor '{rel_opts.object_name}.{rel_name}' \"\n                        f\"for '{field_name}' clashes with reverse accessor for \"\n                        f\"'{clash_name}'.\",\n                        hint=(\n                            \"Add or change a related_name argument \"\n                            \"to the definition for '%s' or '%s'.\"\n                        )\n                        % (field_name, clash_name),\n                        obj=self,\n                        id=\"fields.E304\",\n                    )\n                )\n\n            if clash_field.get_accessor_name() == rel_query_name:\n                errors.append(\n                    checks.Error(\n                        \"Reverse query name for '%s' clashes with reverse query name \"\n                        \"for '%s'.\" % (field_name, clash_name),\n                        hint=(\n                            \"Add or change a related_name argument \"\n                            \"to the definition for '%s' or '%s'.\"\n                        )\n                        % (field_name, clash_name),\n                        obj=self,\n                        id=\"fields.E305\",\n                    )\n                )\n\n        return errors",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 11428,
+                "end_index": 13032,
+                "start_line": 266,
+                "end_line": 1691,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "if self.remote_field.through not in self.opts.apps.get_models(\n            include_auto_created=True\n        ):\n            # The relationship model is not installed.\n            errors.append(\n                checks.Error(\n                    \"Field specifies a many-to-many relation through model \"\n                    \"'%s', which has not been installed.\" % qualified_model_name,\n                    obj=self,\n                    id=\"fields.E331\",\n                )\n            )",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 52978,
+                "end_index": 53460,
+                "start_line": 1474,
+                "end_line": 1954,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "class ManyToManyField(RelatedField):",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 48416,
+                "end_index": 48452,
+                "start_line": 1324,
+                "end_line": 1324,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.0",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/models/fields/related.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    Provide a many-to-many relation by using an intermediary model that\n    holds two ForeignKey fields pointed at the two sides of the relation.\n\n    Unless a ``through`` model was provided, ManyToManyField will use the\n    create_many_to_many_intermediary_model factory to automatically generate\n    the intermediary model.\n    \"\"\"\n\n    # Field flags\n    many_to_many = True\n    many_to_one = False\n    one_to_many = False\n    one_to_one = False\n\n    rel_class = ManyToManyRel\n\n    description = _(\"Many-to-many relationship\")\n\n    def __init__(\n        self,\n        to,\n        related_name=None,\n        related_query_name=None,\n        limit_choices_to=None,\n        symmetrical=None,\n        through=None,\n        through_fields=None,\n        db_constraint=True,\n        db_table=None,\n        swappable=True,\n        **kwargs,\n    ):\n        try:\n            to._meta\n        except AttributeError:\n            if not isinstance(to, str):\n                raise TypeError(\n                    \"%s(%r) is invalid. First parameter to ManyToManyField \"\n                    \"must be either a model, a model name, or the string %r\"\n                    % (\n                        self.__class__.__name__,\n                        to,\n                        RECURSIVE_RELATIONSHIP_CONSTANT,\n                    )\n                )\n\n        if symmetrical is None:\n            symmetrical = to == RECURSIVE_RELATIONSHIP_CONSTANT\n\n        if through is not None and db_table is not None:\n            raise ValueError(\n                \"Cannot specify a db_table if an intermediary model is used.\"\n            )\n\n        kwargs[\"rel\"] = self.rel_class(\n            self,\n            to,\n            related_name=related_name,\n            related_query_name=related_query_name,\n            limit_choices_to=limit_choices_to,\n            symmetrical=symmetrical,\n            through=through,\n            through_fields=through_fields,\n            db_constraint=db_constraint,\n        )\n        self.has_null_arg = \"null\" in kwargs\n\n        super().__init__(\n            related_name=related_name,\n            related_query_name=related_query_name,\n            limit_choices_to=limit_choices_to,\n            **kwargs,\n        )\n\n        self.db_table = db_table\n        self.swappable = swappable\n\n    def check(self, **kwargs):\n        return [\n            *super().check(**kwargs),\n            *self._check_unique(**kwargs),\n            *self._check_relationship_model(**kwargs),\n            *self._check_ignored_options(**kwargs),\n            *self._check_table_uniqueness(**kwargs),\n        ]\n\n    def _check_unique(self, **kwargs):\n        if self.unique:\n            return [\n                checks.Error(\n                    \"ManyToManyFields cannot be unique.\",\n                    obj=self,\n                    id=\"fields.E330\",\n                )\n            ]\n        return []",
+                        "filename": "django/db/models/fields/related.py",
+                        "start_index": 48457,
+                        "end_index": 51342,
+                        "start_line": 46,
+                        "end_line": 1976,
+                        "max_line": 2005,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet includes the __init__ method of ManyToManyField where the 'symmetrical' and 'related_name' parameters are handled. It is directly relevant to the issue as it is the place where the validation for the 'related_name' parameter should be added when 'symmetrical' is True."
+                },
+                {
+                    "chunk": {
+                        "code": "def _check_ignored_options(self, **kwargs):\n        warnings = []\n\n        if self.has_null_arg:\n            warnings.append(\n                checks.Warning(\n                    \"null has no effect on ManyToManyField.\",\n                    obj=self,\n                    id=\"fields.W340\",\n                )\n            )\n\n        if self._validators:\n            warnings.append(\n                checks.Warning(\n                    \"ManyToManyField does not support validators.\",\n                    obj=self,\n                    id=\"fields.W341\",\n                )\n            )\n        if self.remote_field.symmetrical and self._related_name:\n            warnings.append(\n                checks.Warning(\n                    \"related_name has no effect on ManyToManyField \"\n                    'with a symmetrical relationship, e.g. to \"self\".',\n                    obj=self,\n                    id=\"fields.W345\",\n                )\n            )\n        if self.db_comment:\n            warnings.append(\n                checks.Warning(\n                    \"db_comment has no effect on ManyToManyField.\",\n                    obj=self,\n                    id=\"fields.W346\",\n                )\n            )\n\n        return warnings",
+                        "filename": "django/db/models/fields/related.py",
+                        "start_index": 51348,
+                        "end_index": 52575,
+                        "start_line": 1423,
+                        "end_line": 1461,
+                        "max_line": 2005,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.0",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains a method that checks for ignored options on ManyToManyField. It already includes a warning for when 'related_name' is set on a symmetrical relationship. This warning should be upgraded to an error as per the issue description."
+                }
+            ]
+        },
+        "solution_task": "- In the `ManyToManyField` class `__init__` method, add a validation check for the `symmetrical` and `related_name` arguments.\n- Raise a `ValueError` if `related_name` is provided when `symmetrical` is `True`.\n\n```python\nclass ManyToManyField(RelatedField):\n    def __init__(\n        self,\n        to,\n        related_name=None,\n        related_query_name=None,\n        limit_choices_to=None,\n        symmetrical=None,\n        through=None,\n        through_fields=None,\n        db_constraint=True,\n        db_table=None,\n        swappable=True,\n        **kwargs,\n    ):\n        # existing code\n        ...\n        if symmetrical is None:\n            symmetrical = to == RECURSIVE_RELATIONSHIP_CONSTANT\n        # Add this validation check\n        if symmetrical and related_name is not None:\n            raise ValueError(\"Cannot use related_name argument with a symmetrical ManyToManyField.\")\n        # existing code\n        ...\n```",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE delivers precise, actionable, and highly relevant hints and solutions that can directly lead to resolving the issues outlined in the PROMPT.",
+            "supporting_evidence": "The RESPONSE provides a clear and actionable solution to the problem described in the PROMPT by suggesting the addition of a validation check in the `__init__` method of the `ManyToManyField` class. It includes a code snippet that demonstrates exactly where and how to raise a `ValueError` if `related_name` is provided when `symmetrical` is `True`. This directly addresses the issue of preventing developers from defining a `related_name` on symmetrical `ManyToManyFields`. The RESPONSE also references relevant code snippets from the Django repository, which shows that the responder has done their research and is providing a solution that fits into the existing codebase. The only reason it does not receive a 10 is that it does not explicitly mention removing or updating the existing warning to an error, which is suggested in the second part of the RESPONSE. However, the main solution provided is highly relevant and actionable.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711721868.77508,
+        "result": "- In the `ManyToManyField` class `__init__` method, add a validation check for the `symmetrical` and `related_name` arguments.\n- Raise a `ValueError` if `related_name` is provided when `symmetrical` is `True`.\n\n```python\nclass ManyToManyField(RelatedField):\n    def __init__(\n        self,\n        to,\n        related_name=None,\n        related_query_name=None,\n        limit_choices_to=None,\n        symmetrical=None,\n        through=None,\n        through_fields=None,\n        db_constraint=True,\n        db_table=None,\n        swappable=True,\n        **kwargs,\n    ):\n        # existing code\n        ...\n        if symmetrical is None:\n            symmetrical = to == RECURSIVE_RELATIONSHIP_CONSTANT\n        # Add this validation check\n        if symmetrical and related_name is not None:\n            raise ValueError(\"Cannot use related_name argument with a symmetrical ManyToManyField.\")\n        # existing code\n        ...\n```\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.0/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.0/tree//django/db) \u2192 [models](https://github.com/testbed/django__django__4.0/tree//django/db/models) \u2192 [fields](https://github.com/testbed/django__django__4.0/tree//django/db/models/fields)- [Lines 46 - 1976](https://github.com/testbed/django__django__4.0/blob//django/db/models/fields/related.py#L46-L1976)\n\n This snippet includes the __init__ method of ManyToManyField where the 'symmetrical' and 'related_name' parameters are handled. It is directly relevant to the issue as it is the place where the validation for the 'related_name' parameter should be added when 'symmetrical' is True. \n\n\n   - [Lines 1423 - 1461](https://github.com/testbed/django__django__4.0/blob//django/db/models/fields/related.py#L1423-L1461)\n\n This snippet contains a method that checks for ignored options on ManyToManyField. It already includes a warning for when 'related_name' is set on a symmetrical relationship. This warning should be upgraded to an error as per the issue description.",
+        "context_relevance": 0.33000000000000007,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE is relevant to the entire PROMPT and answers it completely.\nSupporting Evidence: The RESPONSE provides a clear solution to the problem described in the PROMPT by suggesting a code change in the `ManyToManyField` class to raise an error when a `related_name` is provided with a symmetrical `True`. It also references specific code snippets from the Django repository that are directly relevant to the issue, showing where the changes should be made. The RESPONSE is fully aligned with the PROMPT's request to prevent developers from defining a `related_name` on symmetrical `ManyToManyFields` and proposes a technical solution to achieve this, thus earning the highest relevance score."
+        },
+        "qa_relevance": 1.0
+    }
+}

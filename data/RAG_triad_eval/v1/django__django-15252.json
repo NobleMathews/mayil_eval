@@ -1,0 +1,257 @@
+{
+    "id": "django__django-15252",
+    "repo_name": "testbed/django__django__4.1",
+    "task_id": 1553506122643611723,
+    "title": "MigrationRecorder does not obey db_router allow_migrate rules",
+    "body": "Description\n\t\nHi,\nWe have a multi-db setup. We have one connection that is for the django project, and several connections that talk to other dbs for information (ie models with managed = False). Django should only create tables in the first connection, never in any of the other connections. We have a simple router that does the following: \nclass Router(object):\n\tdef allow_migrate(self, db, model):\n\t\tif db == 'default':\n\t\t\treturn True\n\t\treturn False\nCurrent Behaviour\nWe run our functional tests and the migrate command is called against each connection when the test databases are created (see django/test/runner.py, setup_databases, line 300-ish, which calls django/db/backends/creation.py, create_test_db, line 377-ish)\nWhen this migrate runs, it tries to apply our migrations, which tries to record that a migration has been applied (see django/db/migrations/executor.py, apply_migration, which has several calls to self.recorder.record_applied). \nThe first thing that record_applied does is a call to self.ensure_schema() (see django/db/migrations/recorder.py, record_applied, lien 66-ish). \nensure_schema checks to see if the Migration model is in the tables in the connection. If it does not find the table then it tries to create the table. \nI believe that this is incorrect behaviour when a db_router has been provided. If using the router above, my expectation would be that the table is not created on any connection other than the 'default' connection. Looking at the other methods on the MigrationRecorder, I would expect that there will be similar issues with applied_migrations and record_unapplied.\n",
+    "state": "closed",
+    "repo_link": "https://github.com/testbed/django__django__4.1.git",
+    "requested_commit": "",
+    "mayil_response": "- Modify the `MigrationRecorder.ensure_schema` method to check if migrations are allowed for the given database using the router's `allow_migrate` method before attempting to create the migration table.\n- The `ensure_schema` method should use the `router.allow_migrate` method to determine if the migration table should be created for the database connection it is using.\n\n```python\n# django/db/migrations/recorder.py\n\nclass MigrationRecorder:\n    # ... [other methods and properties] ...\n\n    def ensure_schema(self):\n        \"\"\"Ensure the table exists and has the correct schema.\"\"\"\n        if self.has_table():\n            return\n\n        # Check if migrations are allowed on this database\n        if not router.allow_migrate(self.connection.alias, app_label='migrations'):\n            return\n\n        # Make the table\n        try:\n            with self.connection.schema_editor() as editor:\n                editor.create_model(self.Migration)\n        except DatabaseError as exc:\n            raise MigrationSchemaMissing(\n                \"Unable to create the django_migrations table (%s)\" % exc\n            )\n```\n\n- Ensure that the `router` module is imported at the beginning of the `recorder.py` file.\n\n```python\n# django/db/migrations/recorder.py\n\nfrom django.db import router\n# ... rest of the imports ...\n```\n\n- This solution assumes that the `app_label` for the migrations app is `'migrations'`. If it is different, replace `'migrations'` with the correct `app_label`.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.1/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.1/tree//django/db/migrations)- [Lines 10 - 82](https://github.com/testbed/django__django__4.1/blob//django/db/migrations/recorder.py#L10-L82)\n\n This snippet contains the MigrationRecorder class and the ensure_schema method, which is directly related to the issue of the MigrationRecorder not obeying the db_router allow_migrate rules. \n\n\n   - [Lines 9 - 9](https://github.com/testbed/django__django__4.1/blob//django/db/migrations/recorder.py#L9-L9)\n\n This snippet shows the definition of the MigrationRecorder class, which is central to the issue as it is responsible for recording migrations.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.1/tree//django/db)- [Lines 197 - 278](https://github.com/testbed/django__django__4.1/blob//django/db/utils.py#L197-L278)\n\n This snippet defines the ConnectionRouter class and its allow_migrate method, which is relevant to the issue as it is part of the mechanism that should prevent migrations on databases other than 'default'.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.1/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.1/tree//django/db/migrations) \u2192 [operations](https://github.com/testbed/django__django__4.1/tree//django/db/migrations/operations)- [Lines 1 - 1](https://github.com/testbed/django__django__4.1/blob//django/db/migrations/operations/base.py#L1-L1)\n\n This snippet imports the router, which is relevant to the issue as the router's allow_migrate method should be consulted before migrations are recorded.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.1/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.1/tree//django/db/migrations)- [Lines 1 - 7](https://github.com/testbed/django__django__4.1/blob//django/db/migrations/executor.py#L1-L7)\n\n This snippet imports the MigrationRecorder in the migrations executor module, which is relevant because the executor is responsible for applying migrations and should respect the db_router rules.",
+    "ai_cost": {
+        "search_embedding": 1.3e-07,
+        "issue_classifier": 0.0003315,
+        "snippet_processor": 0.05657000000000001,
+        "issue_star_creation": 0.02274,
+        "issue_star_solver": 0.055200000000000006,
+        "bouncer": 0.02198
+    },
+    "mayil_collected_data": {
+        "status": "completed",
+        "start_time": 1711719796.928975,
+        "relevant_snippets": [
+            {
+                "code": "if not router.allow_migrate_model(db, cls):\n                continue\n            connection = connections[db]\n            if not (\n                connection.features.supports_table_check_constraints\n                or \"supports_table_check_constraints\" in cls._meta.required_db_features\n            ) and any(\n                isinstance(constraint, CheckConstraint)\n                for constraint in cls._meta.constraints\n            ):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support check constraints.\"\n                        % connection.display_name,\n                        hint=(\n                            \"A constraint won't be created. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W027\",\n                    )\n                )\n            if not (\n                connection.features.supports_partial_indexes\n                or \"supports_partial_indexes\" in cls._meta.required_db_features\n            ) and any(\n                isinstance(constraint, UniqueConstraint)\n                and constraint.condition is not None\n                for constraint in cls._meta.constraints\n            ):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support unique constraints with \"\n                        \"conditions.\" % connection.display_name,\n                        hint=(\n                            \"A constraint won't be created. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W036\",\n                    )\n                )\n            if not (\n                connection.features.supports_deferrable_unique_constraints\n                or \"supports_deferrable_unique_constraints\"\n                in cls._meta.required_db_features\n            ) and any(\n                isinstance(constraint, UniqueConstraint)\n                and constraint.deferrable is not None\n                for constraint in cls._meta.constraints\n            ):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support deferrable unique constraints.\"\n                        % connection.display_name,\n                        hint=(\n                            \"A constraint won't be created. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W038\",\n                    )\n                )",
+                "filename": "django/db/models/base.py",
+                "start_index": 92265,
+                "end_index": 95002,
+                "start_line": 1643,
+                "end_line": 2551,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.db import router",
+                "filename": "django/db/migrations/operations/base.py",
+                "start_index": 0,
+                "end_index": 28,
+                "start_line": 1,
+                "end_line": 1,
+                "max_line": 146,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "\"\"\"\n    Deal with storing migration records in the database.\n\n    Because this table is actually itself used for dealing with model\n    creation, it's the one thing we can't do normally via migrations.\n    We manually handle table creation/schema updating (using schema backend)\n    and then have a floating model to do queries with.\n\n    If a migration is unapplied its row is removed from the table. Having\n    a row in the table always means a migration is applied.\n    \"\"\"\n\n    _migration_class = None\n\n    @classproperty\n    def Migration(cls):\n        \"\"\"\n        Lazy load to avoid AppRegistryNotReady if installed apps import\n        MigrationRecorder.\n        \"\"\"\n        if cls._migration_class is None:\n\n            class Migration(models.Model):\n                app = models.CharField(max_length=255)\n                name = models.CharField(max_length=255)\n                applied = models.DateTimeField(default=now)\n\n                class Meta:\n                    apps = Apps()\n                    app_label = \"migrations\"\n                    db_table = \"django_migrations\"\n\n                def __str__(self):\n                    return \"Migration %s for %s\" % (self.name, self.app)\n\n            cls._migration_class = Migration\n        return cls._migration_class\n\n    def __init__(self, connection):\n        self.connection = connection\n        self._has_table = False\n\n    @property\n    def migration_qs(self):\n        return self.Migration.objects.using(self.connection.alias)\n\n    def has_table(self):\n        \"\"\"Return True if the django_migrations table exists.\"\"\"\n        # If the migrations table has already been confirmed to exist, don't\n        # recheck it's existence.\n        if self._has_table:\n            return True\n        # It hasn't been confirmed to exist, recheck.\n        with self.connection.cursor() as cursor:\n            tables = self.connection.introspection.table_names(cursor)\n\n        self._has_table = self.Migration._meta.db_table in tables\n        return self._has_table\n\n    def ensure_schema(self):\n        \"\"\"Ensure the table exists and has the correct schema.\"\"\"\n        # If the table's there, that's fine - we've never changed its schema\n        # in the codebase.\n        if self.has_table():\n            return\n        # Make the table\n        try:\n            with self.connection.schema_editor() as editor:\n                editor.create_model(self.Migration)\n        except DatabaseError as exc:\n            raise MigrationSchemaMissing(\n                \"Unable to create the django_migrations table (%s)\" % exc\n            )",
+                "filename": "django/db/migrations/recorder.py",
+                "start_index": 249,
+                "end_index": 2834,
+                "start_line": 10,
+                "end_line": 82,
+                "max_line": 111,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 1.0
+            },
+            {
+                "code": "class MigrationRecorder:",
+                "filename": "django/db/migrations/recorder.py",
+                "start_index": 220,
+                "end_index": 244,
+                "start_line": 9,
+                "end_line": 9,
+                "max_line": 111,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.1
+            },
+            {
+                "code": "class ConnectionRouter:\n    def __init__(self, routers=None):\n        \"\"\"\n        If routers is not specified, default to settings.DATABASE_ROUTERS.\n        \"\"\"\n        self._routers = routers\n\n    @cached_property\n    def routers(self):\n        if self._routers is None:\n            self._routers = settings.DATABASE_ROUTERS\n        routers = []\n        for r in self._routers:\n            if isinstance(r, str):\n                router = import_string(r)()\n            else:\n                router = r\n            routers.append(router)\n        return routers\n\n    def _router_func(action):\n        def _route_db(self, model, **hints):\n            chosen_db = None\n            for router in self.routers:\n                try:\n                    method = getattr(router, action)\n                except AttributeError:\n                    # If the router doesn't have a method, skip to the next one.\n                    pass\n                else:\n                    chosen_db = method(model, **hints)\n                    if chosen_db:\n                        return chosen_db\n            instance = hints.get(\"instance\")\n            if instance is not None and instance._state.db:\n                return instance._state.db\n            return DEFAULT_DB_ALIAS\n\n        return _route_db\n\n    db_for_read = _router_func(\"db_for_read\")\n    db_for_write = _router_func(\"db_for_write\")\n\n    def allow_relation(self, obj1, obj2, **hints):\n        for router in self.routers:\n            try:\n                method = router.allow_relation\n            except AttributeError:\n                # If the router doesn't have a method, skip to the next one.\n                pass\n            else:\n                allow = method(obj1, obj2, **hints)\n                if allow is not None:\n                    return allow\n        return obj1._state.db == obj2._state.db\n\n    def allow_migrate(self, db, app_label, **hints):\n        for router in self.routers:\n            try:\n                method = router.allow_migrate\n            except AttributeError:\n                # If the router doesn't have a method, skip to the next one.\n                continue\n\n            allow = method(db, app_label, **hints)\n\n            if allow is not None:\n                return allow\n        return True\n\n    def allow_migrate_model(self, db, model):\n        return self.allow_migrate(\n            db,\n            model._meta.app_label,\n            model_name=model._meta.model_name,\n            model=model,\n        )\n\n    def get_migratable_models(self, app_config, db, include_auto_created=False):\n        \"\"\"Return app models allowed to be migrated on provided db.\"\"\"\n        models = app_config.get_models(include_auto_created=include_auto_created)\n        return [model for model in models if self.allow_migrate_model(db, model)]",
+                "filename": "django/db/utils.py",
+                "start_index": 6466,
+                "end_index": 9278,
+                "start_line": 197,
+                "end_line": 278,
+                "max_line": 278,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.7
+            },
+            {
+                "code": "from django.apps.registry import apps as global_apps\nfrom django.db import migrations, router\n\nfrom .exceptions import InvalidMigrationPlan\nfrom .loader import MigrationLoader\nfrom .recorder import MigrationRecorder\nfrom .state import ProjectState",
+                "filename": "django/db/migrations/executor.py",
+                "start_index": 0,
+                "end_index": 247,
+                "start_line": 1,
+                "end_line": 7,
+                "max_line": 410,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "from django.db import migrations, models\n\n\nclass Migration(migrations.Migration):\n    dependencies = [\n        (\"sites\", \"0001_initial\"),\n    ]\n\n    operations = [\n        migrations.CreateModel(\n            name=\"Redirect\",\n            fields=[\n                (\n                    \"id\",\n                    models.AutoField(\n                        verbose_name=\"ID\",\n                        serialize=False,\n                        auto_created=True,\n                        primary_key=True,\n                    ),\n                ),\n                (\n                    \"site\",\n                    models.ForeignKey(\n                        to=\"sites.Site\",\n                        on_delete=models.CASCADE,\n                        verbose_name=\"site\",\n                    ),\n                ),\n                (\n                    \"old_path\",\n                    models.CharField(\n                        help_text=(\n                            \"This should be an absolute path, excluding the domain \"\n                            \"name. Example: \u201c/events/search/\u201d.\"\n                        ),\n                        max_length=200,\n                        verbose_name=\"redirect from\",\n                        db_index=True,\n                    ),\n                ),\n                (\n                    \"new_path\",\n                    models.CharField(\n                        help_text=(\n                            \"This can be either an absolute path (as above) or a full \"\n                            \"URL starting with \u201chttp://\u201d.\"\n                        ),\n                        max_length=200,\n                        verbose_name=\"redirect to\",\n                        blank=True,\n                    ),\n                ),\n            ],\n            options={\n                \"ordering\": [\"old_path\"],\n                \"unique_together\": {(\"site\", \"old_path\")},\n                \"db_table\": \"django_redirect\",\n                \"verbose_name\": \"redirect\",\n                \"verbose_name_plural\": \"redirects\",\n            },\n            bases=(models.Model,),\n        ),\n    ]",
+                "filename": "django/contrib/redirects/migrations/0001_initial.py",
+                "start_index": 0,
+                "end_index": 2092,
+                "start_line": 1,
+                "end_line": 64,
+                "max_line": 64,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "if not objs:\n                return\n\n            through_defaults = dict(resolve_callables(through_defaults or {}))\n            target_ids = self._get_target_ids(target_field_name, objs)\n            db = router.db_for_write(self.through, instance=self.instance)\n            can_ignore_conflicts, must_send_signals, can_fast_add = self._get_add_plan(\n                db, source_field_name\n            )\n            if can_fast_add:\n                self.through._default_manager.using(db).bulk_create(\n                    [\n                        self.through(\n                            **{\n                                \"%s_id\" % source_field_name: self.related_val[0],\n                                \"%s_id\" % target_field_name: target_id,\n                            }\n                        )\n                        for target_id in target_ids\n                    ],\n                    ignore_conflicts=True,\n                )\n                return\n\n            missing_target_ids = self._get_missing_target_ids(\n                source_field_name, target_field_name, db, target_ids\n            )\n            with transaction.atomic(using=db, savepoint=False):\n                if must_send_signals:\n                    signals.m2m_changed.send(\n                        sender=self.through,\n                        action=\"pre_add\",\n                        instance=self.instance,\n                        reverse=self.reverse,\n                        model=self.model,\n                        pk_set=missing_target_ids,\n                        using=db,\n                    )\n                # Add the ones that aren't there already.\n                self.through._default_manager.using(db).bulk_create(\n                    [\n                        self.through(\n                            **through_defaults,\n                            **{\n                                \"%s_id\" % source_field_name: self.related_val[0],\n                                \"%s_id\" % target_field_name: target_id,\n                            },\n                        )\n                        for target_id in missing_target_ids\n                    ],\n                    ignore_conflicts=can_ignore_conflicts,\n                )\n\n                if must_send_signals:\n                    signals.m2m_changed.send(\n                        sender=self.through,\n                        action=\"post_add\",\n                        instance=self.instance,\n                        reverse=self.reverse,\n                        model=self.model,\n                        pk_set=missing_target_ids,\n                        using=db,\n                    )",
+                "filename": "django/db/models/fields/related_descriptors.py",
+                "start_index": 57038,
+                "end_index": 59677,
+                "start_line": 839,
+                "end_line": 1490,
+                "max_line": 1506,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "for db in databases:\n            if not router.allow_migrate_model(db, cls):\n                continue\n            connection = connections[db]\n            if not (\n                connection.features.supports_partial_indexes\n                or \"supports_partial_indexes\" in cls._meta.required_db_features\n            ) and any(index.condition is not None for index in cls._meta.indexes):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support indexes with conditions.\"\n                        % connection.display_name,\n                        hint=(\n                            \"Conditions will be ignored. Silence this warning \"\n                            \"if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W037\",\n                    )\n                )\n            if not (\n                connection.features.supports_covering_indexes\n                or \"supports_covering_indexes\" in cls._meta.required_db_features\n            ) and any(index.include for index in cls._meta.indexes):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support indexes with non-key columns.\"\n                        % connection.display_name,\n                        hint=(\n                            \"Non-key columns will be ignored. Silence this \"\n                            \"warning if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W040\",\n                    )\n                )\n            if not (\n                connection.features.supports_expression_indexes\n                or \"supports_expression_indexes\" in cls._meta.required_db_features\n            ) and any(index.contains_expressions for index in cls._meta.indexes):\n                errors.append(\n                    checks.Warning(\n                        \"%s does not support indexes on expressions.\"\n                        % connection.display_name,\n                        hint=(\n                            \"An index won't be created. Silence this warning \"\n                            \"if you don't care about it.\"\n                        ),\n                        obj=cls,\n                        id=\"models.W043\",\n                    )\n                )\n        fields = [\n            field for index in cls._meta.indexes for field, _ in index.fields_orders\n        ]\n        fields += [include for index in cls._meta.indexes for include in index.include]\n        fields += references\n        errors.extend(cls._check_local_fields(fields, \"indexes\"))\n        return errors",
+                "filename": "django/db/models/base.py",
+                "start_index": 79575,
+                "end_index": 82272,
+                "start_line": 1642,
+                "end_line": 2553,
+                "max_line": 2607,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            },
+            {
+                "code": "def _check_table_uniqueness(self, **kwargs):\n        if (\n            isinstance(self.remote_field.through, str)\n            or not self.remote_field.through._meta.managed\n        ):\n            return []\n        registered_tables = {\n            model._meta.db_table: model\n            for model in self.opts.apps.get_models(include_auto_created=True)\n            if model != self.remote_field.through and model._meta.managed\n        }\n        m2m_db_table = self.m2m_db_table()\n        model = registered_tables.get(m2m_db_table)\n        # The second condition allows multiple m2m relations on a model if\n        # some point to a through model that proxies another through model.\n        if (\n            model\n            and model._meta.concrete_model\n            != self.remote_field.through._meta.concrete_model\n        ):\n            if model._meta.auto_created:\n\n                def _get_field_name(model):\n                    for field in model._meta.auto_created._meta.many_to_many:\n                        if field.remote_field.through is model:\n                            return field.name\n\n                opts = model._meta.auto_created._meta\n                clashing_obj = \"%s.%s\" % (opts.label, _get_field_name(model))\n            else:\n                clashing_obj = model._meta.label\n            if settings.DATABASE_ROUTERS:\n                error_class, error_id = checks.Warning, \"fields.W344\"\n                error_hint = (\n                    \"You have configured settings.DATABASE_ROUTERS. Verify \"\n                    \"that the table of %r is correctly routed to a separate \"\n                    \"database.\" % clashing_obj\n                )\n            else:\n                error_class, error_id = checks.Error, \"fields.E340\"\n                error_hint = None\n            return [\n                error_class(\n                    \"The field's intermediary table '%s' clashes with the \"\n                    \"table name of '%s'.\" % (m2m_db_table, clashing_obj),\n                    obj=self,\n                    hint=error_hint,\n                    id=error_id,\n                )\n            ]\n        return []",
+                "filename": "django/db/models/fields/related.py",
+                "start_index": 63010,
+                "end_index": 65146,
+                "start_line": 1693,
+                "end_line": 1976,
+                "max_line": 2005,
+                "git_instance": "github",
+                "repo_name": "testbed/django__django__4.1",
+                "sha": "",
+                "context_relevance": 0.2
+            }
+        ],
+        "classification": "bug",
+        "snippet_processor_task": {
+            "django/db/migrations/recorder.py": [
+                {
+                    "chunk": {
+                        "code": "\"\"\"\n    Deal with storing migration records in the database.\n\n    Because this table is actually itself used for dealing with model\n    creation, it's the one thing we can't do normally via migrations.\n    We manually handle table creation/schema updating (using schema backend)\n    and then have a floating model to do queries with.\n\n    If a migration is unapplied its row is removed from the table. Having\n    a row in the table always means a migration is applied.\n    \"\"\"\n\n    _migration_class = None\n\n    @classproperty\n    def Migration(cls):\n        \"\"\"\n        Lazy load to avoid AppRegistryNotReady if installed apps import\n        MigrationRecorder.\n        \"\"\"\n        if cls._migration_class is None:\n\n            class Migration(models.Model):\n                app = models.CharField(max_length=255)\n                name = models.CharField(max_length=255)\n                applied = models.DateTimeField(default=now)\n\n                class Meta:\n                    apps = Apps()\n                    app_label = \"migrations\"\n                    db_table = \"django_migrations\"\n\n                def __str__(self):\n                    return \"Migration %s for %s\" % (self.name, self.app)\n\n            cls._migration_class = Migration\n        return cls._migration_class\n\n    def __init__(self, connection):\n        self.connection = connection\n        self._has_table = False\n\n    @property\n    def migration_qs(self):\n        return self.Migration.objects.using(self.connection.alias)\n\n    def has_table(self):\n        \"\"\"Return True if the django_migrations table exists.\"\"\"\n        # If the migrations table has already been confirmed to exist, don't\n        # recheck it's existence.\n        if self._has_table:\n            return True\n        # It hasn't been confirmed to exist, recheck.\n        with self.connection.cursor() as cursor:\n            tables = self.connection.introspection.table_names(cursor)\n\n        self._has_table = self.Migration._meta.db_table in tables\n        return self._has_table\n\n    def ensure_schema(self):\n        \"\"\"Ensure the table exists and has the correct schema.\"\"\"\n        # If the table's there, that's fine - we've never changed its schema\n        # in the codebase.\n        if self.has_table():\n            return\n        # Make the table\n        try:\n            with self.connection.schema_editor() as editor:\n                editor.create_model(self.Migration)\n        except DatabaseError as exc:\n            raise MigrationSchemaMissing(\n                \"Unable to create the django_migrations table (%s)\" % exc\n            )",
+                        "filename": "django/db/migrations/recorder.py",
+                        "start_index": 249,
+                        "end_index": 2834,
+                        "start_line": 10,
+                        "end_line": 82,
+                        "max_line": 111,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet contains the MigrationRecorder class and the ensure_schema method, which is directly related to the issue of the MigrationRecorder not obeying the db_router allow_migrate rules."
+                },
+                {
+                    "chunk": {
+                        "code": "class MigrationRecorder:",
+                        "filename": "django/db/migrations/recorder.py",
+                        "start_index": 220,
+                        "end_index": 244,
+                        "start_line": 9,
+                        "end_line": 9,
+                        "max_line": 111,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet shows the definition of the MigrationRecorder class, which is central to the issue as it is responsible for recording migrations."
+                }
+            ],
+            "django/db/utils.py": [
+                {
+                    "chunk": {
+                        "code": "class ConnectionRouter:\n    def __init__(self, routers=None):\n        \"\"\"\n        If routers is not specified, default to settings.DATABASE_ROUTERS.\n        \"\"\"\n        self._routers = routers\n\n    @cached_property\n    def routers(self):\n        if self._routers is None:\n            self._routers = settings.DATABASE_ROUTERS\n        routers = []\n        for r in self._routers:\n            if isinstance(r, str):\n                router = import_string(r)()\n            else:\n                router = r\n            routers.append(router)\n        return routers\n\n    def _router_func(action):\n        def _route_db(self, model, **hints):\n            chosen_db = None\n            for router in self.routers:\n                try:\n                    method = getattr(router, action)\n                except AttributeError:\n                    # If the router doesn't have a method, skip to the next one.\n                    pass\n                else:\n                    chosen_db = method(model, **hints)\n                    if chosen_db:\n                        return chosen_db\n            instance = hints.get(\"instance\")\n            if instance is not None and instance._state.db:\n                return instance._state.db\n            return DEFAULT_DB_ALIAS\n\n        return _route_db\n\n    db_for_read = _router_func(\"db_for_read\")\n    db_for_write = _router_func(\"db_for_write\")\n\n    def allow_relation(self, obj1, obj2, **hints):\n        for router in self.routers:\n            try:\n                method = router.allow_relation\n            except AttributeError:\n                # If the router doesn't have a method, skip to the next one.\n                pass\n            else:\n                allow = method(obj1, obj2, **hints)\n                if allow is not None:\n                    return allow\n        return obj1._state.db == obj2._state.db\n\n    def allow_migrate(self, db, app_label, **hints):\n        for router in self.routers:\n            try:\n                method = router.allow_migrate\n            except AttributeError:\n                # If the router doesn't have a method, skip to the next one.\n                continue\n\n            allow = method(db, app_label, **hints)\n\n            if allow is not None:\n                return allow\n        return True\n\n    def allow_migrate_model(self, db, model):\n        return self.allow_migrate(\n            db,\n            model._meta.app_label,\n            model_name=model._meta.model_name,\n            model=model,\n        )\n\n    def get_migratable_models(self, app_config, db, include_auto_created=False):\n        \"\"\"Return app models allowed to be migrated on provided db.\"\"\"\n        models = app_config.get_models(include_auto_created=include_auto_created)\n        return [model for model in models if self.allow_migrate_model(db, model)]",
+                        "filename": "django/db/utils.py",
+                        "start_index": 6466,
+                        "end_index": 9278,
+                        "start_line": 197,
+                        "end_line": 278,
+                        "max_line": 278,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet defines the ConnectionRouter class and its allow_migrate method, which is relevant to the issue as it is part of the mechanism that should prevent migrations on databases other than 'default'."
+                }
+            ],
+            "django/db/migrations/operations/base.py": [
+                {
+                    "chunk": {
+                        "code": "from django.db import router",
+                        "filename": "django/db/migrations/operations/base.py",
+                        "start_index": 0,
+                        "end_index": 28,
+                        "start_line": 1,
+                        "end_line": 1,
+                        "max_line": 146,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet imports the router, which is relevant to the issue as the router's allow_migrate method should be consulted before migrations are recorded."
+                }
+            ],
+            "django/db/migrations/executor.py": [
+                {
+                    "chunk": {
+                        "code": "from django.apps.registry import apps as global_apps\nfrom django.db import migrations, router\n\nfrom .exceptions import InvalidMigrationPlan\nfrom .loader import MigrationLoader\nfrom .recorder import MigrationRecorder\nfrom .state import ProjectState",
+                        "filename": "django/db/migrations/executor.py",
+                        "start_index": 0,
+                        "end_index": 247,
+                        "start_line": 1,
+                        "end_line": 7,
+                        "max_line": 410,
+                        "git_instance": "github",
+                        "repo_name": "testbed/django__django__4.1",
+                        "sha": ""
+                    },
+                    "reason_for_relevance": "This snippet imports the MigrationRecorder in the migrations executor module, which is relevant because the executor is responsible for applying migrations and should respect the db_router rules."
+                }
+            ]
+        },
+        "solution_task": "- Modify the `MigrationRecorder.ensure_schema` method to check if migrations are allowed for the given database using the router's `allow_migrate` method before attempting to create the migration table.\n- The `ensure_schema` method should use the `router.allow_migrate` method to determine if the migration table should be created for the database connection it is using.\n\n```python\n# django/db/migrations/recorder.py\n\nclass MigrationRecorder:\n    # ... [other methods and properties] ...\n\n    def ensure_schema(self):\n        \"\"\"Ensure the table exists and has the correct schema.\"\"\"\n        if self.has_table():\n            return\n\n        # Check if migrations are allowed on this database\n        if not router.allow_migrate(self.connection.alias, app_label='migrations'):\n            return\n\n        # Make the table\n        try:\n            with self.connection.schema_editor() as editor:\n                editor.create_model(self.Migration)\n        except DatabaseError as exc:\n            raise MigrationSchemaMissing(\n                \"Unable to create the django_migrations table (%s)\" % exc\n            )\n```\n\n- Ensure that the `router` module is imported at the beginning of the `recorder.py` file.\n\n```python\n# django/db/migrations/recorder.py\n\nfrom django.db import router\n# ... rest of the imports ...\n```\n\n- This solution assumes that the `app_label` for the migrations app is `'migrations'`. If it is different, replace `'migrations'` with the correct `app_label`.",
+        "bouncer_response": {
+            "score": 9,
+            "criteria": "The RESPONSE must provide precise, actionable guidance and directly address all aspects of the described bug to facilitate its resolution.",
+            "supporting_evidence": "The RESPONSE provides a detailed and actionable solution to the issue of the MigrationRecorder not obeying the db_router allow_migrate rules. It suggests modifying the ensure_schema method within the MigrationRecorder class to check if migrations are allowed for the given database using the router's allow_migrate method before attempting to create the migration table. This directly addresses the problem described in the PROMPT. The RESPONSE also includes code snippets and ensures that the router module is imported, which is necessary for the proposed solution to work. The inclusion of the correct app_label and the assumption made about it is also a good practice to ensure the solution is adaptable to different configurations. The RESPONSE is comprehensive and provides clear guidance on how to modify the Django codebase to resolve the issue. The only reason it does not score a 10 is that it does not address potential side effects or the need for additional testing after making the changes, which would be part of a complete solution.",
+            "clarification_questions": "NONE"
+        },
+        "end_time": 1711720021.285933,
+        "result": "- Modify the `MigrationRecorder.ensure_schema` method to check if migrations are allowed for the given database using the router's `allow_migrate` method before attempting to create the migration table.\n- The `ensure_schema` method should use the `router.allow_migrate` method to determine if the migration table should be created for the database connection it is using.\n\n```python\n# django/db/migrations/recorder.py\n\nclass MigrationRecorder:\n    # ... [other methods and properties] ...\n\n    def ensure_schema(self):\n        \"\"\"Ensure the table exists and has the correct schema.\"\"\"\n        if self.has_table():\n            return\n\n        # Check if migrations are allowed on this database\n        if not router.allow_migrate(self.connection.alias, app_label='migrations'):\n            return\n\n        # Make the table\n        try:\n            with self.connection.schema_editor() as editor:\n                editor.create_model(self.Migration)\n        except DatabaseError as exc:\n            raise MigrationSchemaMissing(\n                \"Unable to create the django_migrations table (%s)\" % exc\n            )\n```\n\n- Ensure that the `router` module is imported at the beginning of the `recorder.py` file.\n\n```python\n# django/db/migrations/recorder.py\n\nfrom django.db import router\n# ... rest of the imports ...\n```\n\n- This solution assumes that the `app_label` for the migrations app is `'migrations'`. If it is different, replace `'migrations'` with the correct `app_label`.\n\n### Code snippets to check\n\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.1/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.1/tree//django/db/migrations)- [Lines 10 - 82](https://github.com/testbed/django__django__4.1/blob//django/db/migrations/recorder.py#L10-L82)\n\n This snippet contains the MigrationRecorder class and the ensure_schema method, which is directly related to the issue of the MigrationRecorder not obeying the db_router allow_migrate rules. \n\n\n   - [Lines 9 - 9](https://github.com/testbed/django__django__4.1/blob//django/db/migrations/recorder.py#L9-L9)\n\n This snippet shows the definition of the MigrationRecorder class, which is central to the issue as it is responsible for recording migrations.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.1/tree//django/db)- [Lines 197 - 278](https://github.com/testbed/django__django__4.1/blob//django/db/utils.py#L197-L278)\n\n This snippet defines the ConnectionRouter class and its allow_migrate method, which is relevant to the issue as it is part of the mechanism that should prevent migrations on databases other than 'default'.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.1/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.1/tree//django/db/migrations) \u2192 [operations](https://github.com/testbed/django__django__4.1/tree//django/db/migrations/operations)- [Lines 1 - 1](https://github.com/testbed/django__django__4.1/blob//django/db/migrations/operations/base.py#L1-L1)\n\n This snippet imports the router, which is relevant to the issue as the router's allow_migrate method should be consulted before migrations are recorded.\n-  \u2192 [django](https://github.com/testbed/django__django__4.1/tree//django) \u2192 [db](https://github.com/testbed/django__django__4.1/tree//django/db) \u2192 [migrations](https://github.com/testbed/django__django__4.1/tree//django/db/migrations)- [Lines 1 - 7](https://github.com/testbed/django__django__4.1/blob//django/db/migrations/executor.py#L1-L7)\n\n This snippet imports the MigrationRecorder in the migrations executor module, which is relevant because the executor is responsible for applying migrations and should respect the db_router rules.",
+        "context_relevance": 0.32,
+        "hypotheses": [],
+        "groundedness_score": 1.0,
+        "qa_relevance_reasons": {
+            "reason": "Criteria: The RESPONSE must be relevant to the entire PROMPT to get a score of 10.\nSupporting Evidence: The RESPONSE provides a detailed solution to the issue described in the PROMPT, including code modifications and explanations that directly address the problem of the MigrationRecorder not obeying the db_router allow_migrate rules. It also includes references to the relevant code snippets, showing a deep understanding of the issue and how to resolve it within the Django framework. The RESPONSE is fully relevant to the entire PROMPT and answers the issue completely."
+        },
+        "qa_relevance": 1.0
+    }
+}
