@@ -72,23 +72,24 @@ async def get_context_relevance(issue:str, ret:str):
 async def get_claims(issue:str, response:str):
     system_prompt = dedent(
         """
-        You are an ungrounded claims and statement extractor
-        Extract the claims and statements from the given RESPONSE which are not grounded in the CONTEXT.
-        Respond with a list of such claims and statements from the given CONTEXT.
+        You are an ungrounded claims extractor, 
+        Reasonable assumptions / suggestions can be ignored as long as they are not blatantly false or contradicted by the available information.
+        Extract such claims from the given RESPONSE which are not grounded in the CONTEXT.
+        Respond with a list of such claims from the given CONTEXT.
 
         You will be provided with a CONTEXT and a RESPONSE.
         The CONTEXT describes a software issue or a problem statement.
-        The RESPONSE is a generated response to the CONTEXT by a beginner who tends to make confident ungrounded claims and statements.
-        The RESPONSE may contain claims and statements that are not grounded in the CONTEXT.
+        The RESPONSE is a generated response to the CONTEXT by a beginner who tends to make confident ungrounded claims.
+        The RESPONSE may contain claims and statements that have no basis and are just assumption.
         If you find statements or claims that cannot be inferred from the CONTEXT, please list them.
 
-        Each claim or statement should be a single sentence starting with a - (dash) and ending with a period.
+        Each claim or statement should be a single sentence starting with a - (dash) and ending with a period. 
+        They must all be concise but comprehensive enough to understand without looking at the CONTEXT or other claims.
         For example:
         CONTEXT: The user is unable to login to the application, it shows an error message "Invalid credentials". I am connected to the internet.
         RESPONSE: Assuming the server is using uvicorn, it maybe down. Please ensure that you are connected to the internet. Ensure that the password is correct.
         UNFOUNDED CLAIMS IN RESPONSE:
         - The server is using uvicorn.
-        - The server maybe down.
         - User is not connected to the internet.
 
         With respect to modifications suggested to code claims can also include assumptions about the codebase, existing code, or the environment that are not explicitly or implicitly mentioned in the context.
@@ -114,6 +115,8 @@ async def get_claims(issue:str, response:str):
         if not claim.startswith("-"):
             continue
         ret.append(claim.strip())
+    
+    return ret
 
 async def get_groundedness(hypotheses: list[str], premise:str):
     system_prompt= dedent(
@@ -137,14 +140,14 @@ async def get_groundedness(hypotheses: list[str], premise:str):
     )
 
     groundedness_scores = {}
+    reasons = {}
     for i, hypothesis in enumerate(hypotheses):
-        user_prompt = user_prompt.format(premise=premise, hypothesis=hypothesis)
-        reason,_,_ = await ai_obj.chat_completion(DeployedModel.GPT4, system_prompt, user_prompt)
+        reason,_,_ = await ai_obj.chat_completion(DeployedModel.GPT4, system_prompt, user_prompt.format(premise=premise, hypothesis=hypothesis))
         score_line = next((line for line in reason.split('\n') if "Score" in line), None)
         if score_line:
             groundedness_scores[f"statement_{i}"] = re_0_10_rating(score_line) / 10
-            reasons_str += f"\nSTATEMENT {i}:\n{reason}\n\n"
-    return groundedness_scores, {"reasons": reasons_str}
+            reasons[f"statement_{i}"] = reason
+    return groundedness_scores, reasons
 
 
 def grounded_statements_aggregator(
@@ -272,15 +275,16 @@ async def get_qa_relevance(prompt:str, response:str):
         return score, {}
     
 async def process_task(issue_details):
-    output_path = COLLECTION_DIR / f"{issue_details['instance_id']}.json"
-    if output_path.exists():
-        return
-
     generated_details_path = f"./data/v1/{issue_details['instance_id']}.json"
     if not Path(generated_details_path).exists():
         return
-    with open(generated_details_path, "r") as f:
-        generated_details = json.load(f)
+    output_path = COLLECTION_DIR / f"{issue_details['instance_id']}.json"
+    if output_path.exists():
+        with open(output_path, "r") as f:
+            generated_details = json.load(f)
+    else:
+        with open(generated_details_path, "r") as f:
+            generated_details = json.load(f)
     problem_statement = issue_details["problem_statement"]
     mayil_response = generated_details["mayil_response"]
     relevant_snippets = generated_details["mayil_collected_data"]["relevant_snippets"]
@@ -289,30 +293,38 @@ async def process_task(issue_details):
         return
     if len(generated_details["mayil_collected_data"]["relevant_snippets"])==0:
         return
-    
-    snippet_relevance = []
-    for c in relevant_snippets:
-        ret = f"Filename: {c['filename']} | (Lines: {c['start_line']} to {c['end_line']})\nCode Snippet:\n{c['code']}"
-        c["context_relevance"] = await get_context_relevance(problem_statement, ret)
-        snippet_relevance.append(c["context_relevance"])
-    context_relevance = np.mean(snippet_relevance)
-    generated_details["mayil_collected_data"]["context_relevance"] = context_relevance
 
-    hypotheses = await get_claims(problem_statement, mayil_response)
-    if hypotheses:
-        groundedness_scores, reasons = await get_groundedness(hypotheses, problem_statement)
-        generated_details["mayil_collected_data"]["hypotheses"] = hypotheses
-        generated_details["mayil_collected_data"]["groundedness_scores"] = groundedness_scores
-        generated_details["mayil_collected_data"]["groundedness_reasons"] = reasons
-        groundedness_score = grounded_statements_aggregator(groundedness_scores)
-        generated_details["mayil_collected_data"]["groundedness_score"] = groundedness_score
-    else:
-        generated_details["mayil_collected_data"]["hypotheses"] = []
-        generated_details["mayil_collected_data"]["groundedness_score"] = 1.0
+    if not generated_details["mayil_collected_data"].get("context_relevance"): 
+        snippet_relevance = []
+        for c in relevant_snippets:
+            ret = f"Filename: {c['filename']} | (Lines: {c['start_line']} to {c['end_line']})\nCode Snippet:\n{c['code']}"
+            c["context_relevance"] = await get_context_relevance(problem_statement, ret)
+            snippet_relevance.append(c["context_relevance"])
+        context_relevance = np.mean(snippet_relevance)
+        generated_details["mayil_collected_data"]["context_relevance"] = context_relevance
 
-    qa_relevance, reasons = await get_qa_relevance(problem_statement, mayil_response)
-    generated_details["mayil_collected_data"]["qa_relevance_reasons"] = reasons
-    generated_details["mayil_collected_data"]["qa_relevance"] = qa_relevance
+    if not generated_details["mayil_collected_data"].get("groundedness_scores"):
+        hypotheses = await get_claims(problem_statement, mayil_response)
+        rets = []
+        for c in relevant_snippets:
+            rets.append(f"Filename: {c['filename']} | (Lines: {c['start_line']} to {c['end_line']})\nCode Snippet:\n{c['code']}")
+        premise = problem_statement + "---\n\n" + "---\n\n".join(rets)
+        if hypotheses:
+            groundedness_scores, reasons = await get_groundedness(hypotheses, premise)
+            generated_details["mayil_collected_data"]["hypotheses"] = hypotheses
+            generated_details["mayil_collected_data"]["groundedness_scores"] = groundedness_scores
+            generated_details["mayil_collected_data"]["groundedness_reasons"] = reasons
+            groundedness_score = grounded_statements_aggregator(groundedness_scores)
+            generated_details["mayil_collected_data"]["groundedness_score"] = groundedness_score
+        else:
+            generated_details["mayil_collected_data"]["hypotheses"] = []
+            generated_details["mayil_collected_data"]["groundedness_score"] = 1.0
+
+
+    if not generated_details["mayil_collected_data"].get("qa_relevance"):
+        qa_relevance, reasons = await get_qa_relevance(problem_statement, mayil_response)
+        generated_details["mayil_collected_data"]["qa_relevance_reasons"] = reasons
+        generated_details["mayil_collected_data"]["qa_relevance"] = qa_relevance
 
     with open(output_path, "w") as f:
         json.dump(generated_details, f, indent=4)
@@ -329,9 +341,9 @@ async def main(total_processes, process_index):
     task_instances = []
     for i, issue_details in enumerate(ground_truth):
         if i % total_processes == process_index:
-            # if total_processes == 1:
-            #     task_instances.append(issue_details)
-            #     break
+            if total_processes == 1:
+                task_instances.append(issue_details)
+                break
             task_instances.append(issue_details)
     # my_batch = []
     for issue_details in tqdm(task_instances):
