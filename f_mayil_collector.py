@@ -1,4 +1,4 @@
-import sys
+from textwrap import dedent
 from loguru import logger
 from constants import swe_bench_tasks
 import json
@@ -11,6 +11,8 @@ from mayil.integrations.openai import OpenAI
 from mayil.tasks import TaskReturnState
 from mayil.tasks.process_issue import ProcessIssueTask
 from mayil.ingestion.chunker import Chunk
+from mayil.integrations.repostore import RepoStore
+from mayil.ingestion.vcs_handler import RepoParser
 
 import asyncio
 
@@ -20,9 +22,16 @@ current_cost = 0
 
 async def process_task(task_instance, testbed, ai_obj, db_obj) -> TaskReturnState:
     repo_path = (Path(testbed) / "repo").resolve()
-    assert repo_path.exists()
-    repo_name = f"testbed/{repo_path.parent.name}"
+    if not repo_path.exists():
+        repo_path = Path(testbed).resolve()
+        assert repo_path.exists()
+        repo_name = f"testbed/{repo_path.name}"
+    else:
+        repo_name = f"testbed/{repo_path.parent.name}"
     fake_url = f"https://github.com/{repo_name}.git"
+    immutable_repo_parser = RepoParser.from_folder(repo_path, fake_url)
+    RepoStore.repoparser_lookup = {}
+    RepoStore.repoparser_lookup[fake_url] = immutable_repo_parser
     title, body = task_instance["problem_statement"].split("\n", 1)
     _id = task_instance["instance_id"]
     issue_obj = MayilIssue(
@@ -68,16 +77,16 @@ async def process_task(task_instance, testbed, ai_obj, db_obj) -> TaskReturnStat
     collected_data["mayil_collected_data"] = format_val(final_issue_obj.mayil_collected_data)
     return result, collected_data
 # total_processes, process_index
-async def main():
+async def main(distributed_tasks):
     global current_cost
 
     RedisClientSingleton()
     ai_obj = OpenAI()
     db_obj = MilvusDB()
 
-    distributed_tasks = []
-    with open(f"data/distributed_{swe_bench_tasks}.json", "r") as f:
-        distributed_tasks = json.load(f)
+    if not distributed_tasks:
+        with open(f"data/distributed_{swe_bench_tasks}.json", "r") as f:
+            distributed_tasks = json.load(f)
 
     # my_tasks = []
     for task_set in distributed_tasks:
@@ -157,9 +166,32 @@ if __name__ == "__main__":
     #     logger.add(f"./logs/{MAYIL_VERSION}_{process_index}.log", level="ERROR", colorize=False, backtrace=True, diagnose=True)
     #     logger.info(f"Usage: {sys.argv[0]} <total_processes> <process_index>")
     #     logger.warning("Running in debug mode")
-    
+    distributed_tasks = [
+        {
+            "testbed": "./testbed/aftersell",
+            "task_instances": [
+                {
+                    "instance_id": "id",
+                    "problem_statement": dedent(
+                        """
+                        Fulfillment hold not releasing on time
+
+                        Is this related to a specific store?
+
+                        myvillagegreen.myshopify.com
+                        hfulfillment holdttps://app.intercom.com/a/inbox/l7yr8zsg/inbox/shared/all/conversation/147709000013207?view=List
+
+                        What technical input is needed?
+
+                        Orders are being placed on hold for an hr, when they have the release  setting enabled:
+                        """
+                    )
+                }
+            ]
+        }
+    ]
 
     if not COLLECTION_DIR.exists():
         COLLECTION_DIR.mkdir(parents=True)
     
-    asyncio.run(main())
+    asyncio.run(main(distributed_tasks))
