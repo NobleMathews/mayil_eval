@@ -16,7 +16,7 @@ from mayil.ingestion.vcs_handler import RepoParser
 
 import asyncio
 
-MAYIL_VERSION = "v1"
+MAYIL_VERSION = "v2"
 COLLECTION_DIR = Path(f"./data/{MAYIL_VERSION}")
 current_cost = 0
 
@@ -179,7 +179,7 @@ if __name__ == "__main__":
                         Is this related to a specific store?
 
                         myvillagegreen.myshopify.com
-                        hfulfillment holdttps://app.intercom.com/a/inbox/l7yr8zsg/inbox/shared/all/conversation/147709000013207?view=List
+                        https://app.intercom.com/a/inbox/l7yr8zsg/inbox/shared/all/conversation/147709000013207?view=List
 
                         What technical input is needed?
 

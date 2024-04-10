@@ -56,7 +56,8 @@ async def main(total_processes, process_index):
         if i % total_processes == process_index:
             if total_processes == 1:
                 my_tasks.append(distributed_tasks[-2])
-                # await process_folder("./testbed/Up-2.0", "testbed/Up-2.0", ai_obj, db_obj)
+                # await process_folder("./testbed/as", "testbed/aftersell", ai_obj, db_obj)
+                # await process_folder("./testbed/Up-2.0", "testbed/UpCart-2.0", ai_obj, db_obj)
                 # await process_folder("./testbed/shopify", "shopify_documentation", ai_obj, db_obj, True)
                 break
             my_tasks.append(task_set)
