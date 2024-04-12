@@ -9,10 +9,12 @@ from mayil.integrations.milvus import MilvusDB
 from mayil.integrations.redis import RedisClientSingleton
 from mayil.integrations.openai import OpenAI
 from mayil.tasks import TaskReturnState
+from mayil.tasks.issue_completion import IssueCompletionTask
 from mayil.tasks.process_issue import ProcessIssueTask
 from mayil.ingestion.chunker import Chunk
 from mayil.integrations.repostore import RepoStore
 from mayil.ingestion.vcs_handler import RepoParser
+from mayil.integrations.API.linear import get_issue_details
 
 import asyncio
 
@@ -32,16 +34,27 @@ async def process_task(task_instance, testbed, ai_obj, db_obj) -> TaskReturnStat
     immutable_repo_parser = RepoParser.from_folder(repo_path, fake_url)
     RepoStore.repoparser_lookup = {}
     RepoStore.repoparser_lookup[fake_url] = immutable_repo_parser
-    title, body = task_instance["problem_statement"].split("\n", 1)
     _id = task_instance["instance_id"]
-    issue_obj = MayilIssue(
-        id=_id,
-        repo_name=repo_name,
-        title=title,
-        body=body,
-        state="closed",
-        repo_link=fake_url,
-    )
+    if "problem_statement" in task_instance:
+        title, body = task_instance["problem_statement"].split("\n", 1)
+        issue_obj = MayilIssue(
+            id=_id,
+            repo_name=repo_name,
+            title=title,
+            body=body,
+            state="closed",
+            repo_link=fake_url,
+        )
+    else:
+        issue_and_parents = task_instance["issue_and_parents"]
+        issue_completion_task = IssueCompletionTask(issue_and_parents=issue_and_parents)
+        logger.info(f"Completing Issue {_id} in {repo_name}")
+        try:
+            result = await issue_completion_task.run(db_obj=db_obj, ai_obj=ai_obj)
+        except Exception as e:
+            logger.error(f"Error completing {_id}: {e}")
+            return TaskReturnState.FAILURE, {}
+        issue_obj = issue_completion_task.issue_obj
     process_issue_task = ProcessIssueTask(issue_obj=issue_obj)
     logger.info(f"Processing Issue {_id} in {repo_name}")
     try:
@@ -80,7 +93,6 @@ async def process_task(task_instance, testbed, ai_obj, db_obj) -> TaskReturnStat
 async def main(distributed_tasks):
     global current_cost
 
-    RedisClientSingleton()
     ai_obj = OpenAI()
     db_obj = MilvusDB()
 
@@ -154,6 +166,7 @@ async def main(distributed_tasks):
 
 
 if __name__ == "__main__":
+    RedisClientSingleton()
     # logger.remove()
 
     # if len(sys.argv) == 3:
@@ -166,26 +179,20 @@ if __name__ == "__main__":
     #     logger.add(f"./logs/{MAYIL_VERSION}_{process_index}.log", level="ERROR", colorize=False, backtrace=True, diagnose=True)
     #     logger.info(f"Usage: {sys.argv[0]} <total_processes> <process_index>")
     #     logger.warning("Running in debug mode")
+    
+    # issue_id = "BEAM-3136"
+    issue_id = "BEAM-3005"
+    repo_name = "testbed/aftersell"
+    issue_and_parents = get_issue_details(issue_id, repo_name)
+    # core issue is issue_details[0] rest are parents from immediate to root issue
     distributed_tasks = [
         {
-            "testbed": "./testbed/aftersell",
+            "testbed": f"./{repo_name}",
             "task_instances": [
                 {
-                    "instance_id": "id",
-                    "problem_statement": dedent(
-                        """
-                        Fulfillment hold not releasing on time
-
-                        Is this related to a specific store?
-
-                        myvillagegreen.myshopify.com
-                        https://app.intercom.com/a/inbox/l7yr8zsg/inbox/shared/all/conversation/147709000013207?view=List
-
-                        What technical input is needed?
-
-                        Orders are being placed on hold for an hr, when they have the release  setting enabled:
-                        """
-                    )
+                    "repo_name": repo_name,
+                    "instance_id": issue_id,
+                    "issue_and_parents": issue_and_parents
                 }
             ]
         }
