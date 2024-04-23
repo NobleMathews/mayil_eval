@@ -11,7 +11,7 @@ from mayil.integrations.openai import OpenAI
 from mayil.tasks import TaskReturnState
 from mayil.tasks.issue_completion import IssueCompletionTask
 from mayil.tasks.process_issue import ProcessIssueTask
-from mayil.ingestion.chunker import Chunk
+from mayil.chunk import Chunk
 from mayil.integrations.repostore import RepoStore
 from mayil.ingestion.vcs_handler import RepoParser
 from mayil.integrations.API.linear import get_issue_details
@@ -47,10 +47,10 @@ async def process_task(task_instance, testbed, ai_obj, db_obj) -> TaskReturnStat
         )
     else:
         issue_and_parents = task_instance["issue_and_parents"]
-        issue_completion_task = IssueCompletionTask(issue_and_parents=issue_and_parents)
+        issue_completion_task = IssueCompletionTask(issue_and_parents[0])
         logger.info(f"Completing Issue {_id} in {repo_name}")
         try:
-            result = await issue_completion_task.run(db_obj=db_obj, ai_obj=ai_obj)
+            result = await issue_completion_task.run(ai_obj=ai_obj)
         except Exception as e:
             logger.error(f"Error completing {_id}: {e}")
             return TaskReturnState.FAILURE, {}
