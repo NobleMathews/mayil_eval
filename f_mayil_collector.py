@@ -58,7 +58,7 @@ async def process_task(task_instance, testbed, ai_obj, db_obj) -> TaskReturnStat
     process_issue_task = ProcessIssueTask(issue_obj=issue_obj)
     logger.info(f"Processing Issue {_id} in {repo_name}")
     try:
-        result = await process_issue_task.run(db_obj=db_obj, ai_obj=ai_obj)
+        result = await process_issue_task.run(ai_obj=ai_obj)
     except Exception as e:
         logger.error(f"Error processing {_id}: {e}")
         return TaskReturnState.FAILURE, {}
