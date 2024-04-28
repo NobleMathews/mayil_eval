@@ -1,15 +1,17 @@
 from loguru import logger
 import json
+import os
 from pathlib import Path
 from loguru import logger
 from mayil.integrations.redis import RedisClientSingleton
 from mayil.integrations.openai import OpenAI
 from mayil.tasks import TaskReturnState
 from mayil.agents.eval_agent import EvalAgent
-
+from mayil.integrations.github import GitHubPublicAPI
+from dotenv import load_dotenv
 import asyncio
 
-MAYIL_VERSION = "v1"
+MAYIL_VERSION = "aftersell"
 COLLECTION_DIR = Path(f"./data/GroundTruthScoring/{MAYIL_VERSION}")
 current_cost = 0
 
@@ -28,21 +30,72 @@ async def process_task(task_instance, ai_obj) -> TaskReturnState:
 
 async def main():
     global current_cost
+    load_dotenv(".env")
+    load_dotenv(".env.local")
+
+    GITHUB_TOKEN = os.getenv("TESTING_GITHUB_TOKEN")
+
+    git_api = GitHubPublicAPI(
+        token=GITHUB_TOKEN
+    )
 
     RedisClientSingleton()
     ai_obj = OpenAI()
     # db_obj = MilvusDB()
 
-    with open("./data/test.json", "r") as f:
-        ground_truth = json.load(f)
+    # with open("./data/test.json", "r") as f:
+    #     ground_truth = json.load(f)
+
+    test_cases = {
+        "testbed/aftersell":{
+            # "BEAM-2996",
+            # https://github.com/ROKT/aftersell/pull/1083
+            # "BEAM-3120",
+            # https://github.com/ROKT/aftersell/pull/1129
+            "BEAM-3220": 1120,
+            "BEAM-3449": 1119,
+            "BEAM-3375": 1105,
+            "BEAM-3118": 1103,
+            "BEAM-3125": 1121,
+            "BEAM-3157": 1116,
+            "BEAM-3254": 1100,
+            "BEAM-3123": 1102,
+            "BEAM-3124": 1107,
+            "BEAM-3113": 1108,
+            "BEAM-3064": 1122,
+        },
+        "testbed/UpCart-2.0":{
+            "BEAM-2284": 420,
+            "BEAM-2750": 428,
+            "BEAM-2762": 429,
+            "BEAM-2793": 433,
+        }
+    }
+
+    ground_truth = []
+    for repo_name, issues in test_cases.items():
+        for issue_id, item_id in issues.items():
+            issue_details = {
+                "instance_id": issue_id,
+                "problem_statement": None,
+                "patch": git_api.get_pr_patch("beam-commerce/"+repo_name.split("/")[-1], int(item_id)),
+                "repo_name": repo_name,
+            }
+            ground_truth.append(issue_details)
+            
 
     task_instances = []
     for issue_details in ground_truth:
-        with open(f"./data/v1/{issue_details['instance_id']}.json", "r") as f:
+        path_to_ground_truth = f"./data/{MAYIL_VERSION}/{issue_details['instance_id']}.json"
+        if not Path(path_to_ground_truth).exists():
+            continue
+        with open(path_to_ground_truth, "r") as f:
             generated_details = json.load(f)
         ground_truth_diff = issue_details["patch"]
         problem_statement = issue_details["problem_statement"]
-        mayil_response = generated_details["mayil_response"]
+        if problem_statement is None:
+            problem_statement = generated_details["title"] + "\n\n" + generated_details["body"]
+        mayil_response = generated_details["mayil_collected_data"]["result"]
         if not mayil_response:
             continue
         assert ground_truth_diff

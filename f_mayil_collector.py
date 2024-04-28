@@ -2,6 +2,7 @@ from textwrap import dedent
 from loguru import logger
 from constants import swe_bench_tasks
 import json
+import os
 from pathlib import Path
 from loguru import logger
 from mayil import MayilIssue
@@ -13,12 +14,12 @@ from mayil.tasks.issue_completion import IssueCompletionTask
 from mayil.tasks.process_issue import ProcessIssueTask
 from mayil.chunk import Chunk
 from mayil.integrations.repostore import RepoStore
-from mayil.ingestion.vcs_handler import RepoParser
-from mayil.integrations.API.linear import get_issue_details
+from mayil.ingestion.repo_parser import RepoParser
+from mayil.integrations.linear import LinearBot
 
 import asyncio
 
-MAYIL_VERSION = "v2"
+MAYIL_VERSION = "aftersell"
 COLLECTION_DIR = Path(f"./data/{MAYIL_VERSION}")
 current_cost = 0
 
@@ -46,8 +47,34 @@ async def process_task(task_instance, testbed, ai_obj, db_obj) -> TaskReturnStat
             repo_link=fake_url,
         )
     else:
-        issue_and_parents = task_instance["issue_and_parents"]
-        issue_completion_task = IssueCompletionTask(issue_and_parents[0])
+        # issue_and_parents = task_instance["issue_and_parents"]
+        
+        issue_obj = MayilIssue(
+            repo_name=repo_name,
+            state="closed",
+            repo_link=fake_url,
+            **LinearBot().get_issue_details(
+                issue_id=_id,
+                include_comments=False
+            ),
+        )
+
+        for linked_issue_id in issue_obj.linked_issue_ids:
+            linked_issue_obj = MayilIssue(
+                repo_name=repo_name,
+                state="open",
+                repo_link=fake_url,
+                **LinearBot().get_issue_details(
+                    issue_id=linked_issue_id,
+                    include_comments=False
+                ),
+            )
+            assert linked_issue_obj.linked_issue_ids == []
+            await IssueCompletionTask(linked_issue_obj).run(ai_obj=ai_obj)
+            await ProcessIssueTask(linked_issue_obj).run(ai_obj=ai_obj)
+
+
+        issue_completion_task = IssueCompletionTask(issue_obj)
         logger.info(f"Completing Issue {_id} in {repo_name}")
         try:
             result = await issue_completion_task.run(ai_obj=ai_obj)
@@ -167,6 +194,13 @@ async def main(distributed_tasks):
 
 if __name__ == "__main__":
     RedisClientSingleton()
+    linear_token = os.getenv("LINEAR_TOKEN")
+    if not linear_token:
+        logger.error("LINEAR_TOKEN not found")
+
+    LinearBot(
+        key=linear_token
+    )
     # logger.remove()
 
     # if len(sys.argv) == 3:
@@ -179,24 +213,45 @@ if __name__ == "__main__":
     #     logger.add(f"./logs/{MAYIL_VERSION}_{process_index}.log", level="ERROR", colorize=False, backtrace=True, diagnose=True)
     #     logger.info(f"Usage: {sys.argv[0]} <total_processes> <process_index>")
     #     logger.warning("Running in debug mode")
-    
-    # issue_id = "BEAM-3136"
-    issue_id = "BEAM-3005"
-    repo_name = "testbed/aftersell"
-    issue_and_parents = get_issue_details(issue_id, repo_name)
-    # core issue is issue_details[0] rest are parents from immediate to root issue
-    distributed_tasks = [
-        {
-            "testbed": f"./{repo_name}",
-            "task_instances": [
-                {
-                    "repo_name": repo_name,
-                    "instance_id": issue_id,
-                    "issue_and_parents": issue_and_parents
-                }
-            ]
-        }
+    sample_set = {
+     "testbed/aftersell":[
+        # "BEAM-2996",
+        # https://github.com/ROKT/aftersell/pull/1083
+        # "BEAM-3120",
+        # https://github.com/ROKT/aftersell/pull/1129
+        "BEAM-3220",
+        "BEAM-3449",
+        "BEAM-3375",
+        "BEAM-3118",
+        "BEAM-3125",
+        "BEAM-3157",
+        "BEAM-3254",
+        "BEAM-3123",
+        "BEAM-3124",
+        "BEAM-3113",
+        "BEAM-3064",
+    ],
+    "testbed/UpCart-2.0":[
+        "BEAM-2284",
+        "BEAM-2750",
+        "BEAM-2762",
+        "BEAM-2793",
     ]
+    }
+    
+    distributed_tasks = []
+
+    for repo_name, issue_list in sample_set.items():
+        for issue_id in issue_list:
+            distributed_tasks.append({
+                "testbed": f"./{repo_name}",
+                "task_instances": [
+                    {
+                        "repo_name": repo_name,
+                        "instance_id": issue_id,
+                    }
+                ]
+            })
 
     if not COLLECTION_DIR.exists():
         COLLECTION_DIR.mkdir(parents=True)
