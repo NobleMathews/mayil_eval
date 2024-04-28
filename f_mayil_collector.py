@@ -11,6 +11,7 @@ from mayil.integrations.redis import RedisClientSingleton
 from mayil.integrations.openai import OpenAI
 from mayil.tasks import TaskReturnState
 from mayil.tasks.issue_completion import IssueCompletionTask
+from mayil import ExternalAssets, ExternalAssetsType
 from mayil.tasks.process_issue import ProcessIssueTask
 from mayil.chunk import Chunk
 from mayil.integrations.repostore import RepoStore
@@ -70,25 +71,20 @@ async def process_task(task_instance, testbed, ai_obj, db_obj) -> TaskReturnStat
                 ),
             )
             assert linked_issue_obj.linked_issue_ids == []
-            await IssueCompletionTask(linked_issue_obj).run(ai_obj=ai_obj)
+            completion_task = IssueCompletionTask(linked_issue_obj)
+            completion_task.disallowed_asset_types = [ExternalAssetsType.GITHUB_PR, ExternalAssetsType.DEVELOPER_COMMENTS]
+            await completion_task.run(ai_obj=ai_obj)
             await ProcessIssueTask(linked_issue_obj).run(ai_obj=ai_obj)
 
 
         issue_completion_task = IssueCompletionTask(issue_obj)
+        issue_completion_task.disallowed_asset_types = [ExternalAssetsType.GITHUB_PR, ExternalAssetsType.DEVELOPER_COMMENTS]
         logger.info(f"Completing Issue {_id} in {repo_name}")
-        try:
-            result = await issue_completion_task.run(ai_obj=ai_obj)
-        except Exception as e:
-            logger.error(f"Error completing {_id}: {e}")
-            return TaskReturnState.FAILURE, {}
+        result = await issue_completion_task.run(ai_obj=ai_obj)
         issue_obj = issue_completion_task.issue_obj
     process_issue_task = ProcessIssueTask(issue_obj=issue_obj)
     logger.info(f"Processing Issue {_id} in {repo_name}")
-    try:
-        result = await process_issue_task.run(ai_obj=ai_obj)
-    except Exception as e:
-        logger.error(f"Error processing {_id}: {e}")
-        return TaskReturnState.FAILURE, {}
+    result = await process_issue_task.run(ai_obj=ai_obj)
     logger.success(f"{_id} processed successfully")
     final_issue_obj = process_issue_task.issue_obj
     collected_data = final_issue_obj.to_json()
