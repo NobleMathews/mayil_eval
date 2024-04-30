@@ -1,4 +1,3 @@
-from textwrap import dedent
 from loguru import logger
 from constants import swe_bench_tasks
 import json
@@ -11,7 +10,7 @@ from mayil.integrations.redis import RedisClientSingleton
 from mayil.integrations.openai import OpenAI
 from mayil.tasks import TaskReturnState
 from mayil.tasks.issue_completion import IssueCompletionTask
-from mayil import ExternalAssets, ExternalAssetsType
+from mayil import ExternalAssetsType
 from mayil.tasks.process_issue import ProcessIssueTask
 from mayil.chunk import Chunk
 from mayil.integrations.repostore import RepoStore
@@ -226,12 +225,13 @@ if __name__ == "__main__":
         "BEAM-3124",
         "BEAM-3113",
         "BEAM-3064",
+        "ENG-464",
+        "OPS-4125"
     ],
     "testbed/UpCart-2.0":[
         "BEAM-2284",
         "BEAM-2750",
         "BEAM-2762",
-        "BEAM-2793",
     ]
     }
     
